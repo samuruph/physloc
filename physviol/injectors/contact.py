@@ -756,7 +756,7 @@ class SuperElastic(Injector):
     #: the individual clip, not on the constant, so the nominal gain is now what
     #: reads clearly and `_fit_to_frame` walks it back per scene wherever the
     #: geometry cannot host it.
-    GAIN_BY_BIN = {"weak": 1.50, "medium": 2.20, "strong": 3.60}
+    GAIN_BY_BIN = {"weak": 1.70, "medium": 2.60, "strong": 4.50}
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as

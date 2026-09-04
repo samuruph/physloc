@@ -318,13 +318,37 @@ class Fission(Injector):
     #: which removes the machinery that was clamping the violation to a
     #: quarter of its nominal strength.
     SEPARATION_BY_BIN = {"weak": 2.6, "medium": 3.6, "strong": 5.0}
-    #: How long the division takes. THE fix for "mechanical, not smooth": an
-    #: instantaneous velocity change puts the halves a body-width apart on the
-    #: frame after the split, so the coming apart is never on screen. Half this
-    #: long accelerating and half decelerating, the division is the thing you
-    #: watch, and it ends with the halves at rest relative to each other.
-    SPLIT_SECONDS = 0.45
-    #: Both halves keep their full size, in every bin.
+    #: Bounds on the DEPARTURE SPEED, m/s, so no scene can ask for either an
+    #: explosion or a division nobody can see.
+    MIN_SPLIT_SPEED = 0.12
+    MAX_SPLIT_SPEED = 4.0
+    #: Points on the speed grid `_speed_for` scans.
+    SOLVE_STEPS = 14
+    #: Preference for the gentler impulse when two speeds land equally close to
+    #: the target, in metres of penalty per m/s.
+    GENTLER = 0.05
+    #: HALF THE VOLUME EACH, so `2 * k**3 == 1`. The halves are placed exactly
+    #: touching, at +/- this many original-radii either side of the centre, and
+    #: three things fall out of that one number.
+    #:
+    #: They do not overlap, so their contact never has to be suppressed --
+    #: which is what let the forward half on `barrier_pass` rebound off the wall
+    #: and travel straight back THROUGH its sibling, a pass-through inside a
+    #: fission clip.
+    #:
+    #: The centre of each half moves less than one radius at the split, which
+    #: keeps `position_continuity` below its threshold. Full-size halves placed
+    #: side by side need 1.05 r and trip it at 1.10 -- a fission clip that also
+    #: reads as a teleport, and two families that cannot then be scored apart.
+    #:
+    #: And it is what cleaving actually looks like: one object becomes two
+    #: smaller ones. Full-size halves were chosen to stay legible at 128 px back
+    #: when they sat close together; they now separate to between two and five
+    #: radii, so there is nothing to confuse.
+    CLEAVE_SCALE = 0.5 ** (1.0 / 3.0)
+    #: The per-bin override, kept at the volume-halving value -- see
+    #: `CLEAVE_SCALE`. The comment below records why it was 1.0 and what
+    #: changed.
     #:
     #: Shrinking them to conserve volume is the tempting choice and it costs
     #: more than it buys. Two 79%-scale halves sitting close together read as
@@ -334,7 +358,8 @@ class Fission(Injector):
     #: medium ones, so a clip's orthogonality depended on its severity. A
     #: family should break the same law at all three strengths and differ only
     #: in how hard, which here is how far apart the halves end up.
-    SCALE_BY_BIN = {"weak": 1.0, "medium": 1.0, "strong": 1.0}
+    SCALE_BY_BIN = {"weak": CLEAVE_SCALE, "medium": CLEAVE_SCALE,
+                    "strong": CLEAVE_SCALE}
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # exactly one extra body exists
@@ -398,11 +423,20 @@ class Fission(Injector):
         twin_spec = [actor, twin]
         half_scale = self.SCALE_BY_BIN[severity_bin]
         radius = float(actor.bounding_radius)
-        # No frustum fit. The target is bounded, so neither half can travel more
-        # than half of it from where the body was -- there is nothing to keep in
-        # shot that is not already in shot.
+        # ONE IMPULSE, then physics. Nothing pushes the halves after the
+        # instant they come apart and nothing brakes them; what stops them is
+        # the friction of whatever they land on. The previous version held a
+        # separating force for a third of a second and then an equal braking
+        # force, and it looked like what it was -- two halves shoved apart by
+        # something invisible and then caught by it. There is no such force in a
+        # thing coming apart.
+        #
+        # The departure speed is SOLVED so the halves settle about `target`
+        # apart, which keeps the severity ladder meaningful without prescribing
+        # anything after `t_event`.
         target = float(self.SEPARATION_BY_BIN[severity_bin]) * radius
-        push = (unit * target).tolist()
+        speed = self._speed_for(spec, traj, actor, twin, t0, unit, target)
+        push = (unit * speed).tolist()
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
@@ -413,7 +447,7 @@ class Fission(Injector):
             params={"type": "split_body", "separation_m": float(target),
                     "separation_radii": float(
                         self.SEPARATION_BY_BIN[severity_bin]),
-                    "split_seconds": float(self.SPLIT_SECONDS),
+                    "departure_speed": float(speed),
                     "push": push, "scale_factor": half_scale},
             magnitude=2.0, magnitude_unit="count_ratio",
             severity_bin=severity_bin,
@@ -442,39 +476,71 @@ class Fission(Injector):
         # event, even though the body is invisible there.
         out.quat[t0:, ti, :] = traj.quat[t0:, ai, :]
         v0 = traj.lin_vel[t0 - 1, ai].astype(np.float64)
-        # The same ACCELERATE-THEN-DECELERATE profile the staged hook applies,
-        # expressed as an extra acceleration over the split window. Half the
-        # window pushing apart and half braking, so the halves arrive `push`
-        # apart and at rest relative to each other rather than still flying.
-        # The two implementations must agree, because this one is what the mock
-        # rollout in `tests/` exercises.
-        n = traj.num_frames - t0
-        g = np.tile(np.asarray(traj.gravity, np.float64)[None, :], (n, 1))
-        bump = np.zeros_like(g)
-        bump[:min(self._split_frames(traj.fps), n)] = self._split_accel(push)
-        half = self._split_frames(traj.fps) // 2
-        bump[half:min(self._split_frames(traj.fps), n)] *= -1.0
-        self._rewrite_from(spec, traj, out, actor, t0, v0=v0,
-                           g_per_frame=g + bump)
-        self._rewrite_from(spec, traj, out, twin, t0, v0=v0,
-                           p0=traj.pos[t0 - 1, ai], g_per_frame=g - bump)
+        # Each half leaves with +/- `push` and is then on its own: no profile,
+        # no braking. They fly, land, and are slowed by the ground exactly as
+        # any other body would be, which `_integrate_profile`'s friction models
+        # -- so this preview is a fair prediction of the staged run rather than
+        # a different intervention.
+        #
+        # NEITHER half is an obstacle to the other. The obstacle set is built
+        # from the VALID trajectory, in which the original is present and the
+        # understudy is not, so a twin starting exactly where the original was
+        # got shoved straight out of it by the original's own lawful sphere --
+        # a separation with no impulse behind it at all. Everything else in the
+        # scene stays solid to both.
+        push = np.asarray(push, np.float64)
+        n = float(np.linalg.norm(push))
+        axis = push / n if n > 1e-9 else np.zeros(3)
+        step = axis * self.CLEAVE_SCALE * float(traj.radius[ai])
+        origin = np.asarray(traj.pos[t0 - 1, ai], np.float64)
+        pair = _geom.Obstacles(spec, traj, exclude_ids=[
+            int(actor.segmentation_id), int(twin.segmentation_id)])
+        self._rewrite_from(spec, traj, out, actor, t0, v0=v0 + push,
+                           p0=origin + step, obstacles=pair)
+        self._rewrite_from(spec, traj, out, twin, t0, v0=v0 - push,
+                           p0=origin - step, obstacles=pair)
         return out
 
-    def _split_frames(self, fps: float) -> int:
-        """Frames the division occupies -- always even, so the two halves of
-        the accelerate/brake profile are the same length."""
-        n = max(2, int(round(float(self.SPLIT_SECONDS) * float(fps))))
-        return n + (n % 2)
+    def _speed_for(self, spec, traj, actor, twin, t0: int, unit,
+                   target: float) -> float:
+        """Departure speed whose halves settle about `target` apart.
 
-    def _split_accel(self, separation) -> np.ndarray:
-        """Acceleration each half needs to end `separation` apart, at rest.
+        A SCAN, not a bisection, because separation is not monotone in the
+        departure speed and cannot be made so. Two measured counter-examples,
+        both real physics rather than artefacts:
 
-        Each half covers half the gap. Accelerating for T/2 and braking for T/2
-        covers `a*(T/2)^2`, so `a = 2*separation / T^2`.
+        * `barrier_pass` -- 0.59 m at 0.3 m/s, 1.25 m at 2.0 m/s and 0.71 m at
+          4.0 m/s, because past a certain speed the forward half rebounds off
+          the wall and comes back past its sibling.
+        * `collision` -- a hair's difference in approach decides which half
+          strikes the other ball, and the two paths diverge from there.
+
+        So the grid is scanned and the closest match wins, with a small
+        preference for the gentler impulse where two are equally close: the
+        claim is that an object came apart, and the smallest departure that
+        reads as two objects is the most honest way to say it.
+
+        `v = sqrt(2*mu*g*d)` is the flat-ground closed form and it describes
+        none of the above.
         """
-        sep = np.asarray(separation, np.float64)
-        t = float(self.SPLIT_SECONDS)
-        return 2.0 * sep / max(t * t, 1e-9)
+        ai = traj.index_of(int(actor.segmentation_id))
+        ti = traj.index_of(int(twin.segmentation_id))
+        unit = np.asarray(unit, np.float64)
+
+        best, best_score = float(self.MIN_SPLIT_SPEED), None
+        for v in np.geomspace(self.MIN_SPLIT_SPEED, self.MAX_SPLIT_SPEED,
+                              int(self.SOLVE_STEPS)):
+            out = self._split(spec, traj, actor, twin, t0, unit * v, 1.0)
+            gap = np.linalg.norm(
+                np.asarray(out.pos[t0:, ti, :] - out.pos[t0:, ai, :],
+                           np.float64), axis=1)
+            # Where they SETTLE, not the peak: a half that flew out and
+            # rebounded was never `gap.max()` apart in any frame worth scoring.
+            reached = float(np.median(gap[-max(1, gap.shape[0] // 4):]))
+            score = abs(reached - target) + self.GENTLER * float(v)
+            if best_score is None or score < best_score:
+                best, best_score = float(v), score
+        return best
 
     #: STAGED. Both halves are bodies the solver owns from `t_event` on, so
     #: whatever they hit, they hit for real. On `collision` the edited version
@@ -500,10 +566,10 @@ class Fission(Injector):
         if actor is None or twin is None:
             return ()
         # Cleared first, never assumed empty: an early return below would
-        # otherwise leave the PREVIOUS variant's pair and proxy sitting on the
-        # instance, and `unstage` would restore a body this plan never touched.
-        self._pair = None
+        # otherwise leave the PREVIOUS variant's proxies sitting on the
+        # instance, and `unstage` would restore bodies this plan never touched.
         self._swap = None
+        self._mine = None
         idx = stepper.pybullet_index(simulator, objs, spec,
                                      int(actor.segmentation_id))
         if idx is None:
@@ -518,22 +584,35 @@ class Fission(Injector):
         swap = stepper.ShapeSwap(simulator, objs, spec, twin, dynamic=True)
         if not swap.ok:
             return ()
-        # Both halves start on the ORIGINAL's velocity. The separation is not
-        # handed to them here; it is pushed into them over `SPLIT_SECONDS` by
-        # the hook below, which is what makes the split something you watch
-        # rather than something you find already finished.
-        swap.set_scale((1.0, 1.0, 1.0), pose=(pos, quat),
-                       velocity=(v.tolist(), list(ang)))
+        # THE CLEAVE: each half is placed just clear of the original's centre
+        # along the split axis and leaves on the original's velocity plus or
+        # minus the departure impulse. That is the whole intervention -- one
+        # instant, after which nothing is suppressed, no hook runs and no force
+        # is applied. The halves touch each other and everything else exactly
+        # as two ordinary bodies do.
+        n = float(np.linalg.norm(push))
+        axis = push / n if n > 1e-9 else np.zeros(3)
+        k = float(self.CLEAVE_SCALE)
+        step = axis * k * float(actor.bounding_radius)
+        origin = np.asarray(pos, np.float64)
+        swap.set_scale((k, k, k), pose=((origin - step).tolist(), quat),
+                       velocity=((v - push).tolist(), list(ang)))
         if swap.proxy is None:
             swap.restore()
             return ()
-        # The two halves start in exactly the same place, so they must not see
-        # each other: a pair overlapping completely resolves as an explosion,
-        # which is a position jump large enough to read as a teleport. They are
-        # two parts of one body that has just come apart; everything else in the
-        # scene stays solid to both.
-        self._pair = (idx, swap.proxy)
-        pb.setCollisionFilterPair(idx, swap.proxy, -1, -1, 0)
+        # The ORIGINAL is resized in the SIMULATOR too, not only in the render.
+        # Two halves drawn at half size but still colliding at full size would
+        # meet long before their surfaces do, and would be overlapping from the
+        # first frame -- which is the whole thing the cleave exists to avoid.
+        mine = stepper.ShapeSwap(simulator, objs, spec, actor)
+        if mine.ok:
+            mine.set_scale((k, k, k), pose=((origin + step).tolist(), quat),
+                           velocity=((v + push).tolist(), list(ang)))
+            self._mine = mine
+        else:
+            pb.resetBasePositionAndOrientation(
+                idx, (origin + step).tolist(), quat)
+            pb.resetBaseVelocity(idx, (v + push).tolist(), list(ang))
         self._swap = swap
 
         # ...and solid to each other again the moment they have parted. Left
@@ -543,97 +622,14 @@ class Fission(Injector):
         # undoes the only claim the family makes. Restored on separation rather
         # than on a timer, for the same reason `solidity` does it: how long two
         # bodies take to clear each other is a fact about the run.
-        # The separation, as a FORCE over time: apart for half the window, then
-        # braking for the other half, so the halves arrive `push` apart and at
-        # rest relative to each other. Re-applied every substep because PyBullet
-        # clears accumulated external forces after each step -- the same reason
-        # `antigravity` has a hook at all.
-        #
-        # The same profile `_split` integrates by hand, so the clip that renders
-        # is the one the plan describes.
-        mass = float(getattr(actor, "mass", 1.0))
-        n_split = self._split_frames(spec.tier.fps)
-        force = self._split_accel(push) * mass
-        # A generous cap, not a schedule. The gap decides when to stop pushing;
-        # this only stops the hook running for the whole clip if the target
-        # turns out to be unreachable.
-        t_push_end = plan.t_event + 3 * n_split
-        proxy = swap.proxy
-        state = {"restored": False}
-
-        target = float(np.linalg.norm(push))
-        axis = push / max(target, 1e-9)
-
-        def split(_client, _step, frame):
-            if frame < t_push_end:
-                pa, _ = pb.getBasePositionAndOrientation(idx)
-                pb_pos, _ = pb.getBasePositionAndOrientation(proxy)
-                gap = float(np.linalg.norm(np.asarray(pa) - np.asarray(pb_pos)))
-                rel = float((np.asarray(pb.getBaseVelocity(idx)[0])
-                             - np.asarray(pb.getBaseVelocity(proxy)[0])) @ axis)
-                # CLOSED LOOP, because the open-loop trapezoid overshot. The
-                # halves are also being slowed by whatever they are resting on,
-                # so by the time the brake half of the window arrives they are
-                # separating more slowly than the profile assumed -- and the
-                # full braking impulse then drove them back TOGETHER. Measured
-                # on `drop`: the strong bin reached 1.97 m, its target, and
-                # closed again to 0.79 m.
-                #
-                # Braking only while they are still separating, and never once
-                # the target is reached, cannot converge them.
-                # Driven by the GAP, not by a clock. A timed profile assumes
-                # both halves are free to move, and on `barrier_pass` they are
-                # not: the only horizontal direction that shows on screen is
-                # the one the ball is already travelling, and there is a wall
-                # across it. The forward half stopped against the wall, the
-                # brake phase arrived on schedule and killed what separation
-                # there was, and the halves finished 0.39 m apart inside a body
-                # 0.50 m wide -- your "not visible".
-                #
-                # Pushing until the gap is actually reached lets the free half
-                # take up whatever the blocked one cannot.
-                if gap < target:
-                    way = 1.0
-                else:
-                    way = -1.0 if rel > 1e-3 else 0.0
-                if way == 0.0:
-                    return
-                for body_idx, sign in ((idx, 1.0), (proxy, -1.0)):
-                    at, _ = pb.getBasePositionAndOrientation(body_idx)
-                    pb.applyExternalForce(body_idx, -1,
-                                          (force * sign * way).tolist(),
-                                          list(at), pb.WORLD_FRAME)
-                return
-            # ...and solid to each other again the moment they have parted.
-            # Left suppressed for the whole clip, two halves that come to rest
-            # near each other simply share the space, which renders as one
-            # lumpy object and undoes the only claim the family makes. Restored
-            # on separation rather than on a timer, for the same reason
-            # `solidity` does it: how long two bodies take to clear each other
-            # is a fact about the run.
-            if state["restored"]:
-                return
-            if pb.getClosestPoints(idx, proxy, distance=0.0):
-                return
-            pb.setCollisionFilterPair(idx, proxy, -1, -1, 1)
-            state["restored"] = True
-
-        return (split,)
+        return ()
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        import pybullet as pb
-
-        pair = getattr(self, "_pair", None)
-        if pair is not None:
-            try:
-                pb.setCollisionFilterPair(pair[0], pair[1], -1, -1, 1)
-            except Exception:                                 # noqa: BLE001
-                pass
-        self._pair = None
-        swap = getattr(self, "_swap", None)
-        if swap is not None:
-            swap.restore()
-        self._swap = None
+        for attr in ("_mine", "_swap"):
+            swap = getattr(self, attr, None)
+            if swap is not None:
+                swap.restore()
+            setattr(self, attr, None)
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """Switch the understudy on. PyBullet moved it; nothing told the render.
@@ -642,10 +638,15 @@ class Fission(Injector):
         rollout's -- in which the understudy does not exist -- straight through.
         """
         twin = self._twin_of(spec)
+        t0 = plan.t_event
+        k = float(plan.params.get("scale_factor", self.CLEAVE_SCALE))
+        traj_invalid.present = np.asarray(traj_invalid.present).copy()
+        traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
+        for bid in plan.causal_body_ids:
+            traj_invalid.scale_mul[t0:, traj_valid.index_of(int(bid)), :] = k
         if twin is not None:
             ti = traj_valid.index_of(int(twin.segmentation_id))
-            traj_invalid.present = np.asarray(traj_invalid.present).copy()
-            traj_invalid.present[plan.t_event:, ti] = True
+            traj_invalid.present[t0:, ti] = True
         return super().post_simulate(spec, traj_valid, traj_invalid, plan)
 
     def _apply(self, spec, traj, plan) -> Trajectory:

@@ -30,6 +30,8 @@ class PhantomImpulse(Injector):
     #: what reads clearly rather than what never overflows -- you judged the
     #: strongest bin too gentle on `drop` and elsewhere.
     DV_BY_BIN = {"weak": 1.6, "medium": 3.6, "strong": 7.0}      # m/s
+    #: Frames the culprit may spend off camera before the fit weakens the shove.
+    FRAME_TOLERANCE = 4
 
     def strong_residual_reference(self, spec) -> float:
         g_dt = 9.81 / float(spec.tier.fps)
@@ -58,14 +60,43 @@ class PhantomImpulse(Injector):
         # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
         # its own frustum-fit scale.
         heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
-        # Mostly sideways with a little lift: a purely horizontal shove on a
-        # resting body is easy to mistake for a nudge from off screen, while a
-        # visible hop is unmistakably uncaused.
-        unit = np.array([0.85 * np.cos(heading), 0.85 * np.sin(heading), 0.5])
+        # AIMED BY THE BODY'S STATE, not one direction for every case.
+        #
+        # A body on a surface gets a mostly sideways shove with a little lift: a
+        # purely horizontal one is easy to mistake for a nudge from off screen,
+        # while a visible hop is unmistakably uncaused.
+        #
+        # A body IN FLIGHT gets a mostly vertical one, and this is the half that
+        # was wrong. `drop` is framed tall and narrow around a fall, so a
+        # sideways shove -- however hard -- takes the actor out of the side of
+        # the frame within a few frames: measured, 5 of 21 frames off camera at
+        # the very floor of the fit ladder, and 17 at nominal. The fit could
+        # only respond by weakening the shove, so the strongest bin delivered
+        # 1.9 m/s of a nominal 7.0 and still left the shot. Sending a falling
+        # body UP instead is both unmistakable -- it stops falling and climbs,
+        # with nothing to have done it -- and stays in the frame the scenario
+        # already sized for the fall.
+        bi = traj.index_of(int(actor.segmentation_id))
+        top = _geom.surface_top(spec, actor)
+        airborne = bool(traj.pos[t0, bi, 2] - float(traj.radius[bi])
+                        > top + 0.05)
+        if airborne:
+            unit = np.array([0.30 * np.cos(heading), 0.30 * np.sin(heading), 1.0])
+        else:
+            unit = np.array([0.85 * np.cos(heading), 0.85 * np.sin(heading), 0.5])
+        unit /= float(np.linalg.norm(unit))
         strongest = unit * self.DV_BY_BIN["strong"]
+        # A LOOSER framing budget than the default. This family's whole content
+        # is a large uncaused displacement, so the fit is the one thing standing
+        # between it and legibility -- on `drop` it clamped to the floor of the
+        # ladder and delivered 1.9 m/s of a nominal 7.0, which is the "barely
+        # visible" you reported. Letting the actor drift out of shot for the
+        # last frame or two costs the tail of the mask; a shove nobody can see
+        # costs the whole clip.
         scale, _ = self._fit_to_frame(
             spec, traj, [actor], t0, strongest,
-            lambda k: self._shoved(spec, traj, actor, t0, strongest * k))
+            lambda k: self._shoved(spec, traj, actor, t0, strongest * k),
+            tolerance=self.FRAME_TOLERANCE)
         push = unit * self.DV_BY_BIN[severity_bin] * scale
         dv = float(np.linalg.norm(push))
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt

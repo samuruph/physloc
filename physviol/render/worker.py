@@ -486,7 +486,24 @@ def main() -> int:
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": "injector produced no plan"})
                 continue
-            if inj.simulates(plan):
+            # A SCRIPTED body is pinned in the simulator -- `sim_static`, mass
+            # zero -- and its motion arrives from the trajectory instead. So a
+            # staged intervention on one cannot move it: the world is reset to
+            # `t_event`, PyBullet is run forward, and the body simply sits
+            # there. Every `simulated` family on `pendulum_swing` shipped that
+            # way -- continuity, deformation, global_gravity, immutability and
+            # phantom_impulse all froze the bob mid-swing, which is five
+            # different labels on one picture of a stopped pendulum.
+            #
+            # The rule is the one CLAUDE.md already states: a family stages
+            # itself only where something in the simulator corresponds to what
+            # it changes. Nothing does, for a body the simulator does not move.
+            # Checked here rather than in each injector because it is a fact
+            # about the SCENE, and no injector should have to learn it.
+            scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
+            staged = (inj.simulates(plan)
+                      and not scripted.intersection(plan.causal_body_ids))
+            if staged:
                 # Real physics from t_event: reset the world to the valid state,
                 # stage the intervention as something PyBullet honours, run
                 # forward, then undo the staging so the next variant starts

@@ -449,6 +449,35 @@ class Scenario:
         """
         return False
 
+    def regravity(self, spec: "SceneSpec", traj, t0: int,
+                  alpha: float) -> bool:
+        """Continue the constrained motion from `t0` under gravity scaled by
+        `alpha`. Return False if unsupported.
+
+        The counterpart to `rescript` for the gravity families. On a free body
+        `antigravity` is a force and the integrator handles it; on a constrained
+        one it changes the shape of the motion itself -- a pendulum under weaker
+        gravity swings *slower*, and under reversed gravity stops oscillating
+        altogether and falls upward. Neither is expressible as a rate change, so
+        `rescript` cannot stand in for it.
+        """
+        return False
+
+    def rephase(self, spec: "SceneSpec", traj, t0: int,
+                shift_seconds: float) -> bool:
+        """Continue the constrained motion from `t0` as if it were
+        `shift_seconds` further through its cycle. Return False if unsupported.
+
+        What a position discontinuity means for a body on a constraint. A free
+        body can be teleported anywhere; a pendulum bob cannot leave its rod, so
+        displacing it in space detaches an assembly the scene says is rigid.
+        Jumping it along its own arc is a real, unexplainable change of position
+        that leaves everything else about the scene intact -- and it keeps the
+        rod and bob together, which a spatial offset applied to one of them
+        does not.
+        """
+        return False
+
     @staticmethod
     def rng(seed: int) -> np.random.RandomState:
         # RandomState (not default_rng) so the stream is identical under

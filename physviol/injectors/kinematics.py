@@ -178,6 +178,17 @@ class _GravityScale(Injector):
         the one the plan was chosen from.
         """
         out = self._clone(traj)
+        # A CONSTRAINED body cannot be re-integrated as though it were free: a
+        # pendulum bob released into `_rewrite_group` leaves its rod and falls.
+        # The scenario owns its constraint and knows what bending gravity does
+        # to it -- for a pendulum, the period changes -- so ask it.
+        if spec.notes.get("constraint") == "pivot":
+            from .. import scenarios as scen_mod
+            if scen_mod.get(spec.scenario).regravity(
+                    spec, out, t0, float(alpha_peak)):
+                out.meta = dict(traj.meta)
+                out.meta["alpha_profile"] = [float(alpha_peak)]
+                return out
         n_win, n_after = t1 - t0 + 1, traj.num_frames - (t1 + 1)
         g = traj.gravity.astype(np.float64)
         alpha = self._pulse(n_win, float(alpha_peak))
@@ -432,8 +443,24 @@ class Continuity(Injector):
             return candidate
         return np.asarray(delta, np.float64)
 
-    def _teleport(self, traj, actor, t0: int, delta) -> Trajectory:
+    #: How far along its own cycle a constrained body jumps, in seconds. Large
+    #: enough to be plainly a different point of the swing, short of the half
+    #: period that would merely mirror it.
+    PHASE_SHIFT_SECONDS = 0.45
+
+    def _teleport(self, traj, actor, t0: int, delta, spec=None) -> Trajectory:
         out = self._clone(traj)
+        # A CONSTRAINED body jumps along its arc rather than through space. A
+        # pendulum bob cannot leave its rod, so offsetting the bob alone pulls
+        # an assembly the scene declares rigid apart, and offsetting the whole
+        # assembly moves the pivot -- which is a wall-mounted post. Jumping the
+        # swing forward in its own cycle is a real, unexplainable change of
+        # position that leaves the rod attached and the post where it is.
+        if spec is not None and spec.notes.get("constraint") == "pivot":
+            from .. import scenarios as scen_mod
+            if scen_mod.get(spec.scenario).rephase(
+                    spec, out, t0, self.PHASE_SHIFT_SECONDS):
+                return out
         bi = traj.index_of(int(actor.segmentation_id))
         # Horizontal only, so the teleport cannot smuggle in a floor violation.
         out.pos[t0:, bi, :] = traj.pos[t0:, bi, :] + np.asarray(delta, np.float32)
@@ -442,7 +469,8 @@ class Continuity(Injector):
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         out = self._teleport(traj, actor, plan.t_event,
-                             np.asarray(plan.params["delta_m"], np.float32))
+                             np.asarray(plan.params["delta_m"], np.float32),
+                             spec=spec)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

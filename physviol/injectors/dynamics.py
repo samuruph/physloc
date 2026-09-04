@@ -5,6 +5,7 @@ mechanism at two settings of the same dial and share their collision-finding.)
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import numpy as np
@@ -52,6 +53,13 @@ class PhantomImpulse(Injector):
                                 want=max(1, T // 3))
         if t0 is None or not (1 <= t0 < T - 1):
             return None
+        # ON A CONSTRAINT, kick it where it is already moving. The intervention
+        # becomes a change of swing rate (see `_apply`), and a rate change is
+        # expressed relative to the rate there is -- at the top of an arc there
+        # is none, so the same kick is both unrepresentable and invisible. The
+        # bottom of the swing is where a shove reads most clearly anyway.
+        if spec.notes.get("constraint") == "pivot":
+            t0 = self._fastest_frame(traj, actor, t0, T)
 
         # Direction is a property of the SCENE, not of the bin. Drawn from
         # the per-bin rng it came out different for weak, medium and strong,
@@ -117,6 +125,48 @@ class PhantomImpulse(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "delta_v_ms": dv})
 
+    @staticmethod
+    def _fastest_frame(traj, actor, want: int, T: int) -> int:
+        """The frame nearest `want` where the body is near its peak speed."""
+        bi = traj.index_of(int(actor.segmentation_id))
+        speed = np.linalg.norm(traj.lin_vel[:, bi, :].astype(np.float64), axis=1)
+        peak = float(speed.max())
+        if peak <= 1e-9:
+            return want
+        ok = np.flatnonzero((speed >= 0.6 * peak)
+                            & (np.arange(T) >= 1) & (np.arange(T) < T - 1))
+        if not ok.size:
+            return want
+        return int(ok[np.argmin(np.abs(ok - want))])
+
+    def _pivot_kick(self, spec, traj, plan) -> Optional[Trajectory]:
+        """A shove on a body held by a constraint, as a change of its rate.
+
+        A pendulum bob handed a free-body impulse leaves its rod and falls; what
+        a kick actually does to it is change how fast it swings. The scenario
+        owns the constraint and can continue the motion from a new rate, so the
+        injector states the impulse and lets it do that -- the same division of
+        labour `angular_momentum` uses, and the reason neither has to know what
+        a pendulum is.
+        """
+        from .. import scenarios as scen_mod
+
+        out = self._clone(traj)
+        t0 = plan.t_event
+        bi = traj.index_of(int(plan.causal_body_ids[0]))
+        arm = float(spec.notes.get("arm", 1.0)) or 1.0
+        # `_place` writes the assembly's angular velocity as (0, -rate, 0).
+        rate = -float(traj.ang_vel[t0, bi, 1])
+        if abs(rate) < 1e-6:
+            return None
+        dv = float(np.linalg.norm(np.asarray(plan.params["delta_v"], np.float64)))
+        # Along the swing, so the kick adds energy rather than fighting it.
+        target = rate + math.copysign(dv / arm, rate)
+        if not scen_mod.get(spec.scenario).rescript(spec, out, t0,
+                                                    target / rate):
+            return None
+        return out
+
     def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -144,6 +194,13 @@ class PhantomImpulse(Injector):
         return ()
 
     def _apply(self, spec, traj, plan) -> Trajectory:
+        if spec.notes.get("constraint") == "pivot":
+            out = self._pivot_kick(spec, traj, plan)
+            if out is not None:
+                out.meta = dict(traj.meta)
+                out.meta["intervention"] = plan.to_dict()
+                out.meta["label"] = "invalid"
+                return out
         push = np.asarray(plan.params["delta_v"], np.float64)
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
         bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
@@ -185,12 +242,15 @@ class AngularMomentum(Injector):
     family = "angular_momentum"
     # New spin as a multiple of the old: nearly stopped, exactly reversed,
     # reversed and faster.
-    SPIN_BY_BIN = {"weak": 0.2, "medium": -1.0, "strong": -1.9}
+    #: Strong reaches further past a plain reversal than it did (-1.9), because
+    #: with weak and medium fixed below it the bottom of the ladder was doing
+    #: all the compressing -- a weak bin nobody can pick out is not a weak bin.
+    SPIN_BY_BIN = {"weak": 0.2, "medium": -1.0, "strong": -2.8}
     # ...unless the body is barely spinning, in which case rescaling zero is
     # zero and the clip would carry no violation at all. Then a spin is
     # *imposed* instead, which the family's own description covers: "spin
     # reverses, or torque appears with no contact". rad/s.
-    IMPOSED_BY_BIN = {"weak": 1.5, "medium": 4.0, "strong": 8.0}
+    IMPOSED_BY_BIN = {"weak": 1.5, "medium": 4.5, "strong": 11.0}
     SPINNING = 0.5      # rad/s, above which there is a spin worth reversing
 
     def strong_residual_reference(self, spec) -> float:

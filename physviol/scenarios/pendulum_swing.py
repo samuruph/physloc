@@ -113,6 +113,79 @@ class PendulumSwing(Scenario):
         self._place(spec, traj, theta, rate)
         return True
 
+    def regravity(self, spec, traj, t0: int, alpha: float) -> bool:
+        """Continue the swing from `t0` under gravity scaled by `alpha`.
+
+        The period is `2*pi*sqrt(L/g)`, so scaling gravity scales the angular
+        frequency by `sqrt(alpha)` -- a slower swing under weaker gravity, which
+        is the whole visible content of the violation on a pendulum and is not
+        something a rate change can imitate.
+
+        `alpha <= 0` is gravity reversed, and then the pendulum does not
+        oscillate at all: the restoring torque becomes a driving one and the
+        solution turns hyperbolic, so the bob climbs away from the bottom and
+        keeps going. That is the same equation, not a special case -- only the
+        sign under the square root changes -- and it is clamped at the
+        horizontal so the arm never winds past a right angle.
+        """
+        if t0 < 1 or t0 >= traj.num_frames:
+            return False
+        n = traj.num_frames
+        om = float(spec.notes["omega"])
+        th0 = float(spec.notes["theta0"])
+        t = np.arange(n, dtype=np.float64) * traj.dt
+        theta = th0 * np.cos(om * t)
+        rate = -th0 * om * np.sin(om * t)
+
+        d = (np.arange(n, dtype=np.float64) - t0) * traj.dt
+        a, b = theta[t0], rate[t0]
+        lam = om * np.sqrt(abs(float(alpha)))
+        if float(alpha) > 0.0:
+            new_theta = a * np.cos(lam * d) + (b / max(lam, 1e-9)) * np.sin(lam * d)
+            new_rate = -a * lam * np.sin(lam * d) + b * np.cos(lam * d)
+        else:
+            new_theta = a * np.cosh(lam * d) + (b / max(lam, 1e-9)) * np.sinh(lam * d)
+            new_rate = a * lam * np.sinh(lam * d) + b * np.cosh(lam * d)
+            # A rod, not a string, so it can carry the bob over the top -- and
+            # straight up is exactly where a pendulum under reversed gravity
+            # belongs: that is its stable point. The arm swings in the x-z plane
+            # and the post stands off it in y, so nothing is in the way.
+            #
+            # Clamped at the inverted position rather than at the horizontal.
+            # Stopping it halfway up left the bob hanging sideways and
+            # motionless for half the clip, which is the frozen picture this
+            # whole change is meant to remove; letting it travel the full arc
+            # keeps it moving almost to the end and finishes somewhere no
+            # pendulum can be.
+            over = np.abs(new_theta) > math.pi
+            new_theta = np.clip(new_theta, -math.pi, math.pi)
+            new_rate = np.where(over, 0.0, new_rate)
+        theta[t0:] = new_theta[t0:]
+        rate[t0:] = new_rate[t0:]
+        self._place(spec, traj, theta, rate)
+        return True
+
+    def rephase(self, spec, traj, t0: int, shift_seconds: float) -> bool:
+        """Continue the swing from `t0` as if `shift_seconds` further along.
+
+        The assembly jumps to a different point of the same arc and carries on
+        lawfully from there -- a position discontinuity that leaves the rod and
+        bob attached, which displacing the bob in space does not.
+        """
+        if t0 < 1 or t0 >= traj.num_frames:
+            return False
+        n = traj.num_frames
+        om = float(spec.notes["omega"])
+        th0 = float(spec.notes["theta0"])
+        t = np.arange(n, dtype=np.float64) * traj.dt
+        theta = th0 * np.cos(om * t)
+        rate = -th0 * om * np.sin(om * t)
+        shifted = t + float(shift_seconds)
+        theta[t0:] = (th0 * np.cos(om * shifted))[t0:]
+        rate[t0:] = (-th0 * om * np.sin(om * shifted))[t0:]
+        self._place(spec, traj, theta, rate)
+        return True
+
     # ------------------------------------------------------------------ #
     def _place(self, spec, traj, theta: np.ndarray, rate: np.ndarray) -> None:
         """Write the assembly's pose for a whole angle series onto a trajectory."""

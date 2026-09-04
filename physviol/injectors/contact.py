@@ -748,15 +748,29 @@ class SuperElastic(Injector):
     """
 
     family = "superelastic"
-    #: Outgoing speed as a multiple of incoming. Raised from 1.2/1.55/2.1,
+    #: Outgoing speed as a multiple of incoming. Raised twice from 1.2/1.55/2.1,
     #: because the ceiling those numbers were chosen against was the wrong one:
     #: they were low enough that a vertical bounce stayed in shot, which made
     #: every *horizontal* rebound -- `barrier_pass`, `collision` -- barely
     #: distinguishable from its lawful twin. The framing constraint belongs on
-    #: the individual clip, not on the constant, so the nominal gain is now what
+    #: the individual clip, not on the constant, so the nominal gain is what
     #: reads clearly and `_fit_to_frame` walks it back per scene wherever the
     #: geometry cannot host it.
-    GAIN_BY_BIN = {"weak": 1.70, "medium": 2.60, "strong": 4.50}
+    #:
+    #: The whole ladder moves together rather than only its top, because you
+    #: judged the strongest bin about right for a weak one -- a stronger strong
+    #: over an unchanged weak would just stretch the gap and leave the bottom of
+    #: the ladder invisible.
+    GAIN_BY_BIN = {"weak": 2.20, "medium": 3.60, "strong": 6.00}
+    #: Frames the pair may spend off camera before the fit weakens the bounce.
+    #:
+    #: The default of one was the binding constraint on `barrier_pass`, not the
+    #: nominal gain: measured there, gain 3.5 costs one frame off camera and 4.5
+    #: costs four, so a budget of one clamped the clip to 3.48 however high the
+    #: constant went. A ball that comes back much faster than it arrived SHOULD
+    #: leave the shot sooner -- that is what the violation looks like -- and the
+    #: cost is a few frames of empty mask at the tail.
+    FRAME_TOLERANCE = 4
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as
@@ -897,7 +911,8 @@ class SuperElastic(Injector):
         fit, _ = self._fit_to_frame(
             spec, traj, targets, t0, excess,
             lambda k: self._boosted(spec, traj, targets, t0,
-                                    1.0 + excess * k, normal))
+                                    1.0 + excess * k, normal),
+            tolerance=self.FRAME_TOLERANCE)
         gain = 1.0 + (self.GAIN_BY_BIN[severity_bin] - 1.0) * fit
         # Roll the boosted trajectory forward here so the windows can be the
         # frames energy is *actually* gained on, rather than a guess. `apply`

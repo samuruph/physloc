@@ -117,7 +117,14 @@ class Immutability(Injector):
     SHRINK_TO = 0.42
     #: How many times within a frame the collision shape is rebuilt during the
     #: ramp. See the note in `stage`.
-    SWAPS_PER_FRAME = 4
+    #:
+    #: Eight rather than four: measured on the review sweep, a body swelling to
+    #: 2.3x pressed 5.5 cm into the floor on `barrier_pass` and 8.7 cm on `drop`
+    #: during the five ramp frames before the solver pushed it back out. That is
+    #: real -- a growing body does press into what it rests on -- but at four
+    #: steps the size jump per step is large enough to see. Each extra step
+    #: costs one `createMultiBody`.
+    SWAPS_PER_FRAME = 8
 
     def _factor(self, severity_bin: str, grow: bool) -> float:
         k = self.SCALE_BY_BIN[severity_bin]
@@ -264,10 +271,14 @@ class Immutability(Injector):
         factor = self._profile(plan, traj.num_frames - t0)
         out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
 
-        r0 = float(traj.radius[bi])
-        _geom.reseat(spec, traj, out, actor, bi, t0, r0 * factor)
-        _geom.push_out(spec, traj, out, actor, bi, t0, r0 * factor)
-        self._sync_velocity(traj, out, bi, t0)
+        # A SCRIPTED body is held on a constraint, not on a surface -- a
+        # pendulum bob has nothing under it -- so seating it against the ground
+        # would drag the whole assembly down to the floor.
+        if not actor.scripted:
+            r0 = float(traj.radius[bi])
+            _geom.reseat(spec, traj, out, actor, bi, t0, r0 * factor)
+            _geom.push_out(spec, traj, out, actor, bi, t0, r0 * factor)
+            self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

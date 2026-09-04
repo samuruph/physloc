@@ -286,19 +286,40 @@ class Friction(Injector):
         moving = np.flatnonzero(speed > 0.35)
         if moving.size < 3:
             return None
-        want = T // 3
-        # BRAKE IN THE OPEN. The deceleration takes the better part of a second,
-        # so firing a third of the way into `occluder_pass` brings the body to
-        # rest behind the screen -- and a body at rest behind a screen has no
-        # pixels in the invalid render, so the severity field has nowhere to
-        # land and the clip ships scoring nothing. Starting early enough that
-        # the stop happens before the occlusion keeps the evidence on camera.
-        occ = [int(f) for f in (spec.notes.get("occluded_frames") or [])]
-        if occ:
-            want = min(want, max(1, min(occ) - self._frames_for(spec, 0.5)))
-        t0 = int(max(moving[0] + 1, min(moving[-1] - 1, want)))
+        # BRAKE IN THE OPEN. The deceleration takes the better part of a
+        # second, so firing a third of the way into `occluder_pass` brings the
+        # body to rest behind the screen -- and a body at rest behind a screen
+        # has no pixels in the invalid render, so the severity field has nowhere
+        # to land and the clip ships a picture scoring zero.
+        #
+        # Asked of the WHERE, not of the scenario's `occluded_frames`. That list
+        # is computed from the lawful rollout, so it describes the path the body
+        # does not take: on the review sweep's `occluder_pass` seed it was empty
+        # -- a ball that keeps rolling never dwells behind the screen -- while
+        # the friction clip parked it squarely behind. So the stopping point is
+        # predicted and tested against the actual geometry, and if it is hidden
+        # the violation fires earlier, until the body comes to rest in view.
+        t0 = int(max(moving[0] + 1, min(moving[-1] - 1, T // 3)))
         if not (1 <= t0 < T - 1):
             return None
+        # Outward from the preferred moment in BOTH directions. Searching only
+        # earlier does not work on `occluder_pass`: the stopping distance is a
+        # share of the path that REMAINS, so starting sooner lengthens the path
+        # and leaves the body in much the same place. What works there is
+        # braking later, once the ball is past the screen -- and which of the
+        # two a scene needs is not something to decide in advance.
+        lo, hi = int(max(1, moving[0] + 1)), int(min(T - 2, moving[-1] - 1))
+        for delta in range(0, max(t0 - lo, hi - t0) + 1):
+            for cand in (t0 - delta, t0 + delta):
+                if not (lo <= cand <= hi):
+                    continue
+                stop = self._stopping_point(spec, traj, bi, cand, severity_bin)
+                if stop is None or not _geom.hidden_behind_static(spec, stop):
+                    t0 = cand
+                    break
+            else:
+                continue
+            break
 
         rate = self.RATE_BY_BIN[severity_bin]
         strong = self._retimed(traj, bi, t0, self.RATE_BY_BIN["strong"])
@@ -330,6 +351,24 @@ class Friction(Injector):
                    "rolling_friction": roll,
                    "target_distance_m": float(target),
                    "r_strong": float(r_strong)})
+
+    def _stopping_point(self, spec, traj, bi: int, t0: int, severity_bin: str):
+        """Where along its lawful path the body will have come to rest.
+
+        The distance is the same share of the remaining path `_solve_grip`
+        solves against, so the two agree by construction; the position is read
+        off the lawful path rather than integrated, which is exact for the
+        question being asked -- the body is being slowed along that path, not
+        sent somewhere else.
+        """
+        pos = np.asarray(traj.pos[t0:, bi, :], np.float64)
+        if pos.shape[0] < 2:
+            return None
+        step = np.linalg.norm(np.diff(pos, axis=0), axis=1)
+        arc = np.concatenate([[0.0], np.cumsum(step)])
+        target = float(self.TRAVEL_BY_BIN[severity_bin]) * float(arc[-1])
+        return pos[int(np.searchsorted(arc, target, side="left"))
+                   if target < arc[-1] else -1]
 
     def _solve_grip(self, spec, traj, actor, bi: int, t0: int,
                     severity_bin: str):

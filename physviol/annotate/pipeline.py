@@ -241,9 +241,34 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, scored,
                                                        observable)
 
+    # A SECOND gate, for the annotations that are invalid-side only.
+    #
+    # `observable` is a *disagreement between the twins*, so it is true on
+    # frames where the culprit can be seen in the VALID render and not in the
+    # invalid one -- which is exactly the case whenever an intervention leaves
+    # the body somewhere the camera cannot see it. `mask_invalid` and
+    # `severity_map` have no pixels to put anywhere on such a frame, so
+    # `attribute_to_evidence` spends the severity on a frame that shows nothing
+    # and there is none left for the frame the body re-emerges on.
+    #
+    # Two cells in the review sweep shipped that way: `occluder_pass` x
+    # `friction` and x `phantom_impulse`, both with a healthy residual (peaking
+    # at 1.00 and 0.18) and 8 to 14 observable frames, both with `mask_invalid`
+    # empty on all 25 frames while the segmentation carried 89 px of culprit at
+    # frames 13-16. A picture with a severity of zero is the more dangerous of
+    # the two audit failures: it teaches a model that a clearly wrong clip is
+    # fine.
+    #
+    # `observable` still gates the union mask, the clocks and the absent-body
+    # fallback, because those are claims about both twins.
+    seen_invalid = masks_mod.footprint(
+        seg_i, dynamic_ids or causal_ids).any(axis=(1, 2))
+    visible_inv, s_inv_visible = sev_mod.attribute_to_evidence(
+        s_invalid, scored, observable & seen_invalid)
+
     # ---- 3.3 masks (the union rule) --------------------------------------
     vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)
-    imask = masks_mod.invalid_mask(seg_i, dynamic_ids, visible)
+    imask = masks_mod.invalid_mask(seg_i, dynamic_ids, visible_inv)
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
     # Level 2 is MEASURED, not declared. `static_ids` are the participants the
     # plan named -- the floor a ball sinks through -- and to those we add every
@@ -290,8 +315,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # all-zero severity map once the body is gone. That is honest -- there is no
     # pixel evidence of severity where nothing is rendered -- and
     # `reference_mask` still says where it should have been.
-    smap = sev_mod.paint(seg_i, {int(b): s_visible for b in dynamic_ids or [primary_id]},
-                         active=visible)
+    smap = sev_mod.paint(seg_i,
+                         {int(b): s_inv_visible
+                          for b in dynamic_ids or [primary_id]},
+                         active=visible_inv)
 
     # ONE exception, and only where the invalid side has nothing at all. A body
     # that MOVED has pixels in the invalid render, so its lawful footprint stays

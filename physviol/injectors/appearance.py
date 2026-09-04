@@ -130,8 +130,10 @@ class _Squash(Injector):
     #: bug you found. The law scored here is still `shape_continuity`, so the
     #: severity measures the deformation and not its consequences.
     simulated = True
-    #: How many times within a frame the collision shape is rebuilt.
-    SWAPS_PER_FRAME = 4
+    #: How many times within a frame the collision shape is rebuilt -- see the
+    #: note on `Immutability.SWAPS_PER_FRAME`, which this matches so the two
+    #: resize families do not step at different rates.
+    SWAPS_PER_FRAME = 8
 
     def _target_bodies(self, spec, plan):
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
@@ -308,7 +310,12 @@ class ColourShift(Injector):
     #: on others, and the severity ordering the whole bin system rests on held
     #: only by luck. Solving for the distance makes the bins mean the same thing
     #: whatever colour a body started as.
-    DISTANCE_BY_BIN = {"weak": 0.25, "medium": 0.55, "strong": 0.95}
+    #: Strong pushed to the far end of what a hue rotation can reach. It was
+    #: 0.95, and `_shift_to_distance` bisects for the turn that lands there --
+    #: so on colours whose antipode is closer than that, strong quietly came out
+    #: no further than medium. Asking for more makes the solver take the
+    #: furthest turn available on every starting colour.
+    DISTANCE_BY_BIN = {"weak": 0.25, "medium": 0.60, "strong": 1.30}
     RAMP_FRACTION = 0.22
     RAMP_MIN = 3
 

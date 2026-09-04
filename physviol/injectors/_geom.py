@@ -824,3 +824,61 @@ def unoccluded_event_frame(spec, num_frames: int, span: int,
             if 1 <= t < num_frames - 1 and clear(t):
                 return int(t)
     return int(want) if 1 <= want < num_frames - 1 else None
+
+
+def hidden_behind_static(spec, point) -> bool:
+    """Is `point` behind a static upright box, as seen from the camera?
+
+    A segment/AABB slab test from the eye. Used by families that decide *where*
+    to leave a body: an intervention that parks the actor out of sight ships a
+    clip whose invalid render contains no evidence at all, so `mask_invalid` and
+    `severity_map` are empty however large the residual is.
+
+    The declared `occluded_frames` list cannot answer this, and that is not a
+    detail. It is computed from the LAWFUL rollout, so it says where the body
+    passes on the path it does not take: on the `occluder_pass` seed in the
+    review sweep it was empty -- the ball never dwells behind the screen when it
+    keeps rolling -- while the friction clip brought it to rest squarely behind
+    it. The question is about the invalid path, so it has to be asked of a
+    position rather than of a frame index.
+
+    Rotated boxes are skipped rather than approximated, and boxes that lie flat
+    are floors: the same two exclusions `Obstacles` makes, for the same reasons.
+    """
+    eye, _, _, _ = camera_basis(spec)
+    p = np.asarray(point, np.float64)
+    ray = p - eye
+    length = float(np.linalg.norm(ray))
+    if length < 1e-9:
+        return False
+    ray = ray / length
+
+    for body in spec.bodies:
+        if not body.static or body.kind != "cube":
+            continue
+        if getattr(body, "role", "") == "floor":
+            continue
+        half = np.asarray(body.scale, np.float64)
+        if half[2] <= min(half[0], half[1]):
+            continue                                  # lies flat: it is a floor
+        q = np.asarray(body.quaternion, np.float64)
+        if abs(float(q[0])) < 0.999:
+            continue                                  # rotated: see the docstring
+        centre = np.asarray(body.position, np.float64)
+        lo, hi, miss = 0.0, length, False
+        for axis in range(3):
+            if abs(ray[axis]) < 1e-9:
+                if abs(eye[axis] - centre[axis]) > half[axis]:
+                    miss = True
+                    break
+                continue
+            a = (centre[axis] - half[axis] - eye[axis]) / ray[axis]
+            b = (centre[axis] + half[axis] - eye[axis]) / ray[axis]
+            lo = max(lo, min(a, b))
+            hi = min(hi, max(a, b))
+            if lo > hi:
+                miss = True
+                break
+        if not miss and lo <= hi:
+            return True
+    return False

@@ -206,9 +206,20 @@ def _set_visibility(renderer, obj, body) -> None:
 
 
 # --------------------------------------------------------------------------
-def simulate(spec, scene, simulator, objs) -> Trajectory:
+def simulate(spec, scene, simulator, objs, hooks=()) -> Trajectory:
+    """The valid rollout.
+
+    `hooks` are the scenario's own per-substep constraints -- see
+    `Scenario.sim_hooks`. When there are any the rollout goes through
+    `stepper.run_from`, because `simulator.run` offers no per-step callback and
+    a constraint that only holds after `t_event` is not a constraint. It records
+    the same poses and the same contacts, so nothing downstream can tell which
+    path produced the trajectory.
+    """
     T = spec.tier.num_frames
     steps_per_frame = max(int(scene.step_rate) // max(int(scene.frame_rate), 1), 1)
+    if hooks:
+        return _simulate_with_hooks(spec, scene, simulator, objs, hooks)
     animation, collisions = simulator.run(frame_start=0, frame_end=T - 1)
 
     order = [b.name for b in spec.bodies]
@@ -296,6 +307,49 @@ def simulate(spec, scene, simulator, objs) -> Trajectory:
               "tier": spec.tier.name, "label": "valid",
               "spec": spec.to_dict()},
     )
+
+
+def _simulate_with_hooks(spec, scene, simulator, objs, hooks) -> Trajectory:
+    """A valid rollout stepped by hand, so the scenario's constraints can run.
+
+    Shares `stepper.run_from` with the staged path, and then borrows the shape
+    of the trajectory from an empty `simulate` so every field -- masses, radii,
+    colours, the dormant bodies' `present` flags -- is filled in exactly as it
+    would have been.
+    """
+    T = spec.tier.num_frames
+    tail = stepper.run_from(simulator, scene, spec, objs, 0, T - 1, hooks)
+    blank = _empty_trajectory(spec)
+    return stepper.splice(blank, tail, 0)
+
+
+def _empty_trajectory(spec) -> Trajectory:
+    """Every per-body constant, with no motion in it yet."""
+    T, B = spec.tier.num_frames, len(spec.bodies)
+    present = np.ones((T, B), bool)
+    for j, b in enumerate(spec.bodies):
+        if b.dormant:
+            present[:, j] = False
+    colour = np.zeros((T, B, 3), np.float32)
+    for j, b in enumerate(spec.bodies):
+        colour[:, j, :] = np.asarray(b.color, np.float32)
+    empty = np.zeros((0,), np.int32)
+    return Trajectory(
+        body_ids=np.asarray([b.segmentation_id for b in spec.bodies], np.int32),
+        body_names=[b.name for b in spec.bodies],
+        pos=np.zeros((T, B, 3), np.float32), quat=np.zeros((T, B, 4), np.float32),
+        lin_vel=np.zeros((T, B, 3), np.float32),
+        ang_vel=np.zeros((T, B, 3), np.float32),
+        present=present, colour=colour,
+        mass=np.asarray([b.mass for b in spec.bodies], np.float32),
+        radius=np.asarray([b.bounding_radius for b in spec.bodies], np.float32),
+        is_static=np.asarray([b.static for b in spec.bodies], bool),
+        contacts=Contacts(empty, empty, empty,
+                          np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32),
+                          np.zeros((0,), np.float32), np.zeros((0,), np.float32)),
+        fps=float(spec.tier.fps), gravity=np.asarray(spec.gravity, np.float32),
+        meta={"scenario": spec.scenario, "seed": spec.seed,
+              "tier": spec.tier.name, "label": "valid", "spec": spec.to_dict()})
 
 
 # Where a removed body is parked. Far enough outside any scenario's camera
@@ -443,10 +497,17 @@ def main() -> int:
     # variant. At complexity L1 the environment costs ~4.6x an L0 render, so
     # re-paying it per severity was most of the wall clock.
     scene, simulator, renderer, objs = build_scene(spec, scratch)
-    traj_valid = simulate(spec, scene, simulator, objs)
-    # Constrained scenarios write their own motion over the solved rollout --
-    # a pendulum arc PyBullet cannot produce without joints. Before any
-    # injector runs, so the seam's guarantees are untouched.
+    # The scenario's own constraints, which must hold on the valid rollout and
+    # on every invalid one -- a rope that is only inextensible after `t_event`
+    # is not a rope.
+    scen_hooks = tuple(scenarios.get(a.scenario).sim_hooks(spec, simulator, objs)
+                       or ())
+    traj_valid = simulate(spec, scene, simulator, objs, scen_hooks)
+    # Bodies whose pose is drawn rather than solved -- `shadow_track`'s cast
+    # shadow, which is not an object and has no dynamics to get right. A
+    # CONSTRAINED scenario no longer comes through here: a pendulum is a real
+    # body held by a real constraint (`sim_hooks`), so the simulator produces
+    # its arc like any other.
     scenarios.get(a.scenario).script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
@@ -511,7 +572,8 @@ def main() -> int:
                 # verbatim, so prefix identity holds by construction.
                 try:
                     stepper.reset_to(spec, objs, traj_valid, plan.t_event)
-                    hooks = inj.stage(spec, simulator, objs, plan) or ()
+                    hooks = tuple(inj.stage(spec, simulator, objs, plan)
+                                  or ()) + scen_hooks
                     tail = stepper.run_from(simulator, scene, spec, objs,
                                             plan.t_event, spec.tier.num_frames - 1,
                                             hooks)

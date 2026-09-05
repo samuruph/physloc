@@ -381,11 +381,30 @@ def angular_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     a tumbling body swaps angular momentum with the ground legally, and only
     a change while free of contact is unexplained.
     """
-    w = np.asarray(traj.ang_vel[:, b, :], np.float64)
-    dw = np.zeros_like(w)
-    dw[1:] = w[1:] - w[:-1]
     r = float(traj.radius[b])
     g = max(float(np.linalg.norm(traj.gravity)), 1e-9)
+    pivot = ctx.get("pivot")
+    if pivot is not None:
+        # ON A CONSTRAINT the angular momentum that matters is about the PIVOT,
+        # not about the body's own centre. A bob on a rod carries its angular
+        # momentum as `r x v`; its own spin is zero throughout and stays zero
+        # however violently the swing is changed, so measuring the spin reports
+        # nothing at all -- which is exactly what `pendulum_swing x
+        # angular_momentum` did, shipping a reversed swing at severity 0.000.
+        #
+        # Written in the same units as the free case -- an effective angular
+        # rate times a lever arm over `g*dt` -- so the two are comparable and a
+        # single `r_strong` means the same thing on both.
+        arm_vec = (np.asarray(traj.pos[:, b, :], np.float64)
+                   - np.asarray(pivot, np.float64)[None, :])
+        vel = np.asarray(traj.lin_vel[:, b, :], np.float64)
+        span = np.maximum(np.sum(arm_vec * arm_vec, axis=1), 1e-12)
+        w = np.cross(arm_vec, vel) / span[:, None]
+        r = float(ctx.get("arm", np.sqrt(span).mean()))
+    else:
+        w = np.asarray(traj.ang_vel[:, b, :], np.float64)
+    dw = np.zeros_like(w)
+    dw[1:] = w[1:] - w[:-1]
     out = np.linalg.norm(dw, axis=1) * r / (g * traj.dt)
 
     touching = np.zeros((traj.num_frames,), bool)

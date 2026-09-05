@@ -434,49 +434,30 @@ class Scenario:
         """
         return None
 
-    def rescript(self, spec: "SceneSpec", traj, t0: int,
-                 omega_scale: float) -> bool:
-        """Re-run the scenario's own constrained motion from `t0` with its
-        angular rate multiplied by `omega_scale`. Return False if unsupported.
+    def sim_hooks(self, spec: "SceneSpec", simulator, objs):
+        """Per-substep hooks the SIMULATOR runs, for constraints it has no joint
+        for. Default is none, and most scenarios need none.
 
-        The division of labour that keeps injectors scenario-agnostic: the
-        *scenario* owns its constraint (a pendulum knows it swings about a
-        pivot), the *injector* owns the intervention (angular momentum reverses).
-        Without this an `angular_momentum` injector would have to know what a
-        pendulum is, which is the per-combination code the whole design avoids.
-        Injectors dispatch on `spec.notes["constraint"]`, never on the
-        scenario's name.
+        The honest alternative to scripting a constrained scenario. A pendulum
+        or a rope is a distance constraint, and PyBullet's point-to-point joints
+        are not usable for it in the pinned build -- measured, a single rigid-rod
+        constraint drifts 18% and dies out within a second, and an 8-link chain
+        stretches 250%. What *is* exact is enforcing the constraint directly:
+        put the body back on the sphere of radius L about the pivot and take out
+        the radial velocity, every substep. Measured, the rod then holds its
+        length to six decimal places at 0.19 ms/frame.
+
+        The point is what it leaves alone. The bob stays an ordinary dynamic
+        body that Kubric owns, one asset to one PyBullet body, so every staged
+        injector addresses it the way it addresses any other body and nothing
+        needs a second code path. Scripting the motion instead buys the same
+        picture and costs exactly that.
+
+        Declared here rather than in the worker because the constraint belongs
+        to the scenario, the same way `family_targets` and the occlusion
+        interval do.
         """
-        return False
-
-    def regravity(self, spec: "SceneSpec", traj, t0: int,
-                  alpha: float) -> bool:
-        """Continue the constrained motion from `t0` under gravity scaled by
-        `alpha`. Return False if unsupported.
-
-        The counterpart to `rescript` for the gravity families. On a free body
-        `antigravity` is a force and the integrator handles it; on a constrained
-        one it changes the shape of the motion itself -- a pendulum under weaker
-        gravity swings *slower*, and under reversed gravity stops oscillating
-        altogether and falls upward. Neither is expressible as a rate change, so
-        `rescript` cannot stand in for it.
-        """
-        return False
-
-    def rephase(self, spec: "SceneSpec", traj, t0: int,
-                shift_seconds: float) -> bool:
-        """Continue the constrained motion from `t0` as if it were
-        `shift_seconds` further through its cycle. Return False if unsupported.
-
-        What a position discontinuity means for a body on a constraint. A free
-        body can be teleported anywhere; a pendulum bob cannot leave its rod, so
-        displacing it in space detaches an assembly the scene says is rigid.
-        Jumping it along its own arc is a real, unexplainable change of position
-        that leaves everything else about the scene intact -- and it keeps the
-        rod and bob together, which a spatial offset applied to one of them
-        does not.
-        """
-        return False
+        return ()
 
     @staticmethod
     def rng(seed: int) -> np.random.RandomState:

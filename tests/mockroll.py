@@ -104,6 +104,19 @@ def roll(spec, scenario=None) -> Trajectory:
     free = np.array([not b.sim_static for b in bodies], bool)
     seg = [int(b.segmentation_id) for b in bodies]
 
+    # The scenario's own distance constraint, if it declares one. The mock has
+    # no joints and no hooks, but a pivot is three lines of projection and
+    # leaving it out is not a harmless approximation: without it
+    # `pendulum_swing`'s bob free-falls to the floor here, so every host-side
+    # test sees a ball lying on the ground where the container sees a swinging
+    # pendulum -- and a family whose whole subject is the swing then "changes
+    # nothing", which is what `angular_momentum` reported.
+    pivot = (np.asarray(spec.notes["pivot"], np.float64)
+             if spec.notes.get("constraint") == "pivot" else None)
+    arm = float(spec.notes.get("arm", 0.0))
+    held = [i for i, b in enumerate(bodies)
+            if pivot is not None and b.role == "actor"]
+
     cf, ca, cb, cn, cp = [], [], [], [], []
 
     def note(frame, a, b_, normal, point):
@@ -155,6 +168,16 @@ def roll(spec, scenario=None) -> Trajectory:
                         continue
                     v[i] -= (1.0 + float(bodies[i].restitution)) * vn * n
                     note(f, seg[i], sid_b, n.tolist(), p[i].tolist())
+            for i in held:
+                # Same rule the scenario gives the simulator: back onto the
+                # sphere of radius `arm` about the pivot, radial velocity out.
+                d = p[i] - pivot
+                dist = float(np.linalg.norm(d))
+                if dist < 1e-9:
+                    continue
+                n = d / dist
+                p[i] = pivot + n * arm
+                v[i] -= float(np.dot(v[i], n)) * n
             for i in range(B):
                 for j in range(i + 1, B):
                     if not (free[i] and free[j]):

@@ -88,7 +88,22 @@ class PhantomImpulse(Injector):
         top = _geom.surface_top(spec, actor)
         airborne = bool(traj.pos[t0, bi, 2] - float(traj.radius[bi])
                         > top + 0.05)
-        if airborne:
+        if spec.notes.get("constraint") == "pivot":
+            # ALONG THE SWING. A constraint eats the radial component of any
+            # impulse the instant it is applied -- the rod simply does not let
+            # the bob move that way -- so a shove aimed anywhere else arrives
+            # mostly cancelled, which is why the strongest bin was barely
+            # visible on `pendulum_swing`. The tangent is the one direction the
+            # constraint leaves free, so all of the impulse survives there.
+            arm_vec = (np.asarray(traj.pos[t0, bi], np.float64)
+                       - np.asarray(spec.notes["pivot"], np.float64))
+            n = arm_vec / max(float(np.linalg.norm(arm_vec)), 1e-9)
+            v = np.asarray(traj.lin_vel[t0, bi], np.float64)
+            tangent = v - float(v @ n) * n
+            mag = float(np.linalg.norm(tangent))
+            unit = (tangent / mag if mag > 1e-6
+                    else np.cross(n, np.array([0.0, 1.0, 0.0])))
+        elif airborne:
             unit = np.array([0.30 * np.cos(heading), 0.30 * np.sin(heading), 1.0])
         else:
             unit = np.array([0.85 * np.cos(heading), 0.85 * np.sin(heading), 0.5])
@@ -139,34 +154,6 @@ class PhantomImpulse(Injector):
             return want
         return int(ok[np.argmin(np.abs(ok - want))])
 
-    def _pivot_kick(self, spec, traj, plan) -> Optional[Trajectory]:
-        """A shove on a body held by a constraint, as a change of its rate.
-
-        A pendulum bob handed a free-body impulse leaves its rod and falls; what
-        a kick actually does to it is change how fast it swings. The scenario
-        owns the constraint and can continue the motion from a new rate, so the
-        injector states the impulse and lets it do that -- the same division of
-        labour `angular_momentum` uses, and the reason neither has to know what
-        a pendulum is.
-        """
-        from .. import scenarios as scen_mod
-
-        out = self._clone(traj)
-        t0 = plan.t_event
-        bi = traj.index_of(int(plan.causal_body_ids[0]))
-        arm = float(spec.notes.get("arm", 1.0)) or 1.0
-        # `_place` writes the assembly's angular velocity as (0, -rate, 0).
-        rate = -float(traj.ang_vel[t0, bi, 1])
-        if abs(rate) < 1e-6:
-            return None
-        dv = float(np.linalg.norm(np.asarray(plan.params["delta_v"], np.float64)))
-        # Along the swing, so the kick adds energy rather than fighting it.
-        target = rate + math.copysign(dv / arm, rate)
-        if not scen_mod.get(spec.scenario).rescript(spec, out, t0,
-                                                    target / rate):
-            return None
-        return out
-
     def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -194,13 +181,6 @@ class PhantomImpulse(Injector):
         return ()
 
     def _apply(self, spec, traj, plan) -> Trajectory:
-        if spec.notes.get("constraint") == "pivot":
-            out = self._pivot_kick(spec, traj, plan)
-            if out is not None:
-                out.meta = dict(traj.meta)
-                out.meta["intervention"] = plan.to_dict()
-                out.meta["label"] = "invalid"
-                return out
         push = np.asarray(plan.params["delta_v"], np.float64)
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
         bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
@@ -291,7 +271,18 @@ class AngularMomentum(Injector):
             return None
 
         bi = traj.index_of(int(actor.segmentation_id))
+        # ABOUT THE PIVOT where there is one: a bob on a rod has no spin of its
+        # own -- nothing torques it -- so reading `ang_vel` reported a rate of
+        # zero, a magnitude of zero, and a family that had plainly reversed the
+        # swing scoring nothing. The rate that exists there is `|r x v| / |r|^2`.
         omega0 = float(np.linalg.norm(traj.ang_vel[t0 - 1, bi]))
+        if self._pivot(spec):
+            arm_vec = (np.asarray(traj.pos[t0 - 1, bi], np.float64)
+                       - np.asarray(spec.notes["pivot"], np.float64))
+            span = max(float(arm_vec @ arm_vec), 1e-12)
+            omega0 = float(np.linalg.norm(
+                np.cross(arm_vec, np.asarray(traj.lin_vel[t0 - 1, bi],
+                                             np.float64)) / span))
         targets = self._all_actors(spec) if self._pivot(spec) else [actor]
         spinning = omega0 > self.SPINNING or self._pivot(spec)
 
@@ -303,9 +294,16 @@ class AngularMomentum(Injector):
         strong_k = self.SPIN_BY_BIN["strong"] if spinning else 0.0
         strong_imposed = (None if spinning
                           else self._imposed(traj, bi, "strong"))
+        # The reference is measured through the SAME context the clip will be
+        # scored in. Measured with an empty one it read the bob's spin, which is
+        # zero on a pendulum however hard the swing is changed -- so `r_strong`
+        # came out 0.00, the score divided by it, and every severity saturated.
+        law_ctx = ({"pivot": [float(x) for x in spec.notes["pivot"]],
+                    "arm": float(spec.notes.get("arm", 0.0))}
+                   if self._pivot(spec) else {})
         strong = self._preview(spec, traj, t0, strong_k, targets, strong_imposed)
         r_strong = self._measure(strong, int(actor.segmentation_id),
-                                 "angular_momentum", {})
+                                 "angular_momentum", dict(law_ctx))
 
         t1 = min(T - 1, t0 + self._window_len(2, t0, T) - 1)
         return InterventionPlan(
@@ -331,6 +329,12 @@ class AngularMomentum(Injector):
                    "omega_scale": k, "omega_at_event": omega0,
                    "omega_imposed": None if imposed is None
                                     else [float(x) for x in imposed],
+                   # The residual context for a constrained body -- see
+                   # `laws.angular_momentum`, which measures about the pivot
+                   # when it is given one.
+                   "pivot": ([float(x) for x in spec.notes["pivot"]]
+                             if self._pivot(spec) else None),
+                   "arm": float(spec.notes.get("arm", 0.0)),
                    "r_strong": float(r_strong)})
 
     def _imposed(self, traj, bi: int, severity_bin: str) -> np.ndarray:
@@ -354,9 +358,18 @@ class AngularMomentum(Injector):
                  imposed=None) -> Trajectory:
         out = self._clone(traj)
         if self._pivot(spec):
-            from .. import scenarios as scen_mod
-            if scen_mod.get(spec.scenario).rescript(spec, out, t0, k):
-                return out
+            # The host-side approximation of the staged tangential change --
+            # see `stage`. Walking the body's own lawful path at a different
+            # rate keeps it on its arc, which re-integrating under gravity does
+            # not: a bob handed free-body physics leaves its rod and falls.
+            for body in targets:
+                bi = traj.index_of(int(body.segmentation_id))
+                n = traj.num_frames - t0
+                u = float(t0 - 1) + np.cumsum(np.full((n,), abs(float(k))))
+                pos = _geom.path_sample(traj.pos[:, bi, :], u)
+                out.pos[t0:, bi, :] = pos.astype(np.float32)
+                self._sync_velocity(traj, out, bi, t0)
+            return out
         for body in targets:
             bi = traj.index_of(int(body.segmentation_id))
             omega = (traj.ang_vel[t0 - 1, bi].astype(np.float64) * k
@@ -381,14 +394,12 @@ class AngularMomentum(Injector):
     #: simulator to hand the change to.
     simulated = True
 
-    def simulates(self, plan) -> bool:
-        return plan.params.get("constraint") != "pivot"
-
     def stage(self, spec, simulator, objs, plan):
         import pybullet as pb
 
         from ..render import stepper
 
+        pivot = plan.params.get("constraint") == "pivot"
         imposed = plan.notes.get("omega_imposed")
         k = float(plan.notes["omega_scale"])
         for bid in plan.causal_body_ids:
@@ -396,6 +407,17 @@ class AngularMomentum(Injector):
             if idx is None:
                 continue
             vel, ang = pb.getBaseVelocity(idx)
+            if pivot:
+                # ON A CONSTRAINT the angular momentum that matters is about the
+                # PIVOT, and for a bob on a rod that is its tangential speed --
+                # its own spin is invisible on a sphere and irrelevant to the
+                # swing. Scaling the linear velocity is the same intervention
+                # the free case makes, expressed in the coordinate the
+                # constraint leaves free, and the rod does the rest.
+                pb.resetBaseVelocity(idx,
+                                     (np.asarray(vel, np.float64) * k).tolist(),
+                                     list(ang))
+                continue
             omega = (np.asarray(imposed, np.float64) if imposed is not None
                      else np.asarray(ang, np.float64) * k)
             pb.resetBaseVelocity(idx, list(vel), omega.tolist())

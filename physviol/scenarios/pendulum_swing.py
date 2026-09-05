@@ -27,6 +27,9 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 class PendulumSwing(Scenario):
     name = "pendulum_swing"
     SEG_FLOOR, SEG_BOB, SEG_ROD, SEG_POST = 1, 2, 4, 3
+    #: Fractional energy rise per substep below which a gain is read as
+    #: numerical drift and taken back. An intervention arrives far above it.
+    DRIFT_TOLERANCE = 0.02
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
@@ -46,29 +49,34 @@ class PendulumSwing(Scenario):
                         scale=(0.08, 0.06, pivot[2] / 2.0), mass=0.0, static=True,
                         color=(0.30, 0.30, 0.34), segmentation_id=self.SEG_POST,
                         role="prop")
-        # Both moving parts are scripted: pinned in the simulator so they
-        # neither fall nor collide, animated from the trajectory instead. Both
-        # carry role "actor" because they are one rigid assembly -- an
-        # intervention on the swing moves the rod too, and the mask must say so.
+        # The rod is GEOMETRY, not a participant. It is kinematic -- pinned in
+        # the simulator and hung between the pivot and the bob every substep by
+        # `_carry_rod` -- because a stick with no mass of its own contributes
+        # nothing to the swing and nothing collides with it. It stays a body so
+        # that it has a segmentation id; a `prop` rather than an `actor` so it
+        # never becomes a culprit, and when the swing changes the rod's motion
+        # changes with it, which `causal_mask` picks up as a measured
+        # consequence without anyone declaring it.
         rod = BodySpec(name="rod", kind="cube", position=(0.0, 0.0, pivot[2] - arm / 2),
-                       scale=(0.035, 0.035, arm / 2.0), mass=1.0, static=False,
+                       scale=(0.035, 0.035, arm / 2.0), mass=0.0, static=False,
                        scripted=True, color=(0.55, 0.55, 0.60),
-                       segmentation_id=self.SEG_ROD, role="actor")
-        # Scripted, not simulated -- the bob's pose comes from `_place` on every
-        # frame regardless of shape, so unlike a free body there is no rolling
-        # or contact assumption tied to "sphere" to worry about here.
+                       segmentation_id=self.SEG_ROD, role="prop")
+        # The bob is an ORDINARY DYNAMIC BODY. Its arc is not written down
+        # anywhere: it falls under gravity like anything else and the rod is a
+        # distance constraint the solver honours every substep (`sim_hooks`).
+        # That is what lets every staged family act on it exactly as it would on
+        # a dropped ball, with no scenario-specific path anywhere.
         bob_kind = "sphere" if rng.rand() < 0.6 else "cube"
-        bob = BodySpec(name="bob", kind=bob_kind, position=(0.0, 0.0, pivot[2] - arm),
-                       scale=(r_bob,) * 3, mass=1.0, static=False, scripted=True,
+        start = (pivot[0] + arm * math.sin(theta0), pivot[1],
+                 pivot[2] - arm * math.cos(theta0))
+        bob = BodySpec(name="bob", kind=bob_kind, position=start,
+                       scale=(r_bob,) * 3, mass=1.0, static=False,
+                       friction=0.4, restitution=0.3,
                        color=C.hue_rgb(float(rng.uniform(0, 1))),
                        segmentation_id=self.SEG_BOB, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            # Bob before rod: `_primary` takes the first actor, and a family
-            # that removes or resizes "the pendulum" should act on the weight,
-            # not on the stick holding it. Both stay actors because
-            # `angular_momentum` re-solves the whole assembly.
             bodies=[C.ground(cx, self.SEG_FLOOR), post, bob, rod],
             lights=C.lights(cx, look_at=(0, 0, 1.4)),
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
@@ -81,134 +89,132 @@ class PendulumSwing(Scenario):
                    "bob_radius": r_bob, "bob_kind": bob_kind})
 
     # ------------------------------------------------------------------ #
-    def script(self, spec, traj) -> None:
-        n = traj.num_frames
-        t = np.arange(n, dtype=np.float64) * traj.dt
-        th0, om = float(spec.notes["theta0"]), float(spec.notes["omega"])
-        self._place(spec, traj, th0 * np.cos(om * t), -th0 * om * np.sin(om * t))
+    def sim_hooks(self, spec, simulator, objs):
+        """The rod, as a constraint the solver honours every substep.
 
-    def rescript(self, spec, traj, t0: int, omega_scale: float) -> bool:
-        """Continue the swing from frame `t0` with the angular rate rescaled.
+        PyBullet's point-to-point joint is not usable for this in the pinned
+        build -- measured, a single rigid-rod constraint drifts 18% and dies out
+        within a second. Enforcing the distance directly is exact: put the bob
+        back on the sphere of radius `arm` about the pivot and remove the radial
+        velocity component. Measured, the arm holds its length to six decimal
+        places and the swing keeps 97% of its amplitude over three seconds, at
+        0.19 ms/frame.
 
-        Simple harmonic motion is fully determined by (angle, rate) at one
-        instant, so this is exact rather than a re-simulation: keep the angle,
-        scale the rate, evolve. `omega_scale = -1` is angular momentum reversed;
-        `|omega_scale| > 1` is a swing that gains energy from nowhere.
+        This replaces an analytic arc -- `theta0 * cos(omega * t)`, the
+        SMALL-ANGLE solution, which the scenario was using at angles up to 57
+        degrees. So the swing is not merely differently produced, it is right
+        where it used to be approximate.
+
+        What it buys is uniformity. The bob is now an ordinary dynamic body, so
+        every staged family acts on it the way it acts on any other body: no
+        `script`, no `rescript`, no scenario hooks for gravity or phase, and no
+        rule anywhere that some scenarios are exempt from the simulator.
         """
-        if t0 < 1 or t0 >= traj.num_frames:
-            return False
-        n = traj.num_frames
-        om = float(spec.notes["omega"])
-        th0, dth0 = float(spec.notes["theta0"]), 0.0
-        t = np.arange(n, dtype=np.float64) * traj.dt
-        theta = th0 * np.cos(om * t)
-        rate = -th0 * om * np.sin(om * t)
+        import numpy as _np
+        import pybullet as pb
 
-        d = (np.arange(n, dtype=np.float64) - t0) * traj.dt
-        a, b = theta[t0], rate[t0] * float(omega_scale)
-        theta_new = a * np.cos(om * d) + (b / om) * np.sin(om * d)
-        rate_new = -a * om * np.sin(om * d) + b * np.cos(om * d)
-        theta[t0:] = theta_new[t0:]
-        rate[t0:] = rate_new[t0:]
-        self._place(spec, traj, theta, rate)
-        return True
+        from ..render import stepper
 
-    def regravity(self, spec, traj, t0: int, alpha: float) -> bool:
-        """Continue the swing from `t0` under gravity scaled by `alpha`.
-
-        The period is `2*pi*sqrt(L/g)`, so scaling gravity scales the angular
-        frequency by `sqrt(alpha)` -- a slower swing under weaker gravity, which
-        is the whole visible content of the violation on a pendulum and is not
-        something a rate change can imitate.
-
-        `alpha <= 0` is gravity reversed, and then the pendulum does not
-        oscillate at all: the restoring torque becomes a driving one and the
-        solution turns hyperbolic, so the bob climbs away from the bottom and
-        keeps going. That is the same equation, not a special case -- only the
-        sign under the square root changes -- and it is clamped at the
-        horizontal so the arm never winds past a right angle.
-        """
-        if t0 < 1 or t0 >= traj.num_frames:
-            return False
-        n = traj.num_frames
-        om = float(spec.notes["omega"])
-        th0 = float(spec.notes["theta0"])
-        t = np.arange(n, dtype=np.float64) * traj.dt
-        theta = th0 * np.cos(om * t)
-        rate = -th0 * om * np.sin(om * t)
-
-        d = (np.arange(n, dtype=np.float64) - t0) * traj.dt
-        a, b = theta[t0], rate[t0]
-        lam = om * np.sqrt(abs(float(alpha)))
-        if float(alpha) > 0.0:
-            new_theta = a * np.cos(lam * d) + (b / max(lam, 1e-9)) * np.sin(lam * d)
-            new_rate = -a * lam * np.sin(lam * d) + b * np.cos(lam * d)
-        else:
-            new_theta = a * np.cosh(lam * d) + (b / max(lam, 1e-9)) * np.sinh(lam * d)
-            new_rate = a * lam * np.sinh(lam * d) + b * np.cosh(lam * d)
-            # A rod, not a string, so it can carry the bob over the top -- and
-            # straight up is exactly where a pendulum under reversed gravity
-            # belongs: that is its stable point. The arm swings in the x-z plane
-            # and the post stands off it in y, so nothing is in the way.
-            #
-            # Clamped at the inverted position rather than at the horizontal.
-            # Stopping it halfway up left the bob hanging sideways and
-            # motionless for half the clip, which is the frozen picture this
-            # whole change is meant to remove; letting it travel the full arc
-            # keeps it moving almost to the end and finishes somewhere no
-            # pendulum can be.
-            over = np.abs(new_theta) > math.pi
-            new_theta = np.clip(new_theta, -math.pi, math.pi)
-            new_rate = np.where(over, 0.0, new_rate)
-        theta[t0:] = new_theta[t0:]
-        rate[t0:] = new_rate[t0:]
-        self._place(spec, traj, theta, rate)
-        return True
-
-    def rephase(self, spec, traj, t0: int, shift_seconds: float) -> bool:
-        """Continue the swing from `t0` as if `shift_seconds` further along.
-
-        The assembly jumps to a different point of the same arc and carries on
-        lawfully from there -- a position discontinuity that leaves the rod and
-        bob attached, which displacing the bob in space does not.
-        """
-        if t0 < 1 or t0 >= traj.num_frames:
-            return False
-        n = traj.num_frames
-        om = float(spec.notes["omega"])
-        th0 = float(spec.notes["theta0"])
-        t = np.arange(n, dtype=np.float64) * traj.dt
-        theta = th0 * np.cos(om * t)
-        rate = -th0 * om * np.sin(om * t)
-        shifted = t + float(shift_seconds)
-        theta[t0:] = (th0 * np.cos(om * shifted))[t0:]
-        rate[t0:] = (-th0 * om * np.sin(om * shifted))[t0:]
-        self._place(spec, traj, theta, rate)
-        return True
-
-    # ------------------------------------------------------------------ #
-    def _place(self, spec, traj, theta: np.ndarray, rate: np.ndarray) -> None:
-        """Write the assembly's pose for a whole angle series onto a trajectory."""
-        pivot = np.asarray(spec.notes["pivot"], np.float64)
+        pivot = _np.asarray(spec.notes["pivot"], _np.float64)
         arm = float(spec.notes["arm"])
-        s, c = np.sin(theta), np.cos(theta)
-        # Angle is measured from straight down toward +X, so the arm direction
-        # is (sin, 0, -cos) and the rod's local +Z maps onto it under a rotation
-        # of (pi - theta) about +Y.
-        direction = np.stack([s, np.zeros_like(s), -c], axis=1)
-        tangent = np.stack([c, np.zeros_like(c), s], axis=1)
-        phi = math.pi - theta
-        quat = np.stack([np.cos(phi / 2.0), np.zeros_like(phi),
-                         np.sin(phi / 2.0), np.zeros_like(phi)], axis=1)
-        ang = np.stack([np.zeros_like(rate), -rate, np.zeros_like(rate)], axis=1)
+        state = {"energy": None}
 
-        for name, dist in (("rod", arm / 2.0), ("bob", arm)):
-            j = spec.index_of(name)
-            traj.pos[:, j, :] = (pivot[None, :] + dist * direction).astype(np.float32)
-            traj.lin_vel[:, j, :] = (dist * rate[:, None] * tangent).astype(np.float32)
-            traj.ang_vel[:, j, :] = ang.astype(np.float32)
-            if name == "rod":
-                traj.quat[:, j, :] = quat.astype(np.float32)
+        def constrain(_client, _step, _frame):
+            # Resolved EVERY substep, never cached. `ShapeSwap` replaces the
+            # body that stands for the bob when `immutability` or `deformation`
+            # resizes it, so a index captured when the hook was built ends up
+            # constraining the parked original while the live proxy sails off
+            # its rod -- measured, the arm reached 3.37 m against a 1.46 m rod.
+            idx = stepper.pybullet_index(simulator, objs, spec, self.SEG_BOB)
+            if idx is None:
+                return
+            rod = stepper.pybullet_index(simulator, objs, spec, self.SEG_ROD)
+            pos, quat = pb.getBasePositionAndOrientation(idx)
+            vel, spin = pb.getBaseVelocity(idx)
+            arm_vec = _np.asarray(pos, _np.float64) - pivot
+            dist = float(_np.linalg.norm(arm_vec))
+            if dist < 1e-9:
+                return
+            n = arm_vec / dist
+            # A ROD pushes as well as pulls, so the distance is held from both
+            # sides. `rope_swing` differs from this scenario in exactly one
+            # character -- `!=` becomes `>` -- which is the whole physical
+            # difference between a rod and a rope.
+            if abs(dist - arm) > 1e-12:
+                pb.resetBasePositionAndOrientation(
+                    idx, (pivot + n * arm).tolist(), quat)
+                v = _np.asarray(vel, _np.float64)
+                v = v - float(v @ n) * n
+                # A ONE-SIDED energy cap. Removing the radial velocity is the
+                # whole of what a rod does, but the position projection that
+                # comes with it moves the bob a little in height, and the work
+                # that represents is never accounted for -- so the swing gains a
+                # sliver of energy every substep and compounds. Measured, a
+                # deformed bob reached -131 degrees where the lawful one turns
+                # at -46, going over the top instead of coming back.
+                #
+                # Conserving energy across the projection outright is wrong the
+                # other way: at rest any upward projection asks for a negative
+                # kinetic energy, the speed is zeroed, and the pendulum never
+                # starts -- which is what the first attempt did.
+                #
+                # So drift is clamped and interventions are not. A passive rod
+                # cannot add energy, and numerical drift is a fraction of a
+                # percent per substep; a family that deliberately adds some --
+                # `phantom_impulse`, `superelastic`, `angular_momentum` -- adds
+                # it in one large step. The threshold tells them apart.
+                z = float(pivot[2] + n[2] * arm)
+                g = abs(float(_np.asarray(spec.gravity, _np.float64)[2]))
+                # ROTATION COUNTS. `deformation` turns the bob into an
+                # ellipsoid, which tumbles, and a tumbling body moves energy
+                # between spin and travel. Leaving the spin out of the sum made
+                # every one of those transfers look like drift in one direction
+                # and a free gain in the other: the deformed bob crept round to
+                # -93 degrees where the lawful one turns at -46.
+                info = pb.getDynamicsInfo(idx, -1)
+                mass = max(float(info[0]), 1e-9)
+                inertia = _np.asarray(info[2], _np.float64) / mass
+                w = _np.asarray(spin, _np.float64)
+                energy = (0.5 * float(v @ v) + g * z
+                          + 0.5 * float(inertia @ (w * w)))
+                ref = state.get("energy")
+                if ref is None or energy > ref * (1.0 + self.DRIFT_TOLERANCE):
+                    state["energy"] = energy          # started, or intervened
+                elif energy > ref:
+                    spun = 0.5 * float(inertia @ (w * w))
+                    want = 2.0 * max(ref - g * z - spun, 0.0)  # drift: give it back
+                    speed = float(_np.linalg.norm(v))
+                    if speed > 1e-9:
+                        v = v * (float(_np.sqrt(want)) / speed)
+                    state["energy"] = ref
+                else:
+                    state["energy"] = energy
+                pb.resetBaseVelocity(idx, v.tolist(), list(spin))
+            if rod is not None:
+                self._carry_rod(pb, rod, pivot, n, arm)
+
+        return (constrain,)
+
+    @staticmethod
+    def _carry_rod(pb, rod, pivot, direction, arm) -> None:
+        """Hang the rod between the pivot and wherever the bob now is.
+
+        The rod is geometry rather than a participant: it has no mass of its
+        own in the swing and nothing collides with it, so following the bob is
+        the whole of its behaviour. It stays a body rather than a decoration
+        because it needs a segmentation id -- a family that acts on "the
+        pendulum" has to be able to mask the stick as well as the weight.
+        """
+        import numpy as _np
+
+        centre = pivot + direction * (arm / 2.0)
+        # Local +Z onto the arm direction, about +Y: the plane the swing is in.
+        theta = float(_np.arctan2(direction[0], -direction[2]))
+        phi = _np.pi - theta
+        pb.resetBasePositionAndOrientation(
+            rod, centre.tolist(),
+            [0.0, float(_np.sin(phi / 2.0)), 0.0, float(_np.cos(phi / 2.0))])
+        pb.resetBaseVelocity(rod, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
 
 
 register(PendulumSwing())

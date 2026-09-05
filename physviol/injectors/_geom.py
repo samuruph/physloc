@@ -117,16 +117,31 @@ EVENT_FRACTION = 0.35
 WINDOW_FRACTION = 0.55
 
 
+#: How far the event moment is jittered per scene, as a fraction of the clip.
+#:
+#: Without it every clip that has no physical cue fires at exactly the same
+#: frame: measured across twelve seeds, `immutability` and `colour_shift`
+#: produced ONE distinct `t_event` and `continuity` three. A benchmark whose
+#: violations all begin a third of the way in teaches when to look rather than
+#: what to look for.
+EVENT_JITTER = 0.10
+
+
 def default_event_frame(spec, num_frames: int) -> Optional[int]:
     """When to fire, absent a physical cue: hidden if possible, else a third in.
 
     Roughly a third of the way in leaves the opening frames untouched -- so the
     prefix is long enough to establish what lawful motion looks like -- and
-    still leaves most of the clip for the consequences to play out.
+    still leaves most of the clip for the consequences to play out. Jittered per
+    SCENE, not per family or per bin: the three severities of one cell must fire
+    together or their magnitudes stop being comparable, and two families on one
+    scene sharing a moment is what makes them comparable to each other.
     """
     t0 = occluded_midpoint(spec)
     if t0 is None:
-        t0 = max(1, int(round(EVENT_FRACTION * num_frames)))
+        rng = np.random.RandomState(int(spec.seed) % (2 ** 31 - 1))
+        frac = EVENT_FRACTION + float(rng.uniform(-EVENT_JITTER, EVENT_JITTER))
+        t0 = max(1, int(round(frac * num_frames)))
     return int(t0) if 1 <= t0 < num_frames - 1 else None
 
 

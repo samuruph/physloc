@@ -355,14 +355,21 @@ class Continuity(Injector):
             return None
         radius = float(actor.bounding_radius)
         jump_r = self.JUMP_RADII[severity_bin]
-        # Direction is a property of the SCENE, not of the bin. Drawn from
-        # the per-bin rng it came out different for weak, medium and strong,
-        # so the three were three different violations and their magnitudes
-        # stopped being comparable -- phantom_impulse reported 0.87 / 2.08 /
-        # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
-        # its own frustum-fit scale.
-        direction = np.array([1.0, 0.0, 0.0]) * float(
-            self._instance_rng(spec).choice([-1.0, 1.0]))
+        # A FULL HEADING, drawn once per SCENE. Two separate constraints meet
+        # here and it is easy to satisfy one by breaking the other:
+        #
+        # * Per scene, NOT per bin. Drawn from the per-bin rng the direction
+        #   came out different for weak, medium and strong, so the three were
+        #   three different violations and their magnitudes stopped being
+        #   comparable -- phantom_impulse reported 0.87 / 2.08 / 1.95 for bins
+        #   that scale 1.0 / 2.4 / 4.5, because each heading got its own
+        #   frustum-fit scale.
+        # * A heading, NOT a sign. Fixing the first by hard-coding `+x`/`-x`
+        #   left twelve seeds producing two distinct teleport directions, where
+        #   phantom_impulse's heading draw produced twelve. A model can learn
+        #   an axis; it cannot learn a heading.
+        heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
+        direction = np.array([np.cos(heading), np.sin(heading), 0.0])
         nominal = direction * jump_r * radius
         # A teleport big enough to leave the frame depicts an object vanishing,
         # which is `permanence`, not `continuity`. Shorten it until both lobes

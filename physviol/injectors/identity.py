@@ -17,6 +17,23 @@ from . import _geom
 from .base import Injector, InterventionPlan, register
 
 
+def _hold_where_it_vanished(traj, bi: int, t0: int, t1: int) -> None:
+    """Freeze a removed body's recorded pose at where it was last seen.
+
+    `stepper.Vanish` parks the body far below the world so that nothing can
+    touch it, and `run_from` faithfully records that -- so the trajectory came
+    out saying the grains of a `pour` teleported to z = -2000. The render never
+    showed it, because `present` is False there and the replay puts an absent
+    body at `GONE_Z` regardless, but every residual and every geometric helper
+    reads `pos`, and a body 2 km underground is not a body that vanished.
+
+    Holding the last live pose says what actually happened: it was there, and
+    then it was not there, and it did not go anywhere in between.
+    """
+    keep = max(int(t0) - 1, 0)
+    traj.pos[int(t0):int(t1) + 1, bi, :] = traj.pos[keep, bi, :]
+
+
 class Permanence(Injector):
     """Remove the actor from the scene, ideally while it is occluded.
 
@@ -71,7 +88,61 @@ class Permanence(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "occluded_at_event": bool(t0 in occ)})
 
+    #: STAGED. A body that is not there does not hold anything up and does not
+    #: strike anything, and those are the simulator's consequences to work out,
+    #: not ours to patch in afterwards. Edited, the family removed the body from
+    #: the trajectory and then `_settle_bystanders` re-integrated by hand
+    #: whatever it would have hit -- a different answer from the solver's, and
+    #: visibly so: on `pyramid_impact` the hand correction displaced three
+    #: spheres by 0.12 to 0.49 m while the staged families in the same scene
+    #: displaced a different set by different amounts.
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        from ..render import stepper
+
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        gone = [stepper.Vanish(simulator, objs, spec, by_id[int(i)])
+                for i in plan.causal_body_ids if int(i) in by_id]
+        gone = [g for g in gone if g.ok]
+        if not gone:
+            return ()
+        self._gone = gone
+        for g in gone:
+            g.hide()
+        t1 = plan.windows[0][1]
+        back = t1 + 1
+        state = {"returned": False}
+
+        def restore(_client, _step, frame):
+            # `weak` and `medium` bring it back; `strong` never does, and its
+            # window runs to the last frame so this never fires.
+            if state["returned"] or frame < back:
+                return
+            for g in gone:
+                g.show()
+            state["returned"] = True
+
+        return (restore,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        for g in getattr(self, "_gone", ()) or ():
+            g.show()
+        self._gone = []
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """The render side: absent means no pixels, which PyBullet cannot say."""
+        t0, t1 = plan.windows[0]
+        traj_invalid.present = np.asarray(traj_invalid.present).copy()
+        traj_invalid.pos = np.asarray(traj_invalid.pos).copy()
+        for bid in plan.causal_body_ids:
+            bi = traj_valid.index_of(int(bid))
+            traj_invalid.present[t0:t1 + 1, bi] = False
+            _hold_where_it_vanished(traj_invalid, bi, t0, t1)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on."""
         out = self._clone(traj)
         t0, t1 = plan.windows[0]
         for bid in plan.causal_body_ids:
@@ -139,7 +210,11 @@ class Immutability(Injector):
         return abs(self._factor("strong", grow) ** 3 - 1.0)
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # THE WHOLE MEDIUM where the scene is made of interchangeable bodies:
+        # one grain of forty changing size is a handful of pixels somewhere in a
+        # pile. `_group` collapses to the single actor everywhere else.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         T = traj.num_frames
@@ -157,7 +232,7 @@ class Immutability(Injector):
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=union,
             intervention_windows=applied, consequence_windows=after,
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "scale_ramp", "scale_factor": k,
                     "volume_ratio": k ** 3, "ramp_frames": int(ramp),
                     "direction": "grow" if grow else "shrink"},
@@ -200,16 +275,16 @@ class Immutability(Injector):
     def stage(self, spec, simulator, objs, plan):
         from ..render import stepper
 
-        actor = next((b for b in spec.bodies
-                      if int(b.segmentation_id) == int(plan.causal_body_ids[0])),
-                     None)
-        if actor is None:
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
+        if not bodies:
             return ()
-        self._swap = None
-        swap = stepper.ShapeSwap(simulator, objs, spec, actor)
-        if not swap.ok:
+        self._swaps = []
+        swaps = [stepper.ShapeSwap(simulator, objs, spec, b) for b in bodies]
+        swaps = [w for w in swaps if w.ok]
+        if not swaps:
             return ()
-        self._swap = swap
+        self._swaps = swaps
         t0 = plan.t_event
         profile = self._profile(plan, spec.tier.num_frames - t0)
         spf = stepper.substeps_of(simulator)
@@ -231,15 +306,15 @@ class Immutability(Injector):
             # elapsed time in frames -- no need to reconcile it against `frame`.
             k = min(step / float(spf), profile.shape[0] - 1.0)
             f = float(np.interp(k, np.arange(profile.shape[0]), profile))
-            swap.set_scale((f, f, f))
+            for swap in swaps:
+                swap.set_scale((f, f, f))
 
         return (resize,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        swap = getattr(self, "_swap", None)
-        if swap is not None:
+        for swap in getattr(self, "_swaps", ()) or ():
             swap.restore()
-        self._swap = None
+        self._swaps = []
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The visual half. PyBullet carries the size, Blender has to be told.
@@ -248,11 +323,12 @@ class Immutability(Injector):
         without this the actor would collide at its new size and render at its
         old one.
         """
-        bi = traj_valid.index_of(int(plan.causal_body_ids[0]))
         t0 = plan.t_event
         factor = self._profile(plan, traj_valid.num_frames - t0)
         traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
-        traj_invalid.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
+        for bid in plan.causal_body_ids:
+            bi = traj_valid.index_of(int(bid))
+            traj_invalid.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
         return super().post_simulate(spec, traj_valid, traj_invalid, plan)
 
     def _apply(self, spec, traj, plan) -> Trajectory:
@@ -265,16 +341,20 @@ class Immutability(Injector):
         a body that grew is pushed out of whatever it now overlaps.
         """
         out = self._clone(traj)
-        actor = self._primary(spec)
-        bi = traj.index_of(int(actor.segmentation_id))
         t0 = plan.t_event
         factor = self._profile(plan, traj.num_frames - t0)
-        out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
-
-        # A SCRIPTED body is held on a constraint, not on a surface -- a
-        # pendulum bob has nothing under it -- so seating it against the ground
-        # would drag the whole assembly down to the floor.
-        if not actor.scripted:
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        for bid in plan.causal_body_ids:
+            actor = by_id.get(int(bid))
+            if actor is None:
+                continue
+            bi = traj.index_of(int(bid))
+            out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
+            # A SCRIPTED body is held on a constraint, not on a surface -- a
+            # pendulum bob has nothing under it -- so seating it against the
+            # ground would drag the whole assembly down to the floor.
+            if actor.scripted:
+                continue
             r0 = float(traj.radius[bi])
             _geom.reseat(spec, traj, out, actor, bi, t0, r0 * factor)
             _geom.push_out(spec, traj, out, actor, bi, t0, r0 * factor)
@@ -697,7 +777,27 @@ class Fusion(Injector):
     family = "fusion"
     persistent = True
     #: How close two bodies must come to be merge candidates, in contact radii.
-    MEET_RADII = {"weak": 3.5, "medium": 2.4, "strong": 1.6}
+    #:
+    #: The ordering was INVERTED, and it made the severity ladder run backwards
+    #: on a medium: `strong` demanded the tightest approach, so it found the
+    #: fewest eligible pairs and merged the least. On `pour` you judged the
+    #: strongest bin too gentle, and that is why. Reaching further is what makes
+    #: a stronger bin fuse more of the pile.
+    MEET_RADII = {"weak": 1.7, "medium": 2.5, "strong": 3.6}
+    #: Share of the possible merges each bin actually makes.
+    MERGE_FRACTION = {"weak": 0.30, "medium": 0.60, "strong": 1.0}
+    #: Volume is CONSERVED: a body that swallows another comes out bigger, by
+    #: exactly the cube root of two.
+    #:
+    #: The family used to keep the survivor's size deliberately, on the
+    #: reasoning that a body growing while another vanishes reads as
+    #: `immutability` and `permanence` in one clip. That worry is real in
+    #: isolation and wrong here: the growth is *paired* with the disappearance,
+    #: happens over the same frames and along the same line of centres, and
+    #: without it the clip shows one object quietly deleted rather than two
+    #: becoming one. Mass has to go somewhere, and putting it in the survivor is
+    #: what a merge is.
+    SWELL = 2.0 ** (1.0 / 3.0)
     #: Share of the clip the absorbed body takes to slide inside its neighbour.
     #: Long enough to read as travel rather than a cut, and it scales with the
     #: tier so a longer clip gets a slower, smoother merge.
@@ -719,7 +819,8 @@ class Fusion(Injector):
         live = [b for b in self._all_actors(spec)]
         if len(live) < 2:
             return []
-        want = max(1, len(self._group(spec)) // 2)
+        want = max(1, int(round(self.MERGE_FRACTION[severity_bin]
+                                * (len(self._group(spec)) // 2))))
         reach_mult = self.MEET_RADII[severity_bin]
 
         cand = []
@@ -773,6 +874,7 @@ class Fusion(Injector):
             consequence_windows=after,
             causal_body_ids=keepers + absorbed,
             params={"type": "merge_bodies", "pairs": len(pairs),
+                    "swell": float(self.SWELL),
                     "meet_radii": self.MEET_RADII[severity_bin]},
             magnitude=float(len(pairs)) / max(len(keepers) + len(absorbed), 1),
             magnitude_unit="count_ratio", severity_bin=severity_bin,
@@ -807,6 +909,11 @@ class Fusion(Injector):
             out.pos[t:t + n, gi, :] = (
                 src + (dst - src) * ease[:, None]).astype(np.float32)
             self._sync_velocity(traj, out, gi, t)
+            # ...and the survivor takes on the volume it just swallowed.
+            swell = 1.0 + (float(self.SWELL) - 1.0) * ease
+            out.scale_mul[t:t + n, ki, :] = swell[:, None].astype(np.float32)
+            if t + n < T:
+                out.scale_mul[t + n:, ki, :] = float(self.SWELL)
             if t + n < T:
                 out.present[t + n:, gi] = False
 
@@ -890,7 +997,61 @@ class Dissolve(Injector):
                    "sibling_ids": [int(b.segmentation_id) for b in targets],
                    "occluded_at_event": bool(t0 in occ)})
 
+    #: STAGED, for the same reason as `permanence`: once the body is invisible
+    #: it is not there, and what that does to everything around it is the
+    #: solver's answer. While it is still fading it is still solid, which is
+    #: also right -- a half-transparent thing you can still see is a thing.
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        from ..render import stepper
+
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        gone = [stepper.Vanish(simulator, objs, spec, by_id[int(i)])
+                for i in plan.causal_body_ids if int(i) in by_id]
+        gone = [g for g in gone if g.ok]
+        if not gone:
+            return ()
+        self._gone = gone
+        vanish_at = plan.t_event + int(plan.notes["fade_frames"])
+        state = {"hidden": False}
+
+        def fade(_client, _step, frame):
+            if state["hidden"] or frame < vanish_at:
+                return
+            for g in gone:
+                g.hide()
+            state["hidden"] = True
+
+        return (fade,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        for g in getattr(self, "_gone", ()) or ():
+            g.show()
+        self._gone = []
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """The optical half -- opacity and presence, neither of which PyBullet
+        has any representation of."""
+        t0 = plan.t_event
+        T = traj_valid.num_frames
+        n = min(int(plan.notes["fade_frames"]), T - t0)
+        u = (np.arange(n, dtype=np.float64) + 1.0) / max(n, 1)
+        alpha = 1.0 - u * u * (3.0 - 2.0 * u)
+        traj_invalid.opacity = np.asarray(traj_invalid.opacity).copy()
+        traj_invalid.present = np.asarray(traj_invalid.present).copy()
+        traj_invalid.pos = np.asarray(traj_invalid.pos).copy()
+        for bid in plan.causal_body_ids:
+            bi = traj_valid.index_of(int(bid))
+            traj_invalid.opacity[t0:t0 + n, bi] = alpha.astype(np.float32)
+            if t0 + n < T:
+                traj_invalid.opacity[t0 + n:, bi] = 0.0
+                traj_invalid.present[t0 + n:, bi] = False
+                _hold_where_it_vanished(traj_invalid, bi, t0 + n, T - 1)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on."""
         out = self._clone(traj)
         t0 = plan.t_event
         T = traj.num_frames

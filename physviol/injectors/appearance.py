@@ -334,11 +334,32 @@ class ColourShift(Injector):
         h, sat, val = colorsys.rgb_to_hsv(*rgb)
         sat = min(1.0, sat + 0.12)
         base = _srgb_to_lab(np.asarray(rgb, np.float64))
+        # LIGHTNESS TOO, once hue alone runs out. A hue rotation can only travel
+        # as far as the antipode, and on colours whose antipode is close that
+        # ceiling arrives well below the strong bin's target -- the solver then
+        # returns the furthest turn it has and `strong` comes out no further
+        # than `medium`. Lab distance has an L axis as well as a chroma plane,
+        # and moving along it is both unbounded by hue and, perceptually, the
+        # most obvious change there is.
+        # Whichever of the three moves furthest, MEASURED rather than guessed.
+        # Darkening compresses chroma, so on a bright colour it can lose more
+        # hue distance than the lightness change buys -- picking a direction up
+        # front made `strong` reach 0.99 where hue alone had reached 1.24. Three
+        # evaluations per bisection step is nothing, and taking the best can
+        # never do worse than hue on its own.
+        lifts = (0.0, 0.35, -0.35) if float(target) > 0.9 else (0.0,)
 
         def at(turn):
-            out = np.asarray(colorsys.hsv_to_rgb((h + sign * turn) % 1.0,
-                                                 sat, val), np.float64)
-            return out, float(np.linalg.norm(_srgb_to_lab(out) - base) / 100.0)
+            best_rgb, best_d = None, -1.0
+            for lift in lifts:
+                out = np.asarray(colorsys.hsv_to_rgb(
+                    (h + sign * turn) % 1.0, sat,
+                    float(np.clip(val + lift * turn / 0.5, 0.05, 1.0))),
+                    np.float64)
+                d = float(np.linalg.norm(_srgb_to_lab(out) - base) / 100.0)
+                if d > best_d:
+                    best_rgb, best_d = out, d
+            return best_rgb, best_d
 
         lo, hi = 0.0, 0.5
         best = at(hi)

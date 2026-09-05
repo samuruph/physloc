@@ -882,3 +882,35 @@ def hidden_behind_static(spec, point) -> bool:
         if not miss and lo <= hi:
             return True
     return False
+
+
+def before_medium_lands(spec, traj, bodies, margin: int = 1):
+    """The frame just before the FIRST of `bodies` reaches what holds it up.
+
+    For a scene made of many falling bodies, "a third of the way in" is not a
+    moment -- it is after the event. Measured on `pour`, the grains land
+    between frames 3 and 10 of 25, so the families that fired at frame 7 to 9
+    were all intervening on a pile that had already settled: `solidity` let the
+    grains bounce and only then sank them, `support` lifted a landed pile off
+    the floor instead of catching it in the air, and `superelastic` multiplied
+    the restitution of bodies that had stopped moving.
+
+    Returns None when nothing lands, which is the caller's cue to keep whatever
+    moment it had chosen.
+    """
+    first = None
+    for body in bodies:
+        try:
+            bi = traj.index_of(int(body.segmentation_id))
+        except Exception:                                     # noqa: BLE001
+            continue
+        top = surface_top(spec, body)
+        r = float(traj.radius[bi])
+        down = np.flatnonzero(
+            np.asarray(traj.pos[:, bi, 2], np.float64) - r <= top + 1e-2)
+        if down.size and (first is None or int(down[0]) < first):
+            first = int(down[0])
+    if first is None:
+        return None
+    t = first - int(margin)
+    return int(t) if t >= 1 else None

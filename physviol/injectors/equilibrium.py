@@ -53,7 +53,16 @@ class Support(Injector):
         if actor is None:
             return None
         T = traj.num_frames
-        t0 = max(1, T // 3)
+        # CATCH THE MEDIUM IN THE AIR. A third of the way into `pour` is after
+        # the grains have landed, so the violation lifted a settled pile off the
+        # floor rather than stopping it mid-fall -- which is a different and far
+        # less legible claim. Where the scene is one falling medium, support
+        # fails while it is still falling.
+        t0 = None
+        if len(targets) > 1:
+            t0 = _geom.before_medium_lands(spec, traj, targets)
+        if t0 is None:
+            t0 = max(1, T // 3)
         if t0 >= T - 1:
             return None
         clearance_r = self.CLEARANCE_RADII[severity_bin]
@@ -330,7 +339,12 @@ class Friction(Injector):
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
-            causal_body_ids=[int(actor.segmentation_id)],
+            # THE WHOLE MEDIUM. `_group` was already being consulted and then
+            # thrown away -- only `targets[0]` was named -- so a pour had one
+            # grain of forty gripping while the rest slid past it, which is
+            # neither visible nor what a surface losing its slipperiness looks
+            # like.
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "friction_scale", "end_rate": rate,
                     "lateral_friction": grip, "rolling_friction": roll,
                     "declared_friction": mu,

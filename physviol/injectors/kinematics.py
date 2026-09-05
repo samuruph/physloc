@@ -178,17 +178,6 @@ class _GravityScale(Injector):
         the one the plan was chosen from.
         """
         out = self._clone(traj)
-        # A CONSTRAINED body cannot be re-integrated as though it were free: a
-        # pendulum bob released into `_rewrite_group` leaves its rod and falls.
-        # The scenario owns its constraint and knows what bending gravity does
-        # to it -- for a pendulum, the period changes -- so ask it.
-        if spec.notes.get("constraint") == "pivot":
-            from .. import scenarios as scen_mod
-            if scen_mod.get(spec.scenario).regravity(
-                    spec, out, t0, float(alpha_peak)):
-                out.meta = dict(traj.meta)
-                out.meta["alpha_profile"] = [float(alpha_peak)]
-                return out
         n_win, n_after = t1 - t0 + 1, traj.num_frames - (t1 + 1)
         g = traj.gravity.astype(np.float64)
         alpha = self._pulse(n_win, float(alpha_peak))
@@ -326,7 +315,15 @@ class GlobalGravity(_GravityScale):
     spatial_extent = "global"
 
     def _targets(self, spec):
-        return [b for b in spec.bodies if not b.static and not b.dormant]
+        # Not the SCRIPTED ones. A kinematic prop -- `pendulum_swing`'s rod,
+        # which is hung between the pivot and the bob rather than falling -- is
+        # not a body gravity acts on, and naming it as a culprit had a worse
+        # consequence than a wrong mask: the worker will not stage an
+        # intervention that touches a scripted body, so the whole family
+        # dropped to the edited path and re-integrated the bob as a free body,
+        # which took it straight off its rod.
+        return [b for b in spec.bodies
+                if not b.static and not b.dormant and not b.scripted]
 
 
 class Continuity(Injector):
@@ -344,7 +341,13 @@ class Continuity(Injector):
         return float(self.JUMP_RADII["strong"])
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # THE WHOLE MEDIUM where the scene is made of interchangeable bodies.
+        # One grain of forty jumping is perfectly annotated and impossible to
+        # find; forty grains jumping together is the same violation said loudly
+        # enough to see. `_group` collapses to the single actor everywhere else,
+        # so this costs the other scenarios nothing.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         t0 = _event_frame(spec, traj, actor, traj.num_frames)
@@ -383,7 +386,7 @@ class Continuity(Injector):
             windows=[(t0, traj.num_frames - 1)],
             intervention_windows=[(t0, t0)],
             consequence_windows=[(t0, traj.num_frames - 1)],
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "position_set", "delta_m": delta.tolist(),
                     "frame_fit_scale": scale},
             magnitude=float(np.linalg.norm(delta)),
@@ -412,6 +415,14 @@ class Continuity(Injector):
             obj.position = tuple(float(x) for x in
                                  np.asarray(obj.position, np.float64) + delta)
         return ()
+
+    def _teleport_all(self, traj, bodies, t0: int, delta) -> Trajectory:
+        out = self._clone(traj)
+        for body in bodies:
+            bi = traj.index_of(int(body.segmentation_id))
+            out.pos[t0:, bi, :] = (traj.pos[t0:, bi, :]
+                                   + np.asarray(delta, np.float32))
+        return out
 
     #: Multiples of the fitted jump to try before giving up, then the same
     #: distances the other way. Extending is preferred: a longer jump is the
@@ -450,27 +461,16 @@ class Continuity(Injector):
 
     def _teleport(self, traj, actor, t0: int, delta, spec=None) -> Trajectory:
         out = self._clone(traj)
-        # A CONSTRAINED body jumps along its arc rather than through space. A
-        # pendulum bob cannot leave its rod, so offsetting the bob alone pulls
-        # an assembly the scene declares rigid apart, and offsetting the whole
-        # assembly moves the pivot -- which is a wall-mounted post. Jumping the
-        # swing forward in its own cycle is a real, unexplainable change of
-        # position that leaves the rod attached and the post where it is.
-        if spec is not None and spec.notes.get("constraint") == "pivot":
-            from .. import scenarios as scen_mod
-            if scen_mod.get(spec.scenario).rephase(
-                    spec, out, t0, self.PHASE_SHIFT_SECONDS):
-                return out
         bi = traj.index_of(int(actor.segmentation_id))
         # Horizontal only, so the teleport cannot smuggle in a floor violation.
         out.pos[t0:, bi, :] = traj.pos[t0:, bi, :] + np.asarray(delta, np.float32)
         return out
 
     def _apply(self, spec, traj, plan) -> Trajectory:
-        actor = self._primary(spec)
-        out = self._teleport(traj, actor, plan.t_event,
-                             np.asarray(plan.params["delta_m"], np.float32),
-                             spec=spec)
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
+        out = self._teleport_all(traj, bodies, plan.t_event,
+                                 np.asarray(plan.params["delta_m"], np.float32))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -517,7 +517,11 @@ class NonParabolic(Injector):
         return float(self.AMPLITUDE_RADII["strong"]) * 0.9
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # THE WHOLE MEDIUM -- see `Continuity.plan`. A single grain snaking
+        # inside a pour is invisible; forty snaking together is a pour that
+        # does not fall the way anything falls.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         bi = traj.index_of(int(actor.segmentation_id))
@@ -536,7 +540,7 @@ class NonParabolic(Injector):
         amp = self.AMPLITUDE_RADII[severity_bin] * radius
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "path_warp", "profile": "serpentine",
                     "amplitude_m": amp, "cycles": self.CYCLES,
                     "frames": int(t1 - t0 + 1)},
@@ -545,10 +549,65 @@ class NonParabolic(Injector):
             notes={"radius": radius, "surface_top": top,
                    "flight_frames": list(range(int(run[0]), int(run[1]) + 1))})
 
+    #: STAGED. A path that is not a parabola requires a FORCE, and a force is
+    #: precisely what a per-substep hook can apply -- so this family had no
+    #: business editing a trajectory. Staged, the body snakes because something
+    #: is pushing it, and it still lands on the floor, still collides with what
+    #: it meets, and still carries its neighbours with it if it strikes them.
+    simulated = True
+
+    def _offsets(self, spec, plan, n: int):
+        """The lateral offset per frame, in the camera's image plane."""
+        amp = float(plan.params["amplitude_m"])
+        cycles = float(plan.params["cycles"])
+        _, _, right, up = _geom.camera_basis(spec)
+        u = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)
+        envelope = np.sin(np.pi * u) ** 2
+        phase = 2.0 * np.pi * cycles * u
+        return ((amp * envelope * np.sin(phase))[:, None] * up[None, :]
+                + (0.6 * amp * envelope * np.cos(phase))[:, None]
+                * right[None, :])
+
+    def stage(self, spec, simulator, objs, plan):
+        import pybullet as pb
+
+        from ..render import stepper
+
+        t0, t1 = plan.windows[0]
+        n = t1 - t0 + 1
+        offset = self._offsets(spec, plan, n)
+        dt = 1.0 / float(spec.tier.fps)
+        # The force that produces that offset: its second derivative, times the
+        # mass. Differenced twice rather than differentiated analytically so the
+        # staged path and `_apply` describe the same curve.
+        accel = np.zeros_like(offset)
+        accel[1:-1] = (offset[2:] - 2.0 * offset[1:-1] + offset[:-2]) / (dt * dt)
+        targets = []
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is not None:
+                targets.append((idx, float(getattr(body, "mass", 1.0))))
+        if not targets:
+            return ()
+
+        def snake(_client, _step, frame):
+            if not (t0 <= frame <= t1):
+                return
+            a = accel[min(frame - t0, n - 1)]
+            for idx, mass in targets:
+                at, _ = pb.getBasePositionAndOrientation(idx)
+                pb.applyExternalForce(idx, -1, (a * mass).tolist(), list(at),
+                                      pb.WORLD_FRAME)
+
+        return (snake,)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on."""
         out = self._clone(traj)
-        actor = self._primary(spec)
-        bi = traj.index_of(int(actor.segmentation_id))
         t0, t1 = plan.windows[0]
         n = t1 - t0 + 1
         amp = float(plan.params["amplitude_m"])
@@ -566,14 +625,16 @@ class NonParabolic(Injector):
         offset = (amp * envelope * np.sin(phase))[:, None] * up[None, :] \
             + (0.6 * amp * envelope * np.cos(phase))[:, None] * right[None, :]
 
-        pos = traj.pos[t0:t1 + 1, bi, :].astype(np.float64) + offset
-        pos[:, 2] = np.maximum(pos[:, 2], top + radius)
-        out.pos[t0:t1 + 1, bi, :] = pos.astype(np.float32)
+        for bid in plan.causal_body_ids:
+            bi = traj.index_of(int(bid))
+            pos = traj.pos[t0:t1 + 1, bi, :].astype(np.float64) + offset
+            pos[:, 2] = np.maximum(pos[:, 2], top + radius)
+            out.pos[t0:t1 + 1, bi, :] = pos.astype(np.float32)
 
-        vel = out.lin_vel[t0:t1 + 1, bi, :].astype(np.float64)
-        vel[0] = (pos[0] - traj.pos[t0 - 1, bi]) / traj.dt
-        vel[1:] = (pos[1:] - pos[:-1]) / traj.dt
-        out.lin_vel[t0:t1 + 1, bi, :] = vel.astype(np.float32)
+            vel = out.lin_vel[t0:t1 + 1, bi, :].astype(np.float64)
+            vel[0] = (pos[0] - traj.pos[t0 - 1, bi]) / traj.dt
+            vel[1:] = (pos[1:] - pos[:-1]) / traj.dt
+            out.lin_vel[t0:t1 + 1, bi, :] = vel.astype(np.float32)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
@@ -610,7 +671,11 @@ class Newton1Inertia(Injector):
         return self.STRONG_REFERENCE
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # THE WHOLE MEDIUM -- see `Continuity.plan`. Forty grains stopping dead
+        # together is Newton 1 said at a volume a viewer can hear; one grain of
+        # forty doing it is a few pixels in a pile.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         T = traj.num_frames
@@ -631,7 +696,7 @@ class Newton1Inertia(Injector):
             family=self.family, kind="sustained", t_event=t0,
             windows=union, intervention_windows=applied,
             consequence_windows=after,
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "velocity_damp", "removed_fraction": fraction},
             magnitude=float(speed[t0] * fraction / max(g_dt, 1e-9)),
             magnitude_unit="dv_over_g_dt", severity_bin=severity_bin,
@@ -662,12 +727,17 @@ class Newton1Inertia(Injector):
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
-        actor = self._primary(spec)
-        bi = traj.index_of(int(actor.segmentation_id))
         t0 = plan.t_event
         keep = 1.0 - float(plan.notes["removed_fraction"])
+        for bid in plan.causal_body_ids:
+            self._halt_one(traj, out, traj.index_of(int(bid)), t0, keep)
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
 
-        if keep <= 1e-6:
+    def _halt_one(self, traj, out, bi: int, t0: int, keep: float) -> None:
+        if True:
             # Frozen exactly where it was. Held rather than re-integrated: a
             # body that stops on a slope must stay on the slope, and gravity
             # would slide it back off.
@@ -685,11 +755,6 @@ class Newton1Inertia(Injector):
             out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
             out.ang_vel[t0:, bi, :] = (traj.ang_vel[t0:, bi, :] * keep)
             self._sync_velocity(traj, out, bi, t0)
-
-        out.meta = dict(traj.meta)
-        out.meta["intervention"] = plan.to_dict()
-        out.meta["label"] = "invalid"
-        return out
 
 
 register(AntiGravity())

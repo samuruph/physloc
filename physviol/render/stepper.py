@@ -444,3 +444,71 @@ class ShapeSwap:
         pb.resetBasePositionAndOrientation(
             self.original, (0.0, 0.0, PARKED_Z), (0.0, 0.0, 0.0, 1.0))
         pb.resetBaseVelocity(self.original, [0.0] * 3, [0.0] * 3)
+
+
+class Vanish:
+    """Take a body out of the simulation, and put it back.
+
+    What `permanence` and `dissolve` actually claim: the body is not there. A
+    body that is not there does not hold anything up and does not strike
+    anything, and those consequences belong to the solver rather than to a
+    correction applied afterwards.
+
+    Both families used to edit the trajectory and then repair the scene by hand
+    -- `_settle_bystanders` re-integrating whatever the vanished body would have
+    struck. That produces a different answer from the simulator's, and on
+    `pyramid_impact` you could see the difference: `dissolve` displaced three
+    spheres by 0.12 to 0.49 m through the hand correction while the staged
+    families displaced a different set by different amounts. Same scene, same
+    claim, two mechanisms.
+
+    Parked rather than removed, for the reason `ShapeSwap` parks: Kubric's
+    traitlet setters close over the body's index, so removing it makes the next
+    `obj.position = ...` write to a body that no longer exists.
+    """
+
+    def __init__(self, simulator, objs, spec, body):
+        self.simulator = simulator
+        self.spec = spec
+        self.body = body
+        self.idx = pybullet_index(simulator, objs, spec,
+                                  int(body.segmentation_id))
+        self.saved = None
+
+    @property
+    def ok(self) -> bool:
+        return self.idx is not None
+
+    def hide(self) -> None:
+        """Remove it from the world, remembering where it was."""
+        import pybullet as pb
+
+        if not self.ok or self.saved is not None:
+            return
+        pos, quat = pb.getBasePositionAndOrientation(self.idx)
+        vel, ang = pb.getBaseVelocity(self.idx)
+        self.saved = (pos, quat, vel, ang)
+        pb.setCollisionFilterGroupMask(self.idx, -1, 0, 0)
+        pb.changeDynamics(self.idx, -1, mass=0.0)
+        pb.resetBasePositionAndOrientation(self.idx, (0.0, 0.0, PARKED_Z), quat)
+        pb.resetBaseVelocity(self.idx, [0.0] * 3, [0.0] * 3)
+
+    def show(self) -> None:
+        """Put it back exactly as it left.
+
+        Where it left, not where its lawful twin would be by now: a body that
+        blinks out and returns somewhere else has teleported, and that is a
+        different family.
+        """
+        import pybullet as pb
+
+        if not self.ok or self.saved is None:
+            return
+        pos, quat, vel, ang = self.saved
+        self.saved = None
+        pb.setCollisionFilterGroupMask(self.idx, -1, 1, 1)
+        pb.changeDynamics(self.idx, -1,
+                          mass=0.0 if self.body.sim_static
+                          else float(self.body.mass))
+        pb.resetBasePositionAndOrientation(self.idx, pos, quat)
+        pb.resetBaseVelocity(self.idx, list(vel), list(ang))

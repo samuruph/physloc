@@ -377,6 +377,13 @@ class Solidity(Injector):
         # visible reason. Absent such a body, fall back to the usual fraction.
         t0 = self._group_trigger(spec, traj, bodies)
         if t0 is None:
+            # BEFORE the medium arrives, not after it has settled. Firing a
+            # third of the way in let the grains land, bounce and come to rest,
+            # and only then took the floor away -- so the clip showed a lawful
+            # pour followed by a pile sinking, when what it claims is that the
+            # floor was never solid. You reported exactly that ordering.
+            t0 = _geom.before_medium_lands(spec, traj, bodies)
+        if t0 is None:
             t0 = _geom.default_event_frame(spec, T)
         if t0 is None:
             return None
@@ -568,11 +575,22 @@ class Solidity(Injector):
         plan.consequence_windows = [(t0, t_end)]
 
     def simulates(self, plan) -> bool:
-        return (plan.params.get("mode") != "sink_group"
-                and len(plan.params.get("pair", ())) == 2)
+        # `sink_group` stages too now. It is not one disabled pair but many --
+        # every grain against every surface beneath it -- and expressing it as a
+        # scene edit meant the whole pour was re-integrated by hand while the
+        # two-body case got real physics. Same claim, two mechanisms, and the
+        # granular one was the one that could not show a grain being deflected
+        # by its neighbours on the way down.
+        if plan.params.get("mode") == "sink_group":
+            return True
+        return len(plan.params.get("pair", ())) == 2
 
     def _stageable(self, plan) -> bool:
         return self.simulates(plan)
+
+    #: The group mode never restores the surfaces: a floor that stops being
+    #: solid for a pour has stopped being solid, and bringing it back mid-fall
+    #: would eject forty grains at once.
 
     def stage(self, spec, simulator, objs, plan):
         """Turn the collision pair off and let the body go where it goes.
@@ -597,6 +615,8 @@ class Solidity(Injector):
         # were the same clip three times.
         t_end = plan.t_event + int(plan.params.get("frames_disabled", 4))
         when_clear = bool(plan.params.get("restore_when_clear"))
+        if plan.params.get("mode") == "sink_group":
+            return ()          # the floor stays gone -- see `_stageable`
         state = {"restored": False}
 
         def clear() -> bool:
@@ -624,6 +644,22 @@ class Solidity(Injector):
     def _filter_pairs(self, spec, simulator, objs, plan):
         """Every (actor, surface) pair this violation suppresses."""
         from ..render import stepper
+
+        if plan.params.get("mode") == "sink_group":
+            # Every grain against every surface that could hold it up. The
+            # grains stay solid to EACH OTHER, which is the point: the pour
+            # still behaves like a pour on the way down, it simply has no floor.
+            surfaces = [int(b.segmentation_id) for b in spec.bodies if b.static]
+            out = []
+            for bid in plan.causal_body_ids:
+                ia = stepper.pybullet_index(simulator, objs, spec, int(bid))
+                if ia is None:
+                    continue
+                for sid in surfaces:
+                    ib = stepper.pybullet_index(simulator, objs, spec, sid)
+                    if ib is not None:
+                        out.append((ia, ib))
+            return out
 
         pair = plan.params.get("pair")
         if not pair or len(pair) != 2:
@@ -900,6 +936,15 @@ class SuperElastic(Injector):
             return None
 
         targets = self._targets(spec, actor, partner_id)
+        # A WHOLE MEDIUM bounces when it ARRIVES. `first_impact` reports the
+        # primary grain's own first contact, which on `pour` is frame 7 -- by
+        # then most of the pour has already landed and stopped, and multiplying
+        # the restitution of bodies at rest multiplies nothing. Measured, the
+        # clip carried a declared energy gain of 35 and showed almost no bounce.
+        if len(targets) > 2:
+            arrival = _geom.before_medium_lands(spec, traj, targets)
+            if arrival is not None and 1 <= arrival < traj.num_frames - 2:
+                t0 = arrival
         # KEEP THE BOUNCE IN SHOT. A gain that reads well on a ball rebounding
         # across the frame throws a dropped one clean out of the top of it, and
         # a body that leaves frame has an empty mask for the rest of the clip --
@@ -1172,6 +1217,16 @@ class _CollisionEdit(Injector):
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         dv = float(np.linalg.norm(traj.lin_vel[t0, ib] - traj.lin_vel[t0 - 1, ib]))
         t1 = min(traj.num_frames - 1, t0 + 1)
+        # On a MEDIUM, every other grain is the heavy one -- see
+        # `_staged_masses`. One wrong pair in forty is invisible; alternating
+        # makes every collision in the pile a collision between bodies whose
+        # apparent masses do not match their behaviour.
+        group = self._group(spec)
+        if len(group) > 2:
+            heavy = [int(b.segmentation_id) for b in group[1::2]]
+            light = [int(b.segmentation_id) for b in group[0::2]]
+        else:
+            heavy, light = [int(other_id)], [int(actor_id)]
         # The exchange is over in a frame or two, and so is the *evidence*: what
         # follows is two bodies travelling lawfully on wrong paths. The causal
         # mask still runs to the end of the clip, because it is gated on the
@@ -1181,7 +1236,8 @@ class _CollisionEdit(Injector):
             family=self.family, kind="instant", t_event=t0, windows=[(t0, t1)],
             intervention_windows=[(t0, t1)],
             consequence_windows=[(t0, t1)],
-            causal_body_ids=self._causal_order(actor_id, other_id),
+            causal_body_ids=(heavy if len(heavy) > 1
+                             else self._causal_order(actor_id, other_id)),
             params=dict(self._params(ratio), collision_frame=int(t0),
                         actor=actor_id, other=other_id),
             # THE KNOB, not a derived effect. The magnitude used to be the
@@ -1200,6 +1256,7 @@ class _CollisionEdit(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "ratio": ratio, "actor_id": actor_id, "other_id": other_id,
                    "normal": [float(x) for x in normal],
+                   "heavy_ids": heavy, "light_ids": light,
                    "r_strong": float(r_strong), "lawful_dv": dv})
 
     #: Both families are a mass statement, and PyBullet takes mass directly --
@@ -1372,15 +1429,23 @@ class Newton2Mass(_CollisionEdit):
 
 
     def _staged_masses(self, spec, plan) -> Dict[int, float]:
-        """One body weighs `ratio` times what it looks like it weighs.
+        """The bodies that weigh `ratio` times what they look like they weigh.
 
         Momentum is still conserved -- PyBullet conserves it -- so the violation
-        is exactly what the family claims: two bodies that look identical
-        respond as though they are not.
+        is exactly what the family claims: bodies that look identical respond as
+        though they are not.
+
+        On a medium this is HALF the grains, not all of them, and the half is
+        the whole point. Scaling every grain equally leaves every ratio between
+        them unchanged, so the collisions come out exactly as they should and
+        there is no violation at all -- the clip would differ from its twin only
+        in how the pile settles against the floor. Scaling alternate grains
+        makes every meeting of a heavy and a light one wrong.
         """
-        other = int(plan.notes["other_id"])
         ratio = float(plan.notes["ratio"])
-        return {other: self._mass_of(spec, other) * max(ratio, 1e-6)}
+        heavy = plan.notes.get("heavy_ids") or [int(plan.notes["other_id"])]
+        return {int(i): self._mass_of(spec, int(i)) * max(ratio, 1e-6)
+                for i in heavy}
 
 
 register(Solidity())

@@ -261,7 +261,15 @@ SCENARIOS: Dict[str, Scenario] = {
     "toss": Scenario(
         "body thrown on a ballistic arc",
         "pure free flight, no contact", False, "rigid", None,
-        provides=('actor', 'flight', 'spin', 'understudy')),
+        # NOT `spin`, which it was declaring and does not deliver: the actor is
+        # a sphere launched with zero angular velocity, and a featureless
+        # sphere's rotation is invisible even when it has some. The audit found
+        # the consequence -- `toss x angular_momentum` shipped with 0 observable
+        # frames and segmentation byte-identical between the twins, a label with
+        # no picture. `tumble` is the scenario that provides visible rotation,
+        # and its blurb says so; this one is the pure ballistic arc, which is
+        # what distinguishes the two.
+        provides=('actor', 'flight', 'understudy')),
     "tumble": Scenario(
         "cube tumbling through the air, thrown with heavy spin",
         "free flight with visible rotation", False, "rigid", None,
@@ -363,6 +371,14 @@ RETIRED: Dict[str, str] = {
 }
 
 NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
+    ("global_gravity", "pendulum_swing"):
+        "the pendulum has exactly one body gravity acts on -- the rod is "
+        "kinematic geometry hung between the pivot and the bob -- and this "
+        "family's whole content is that everything falls wrong TOGETHER. With "
+        "one falling body, scaling gravity for the scene and scaling it for "
+        "that body produce identical pixels, so the clip would be an "
+        "`antigravity` clip with a different label. `antigravity` is built here "
+        "and says the same thing honestly",
     ("newton2_mass", "pyramid_impact"):
         "the spheres are identical to each other but never strike one another "
         "-- they touch from frame 0 and settle, so there is no reaction to "
@@ -454,7 +470,20 @@ EXCLUSIVE_LAWS: Dict[str, Tuple[str, ...]] = {
     # `dissolve` is NOT here. It fades optically -- a Transparent BSDF mixed
     # into the shader -- so it changes neither shape nor position and moves no
     # law but its own.
-    "shape_continuity":    ("immutability",),
+    # `fusion` is here as well, and it is the one entry that is a TRADE rather
+    # than a fact. A merge that conserves mass must make the survivor bigger --
+    # two bodies of volume V becoming one of volume 2V is what "they became one
+    # thing" means, and without it the clip shows one object quietly deleted.
+    # So the family unavoidably moves the shape law too.
+    #
+    # What that costs: a `fusion` clip also reads as a shape violation, so the
+    # shape law alone no longer attributes to `immutability`. What it does not
+    # cost: the two stay separable, because `fusion` moves `object_count` and
+    # `immutability` does not. The alternative -- a survivor that swallows
+    # another body and stays exactly the same size -- keeps the law clean by
+    # depicting something that cannot happen, which is the worse trade for a
+    # dataset whose whole claim is that its physics is real.
+    "shape_continuity":    ("immutability", "fusion"),
     "shape_anisotropy":    ("deformation", "shadow_shape"),
     "colour_continuity":   ("colour_shift",),
     "mass_dissolution":    ("dissolve",),

@@ -22,6 +22,7 @@ from physviol.residuals import laws
 from physviol.scenarios import TIERS
 from physviol.taxonomy import (EXCLUSIVE_LAWS, ORTHOGONALITY_TOLERANCE,
                                build_cells)
+from conftest import REACHABLE_SEEDS, reachable_cell
 
 CELLS = [(s, f) for s, f in build_cells() if s in set(scenarios.available())]
 SEED = 4242
@@ -43,13 +44,11 @@ def _residual_ctx(spec, plan, body_id):
 @pytest.mark.parametrize("scenario,family", CELLS,
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
 def test_cell_moves_only_its_own_law(scenario, family):
-    sc = scenarios.get(scenario)
-    spec = sc.sample(SEED, TIERS["debug"], "L0")
-    traj = mockroll.roll(spec, sc)
-    inj = injectors.get(family)
-    inj.window_frames = None
-    plan = inj.plan(spec, traj, np.random.RandomState(SEED + 7919), "strong")
-    assert plan is not None, "%s x %s has no plan" % (scenario, family)
+    found = reachable_cell(scenario, family, SEED)
+    assert found is not None, (
+        "%s x %s has no plan on any of %d seeds"
+        % (scenario, family, REACHABLE_SEEDS))
+    spec, traj, inj, plan = found
     invalid = inj.apply(spec, traj, plan)
 
     body_id = int(plan.causal_body_ids[0])

@@ -10,24 +10,30 @@ after it.
 import numpy as np
 import pytest
 
-import mockroll
 from physviol import injectors, scenarios
-from physviol.scenarios import TIERS
 from physviol.sim.trajectory import prefix_identical
 from physviol.taxonomy import SEVERITY_BINS, build_cells
+from conftest import REACHABLE_SEEDS, reachable_cell, reachable_ladder
 
 CELLS = [(s, f) for s, f in build_cells() if s in set(scenarios.available())]
 SEED = 4242
 
 
 def _prepare(scenario_name, family, severity="strong"):
-    sc = scenarios.get(scenario_name)
-    spec = sc.sample(SEED, TIERS["debug"], "L0")
-    traj = mockroll.roll(spec, sc)
-    inj = injectors.get(family)
-    inj.window_frames = None
-    plan = inj.plan(spec, traj, np.random.RandomState(SEED + 7919), severity)
-    return spec, traj, inj, plan
+    """A built cell, or a hard failure naming the seeds that declined.
+
+    Not every cell exists on every seed: several scenarios draw their actor's
+    shape per seed, and a family may decline the draw -- `angular_momentum`
+    declines a sphere, because an untextured sphere's rotation is invisible.
+    That is a property of the sample, not a broken cell, so the helper walks
+    seeds. Declining ALL of them is the real failure, and is what the assert
+    reports.
+    """
+    found = reachable_cell(scenario_name, family, SEED, severity)
+    assert found is not None, (
+        "%s x %s produced no plan on any of %d seeds"
+        % (scenario_name, family, REACHABLE_SEEDS))
+    return found
 
 
 def test_every_family_has_an_injector():
@@ -45,7 +51,6 @@ def test_all_build_scenarios_exist():
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
 def test_cell_plans_and_applies(scenario, family):
     spec, traj, inj, plan = _prepare(scenario, family)
-    assert plan is not None, "%s x %s produced no plan" % (scenario, family)
 
     T = traj.num_frames
     # 0 is legal, and exactly one family uses it: `shadow_inverted` is wrong
@@ -82,11 +87,13 @@ def test_cell_plans_and_applies(scenario, family):
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
 def test_cell_magnitude_is_ordered(scenario, family):
     """weak <= medium <= strong, for every cell, on the family's own knob."""
-    mags = []
-    for sev in SEVERITY_BINS:
-        _, _, _, plan = _prepare(scenario, family, sev)
-        assert plan is not None, "%s x %s has no %s plan" % (scenario, family, sev)
-        mags.append(abs(plan.magnitude))
+    # ONE seed for all three bins -- see `reachable_ladder`. Comparing a weak
+    # plan from one scene against a strong one from another proves nothing.
+    plans = reachable_ladder(scenario, family, SEED, SEVERITY_BINS)
+    assert plans is not None, (
+        "%s x %s has no full severity ladder on any of %d seeds"
+        % (scenario, family, REACHABLE_SEEDS))
+    mags = [abs(p.magnitude) for p in plans]
     assert mags == sorted(mags), "%s x %s magnitudes not ordered: %s" % (
         scenario, family, mags)
 
@@ -115,7 +122,6 @@ def test_only_declared_culprits_change_appearance(scenario, family):
     happen can change what an uninvolved body looks like.
     """
     spec, traj, inj, plan = _prepare(scenario, family)
-    assert plan is not None
     invalid = inj.apply(spec, traj, plan)
     declared = {int(i) for i in plan.causal_body_ids}
 
@@ -159,7 +165,6 @@ def test_no_body_moves_without_being_touched(scenario, family):
     from physviol.injectors.base import Injector
 
     spec, traj, inj, plan = _prepare(scenario, family)
-    assert plan is not None
     invalid = inj.apply(spec, traj, plan)
 
     # An appearance-only family cannot have made anything move without cause,

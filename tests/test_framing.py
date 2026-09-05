@@ -63,7 +63,7 @@ def test_culprits_stay_in_frame(scenario, tier_name):
                 "band" % (scenario, tier_name, seed, body.name, 100 * frac))
 
 
-@pytest.mark.parametrize("scenario", ["toss", "tumble"])
+@pytest.mark.parametrize("scenario", ["toss"])
 def test_free_flight_is_scale_invariant(scenario):
     """The same seed frames identically at every tier.
 

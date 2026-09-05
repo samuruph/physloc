@@ -6,4 +6,4 @@ from . import (collision, drop, barrier_pass,  # noqa: F401
                pour,
                occluder_pass, pendulum_swing, toss, pyramid_impact,
                ramp_slide, resting_table, rolling_ramp, shadow_track,
-               tumble, stack_topple)
+               stack_topple)

@@ -56,8 +56,6 @@ SCENARIO_PROMPTS: Dict[str, str] = {
     "ramp_slide": "{article} {color} block sliding down a ramp under friction",
     "toss": "{article} {color} {shape} thrown through the air on a free "
             "ballistic arc, with no contact",
-    "tumble": "{article} {color} cube thrown with heavy spin, tumbling "
-              "through the air",
     "occluder_pass": "{article} {color} {shape} rolling behind a screen and "
                       "re-emerging on the other side",
     "barrier_pass": "{article} {color} {shape} rolling into a solid wall "
@@ -87,7 +85,6 @@ SUBJECTS: Dict[str, str] = {
     "collision": "ball_a",
     "ramp_slide": "block",
     "toss": "ball",
-    "tumble": "cube",
     "occluder_pass": "ball",
     "barrier_pass": "ball",
     "pyramid_impact": "cube",

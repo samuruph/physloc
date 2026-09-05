@@ -44,9 +44,22 @@ class Toss(Scenario):
 
         hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
         kind = "sphere" if rng.rand() < 0.6 else "cube"
+        # THROWN WITH SPIN, which is what `tumble` used to be for. Retiring that
+        # scenario left this one as the only free-flight throw, and a body
+        # thrown without any rotation at all is the less interesting half of
+        # what a throw looks like.
+        #
+        # A SPHERE gets none, and that is not an oversight: with the v0 asset
+        # set the primitives are untextured, so a spinning ball is
+        # pixel-identical to a still one. Giving it spin would put rotation in
+        # the scene that no viewer and no residual can see.
+        spin = ((float(rng.uniform(-1.5, 1.5)), float(rng.uniform(3.5, 5.5)),
+                 float(rng.uniform(-1.5, 1.5))) if kind == "cube"
+                else (0.0, 0.0, 0.0))
         ball = BodySpec(
             name="ball", kind=kind, position=(x0, 0.0, f.launch_z),
-            scale=(radius,) * 3, velocity=(vx, 0.0, f.vz), mass=1.0,
+            scale=(radius,) * 3, velocity=(vx, 0.0, f.vz),
+            angular_velocity=spin, mass=1.0,
             friction=0.4, restitution=0.6, color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
 

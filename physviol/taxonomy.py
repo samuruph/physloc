@@ -261,16 +261,18 @@ SCENARIOS: Dict[str, Scenario] = {
     "toss": Scenario(
         "body thrown on a ballistic arc",
         "pure free flight, no contact", False, "rigid", None,
-        # NOT `spin`, which it was declaring and does not deliver: the actor is
-        # a sphere launched with zero angular velocity, and a featureless
-        # sphere's rotation is invisible even when it has some. The audit found
-        # the consequence -- `toss x angular_momentum` shipped with 0 observable
-        # frames and segmentation byte-identical between the twins, a label with
-        # no picture. `tumble` is the scenario that provides visible rotation,
-        # and its blurb says so; this one is the pure ballistic arc, which is
-        # what distinguishes the two.
-        provides=('actor', 'flight', 'understudy')),
+        # `spin` is promised conditionally, and the condition is the shape.
+        # A featureless sphere's rotation is invisible even when it has some --
+        # an audit found `toss x angular_momentum` shipping 0 observable frames
+        # with segmentation byte-identical between the twins, a label with no
+        # picture. This scenario randomises shape and throws a cube spinning,
+        # so the promise holds on the cube draws; `angular_momentum` declines
+        # the sphere draws for itself (see its `plan`). Declaring it here is
+        # what lets the family be offered at all.
+        provides=('actor', 'flight', 'spin', 'understudy')),
     "tumble": Scenario(
+        # Retired into `UNBUILT`, not deleted -- see the note there. Kept
+        # declared so a clip generated under the old taxonomy still resolves.
         "cube tumbling through the air, thrown with heavy spin",
         "free flight with visible rotation", False, "rigid", None,
         provides=('actor', 'flight', 'spin', 'understudy')),
@@ -406,7 +408,13 @@ NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
 }
 
 #: Scenarios declared in the taxonomy but not implemented yet.
-UNBUILT: Tuple[str, ...] = ("clutter_toss",)
+#: `tumble` is retired rather than deleted. It was a near-duplicate of `toss`
+#: -- identical `provides`, medium and family list, launch velocities within 2%
+#: -- differing only in that it forced a cube and threw it spinning. `toss` now
+#: throws with spin too and randomises shape, so it covers both draws and the
+#: pair was redundant. The declaration stays so that a clip generated before
+#: the retirement still resolves its scenario; the implementation is gone.
+UNBUILT: Tuple[str, ...] = ("clutter_toss", "tumble")
 
 
 def _derive_compatibility() -> Dict[str, Dict[str, str]]:

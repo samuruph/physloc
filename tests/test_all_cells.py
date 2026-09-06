@@ -7,6 +7,8 @@ guarantees hold everywhere: a plan exists, its windows are legal, the invalid
 trajectory is bit-identical before `t_event`, and something actually changed
 after it.
 """
+import os
+
 import numpy as np
 import pytest
 
@@ -17,6 +19,10 @@ from conftest import REACHABLE_SEEDS, reachable_cell, reachable_ladder
 
 CELLS = [(s, f) for s, f in build_cells() if s in set(scenarios.available())]
 SEED = 4242
+
+#: Seeds tried per cell at release geometry. Small on purpose -- a mock
+#: rollout at 89 frames is what costs, and a healthy cell builds on the first.
+V0_SEEDS = 3
 
 
 def _prepare(scenario_name, family, severity="strong"):
@@ -187,3 +193,112 @@ def test_no_body_moves_without_being_touched(scenario, family):
         assert not bad.size, (
             "%s accelerates at frame %d with nothing touching it"
             % (body.name, int(bad[0])))
+
+
+#: Checks that cost minutes and only matter before a release run. Opt in with
+#: `PHYSVIOL_RELEASE_CHECKS=1 pytest tests/`. A guard worth 19 minutes before
+#: committing a hundred hours of render is not worth 19 minutes per commit.
+RELEASE_CHECKS = os.environ.get("PHYSVIOL_RELEASE_CHECKS") == "1"
+
+
+@pytest.mark.skipif(not RELEASE_CHECKS,
+                    reason="release-geometry sweep; set PHYSVIOL_RELEASE_CHECKS=1")
+def test_every_cell_is_reachable_at_release_geometry():
+    """Every cell must build at v0's geometry, not only at the debug tier.
+
+    The rest of this file runs at `debug` because that is what makes a full
+    sweep take a second instead of an hour. The gap that leaves is real, and it
+    shipped a dead cell: `barrier_pass` solved its approach with
+    constant-velocity arithmetic on a ball friction was slowing, so the error
+    grew with the clip. At 25 frames the ball reached the wall at 0.93 m/s; at
+    89 it arrived at 0.26 -- below the speed `_geom.first_impact` will call an
+    impact -- and `superelastic x barrier_pass` planned nothing on any seed,
+    while every debug-tier test passed.
+
+    A clip length is not a free parameter that only changes the pace. Anything
+    integrated over the clip -- friction, drag, a settling pile -- changes
+    regime with it, and this is the test that notices.
+
+    One test rather than one per cell, and the rollout is shared by every
+    family of a scenario: at 89 frames a mock rollout is the expensive part,
+    and re-rolling it 166 times costs minutes.
+    """
+    from physviol.scenarios import TIERS
+    import mockroll
+
+    seeds = range(SEED, SEED + V0_SEEDS)
+    dead = []
+    for scenario in sorted({s for s, _ in CELLS}):
+        sc = scenarios.get(scenario)
+        rolls = [(seed, sc.sample(seed, TIERS["v0"], "L0")) for seed in seeds]
+        rolls = [(seed, spec, mockroll.roll(spec, sc)) for seed, spec in rolls]
+        for fam in sorted({f for s, f in CELLS if s == scenario}):
+            inj = injectors.get(fam)
+            inj.window_frames = None
+            ok = any(inj.plan(spec, traj, np.random.RandomState(seed + 7919),
+                              "strong") is not None
+                     for seed, spec, traj in rolls)
+            if not ok:
+                dead.append("%s x %s" % (scenario, fam))
+    assert not dead, (
+        "these cells build at the debug tier but on none of %d seeds at tier "
+        "v0 -- the matrix claims cells the release cannot contain:\n  %s"
+        % (V0_SEEDS, "\n  ".join(dead)))
+
+
+#: Clip lengths a cell must survive. All 4k+1 (the VAE latent stride): the
+#: shortest the tiers allow, the debug tier's own 25, and v0's 89. Three rather
+#: than a fine sweep because the cost is a mock rollout plus a fit-to-frame
+#: ladder per cell per length, and 166 cells at five lengths ran for over half
+#: an hour. The ends and the middle are what catch a length-dependent bug.
+FRAME_SWEEP = (13, 25, 89)
+
+
+@pytest.mark.skipif(not RELEASE_CHECKS,
+                    reason="clip-length sweep; set PHYSVIOL_RELEASE_CHECKS=1")
+def test_every_cell_survives_a_change_of_clip_length():
+    """A cell must plan at any clip length, not just the two we ship.
+
+    `num_frames` is a config value, and every timing decision downstream of it
+    has to be a FRACTION of the clip rather than a frame count -- otherwise a
+    violation that fires a third of the way into a 25-frame clip fires in the
+    opening moments of an 89-frame one, or past the end of a 13-frame one.
+
+    This is not hypothetical. Two bugs found at v0 geometry were exactly this
+    shape: `barrier_pass` sized its approach with arithmetic that ignored
+    friction, so the ball arrived too slowly to count as an impact once the
+    clip got long; and `unoccluded_event_frame` computed the event fraction
+    itself instead of going through `default_event_frame`, so it fired on the
+    same frame in every clip. Both passed every debug-tier test.
+
+    Asserts only what must be true at every length: the cell still builds, the
+    event leaves a lawful prefix, and no window runs off either end.
+    """
+    from physviol.scenarios import TIERS
+    import mockroll
+
+    bad = []
+    for scenario in sorted({s for s, _ in CELLS}):
+        sc = scenarios.get(scenario)
+        for frames in FRAME_SWEEP:
+            tier = TIERS["v0"].override(num_frames=frames)
+            spec = sc.sample(SEED, tier, "L0")
+            traj = mockroll.roll(spec, sc)
+            T = traj.num_frames
+            for fam in sorted({f for s, f in CELLS if s == scenario}):
+                inj = injectors.get(fam)
+                inj.window_frames = None
+                plan = inj.plan(spec, traj, np.random.RandomState(SEED + 7919),
+                                "strong")
+                if plan is None:
+                    continue          # a declined sample is not a length bug
+                where = "%s x %s @ %df" % (scenario, fam, frames)
+                if not (0 <= plan.t_event < T):
+                    bad.append("%s: t_event %d outside [0,%d)"
+                               % (where, plan.t_event, T))
+                for s_, e_ in plan.windows:
+                    if not (0 <= s_ <= e_ < T):
+                        bad.append("%s: window (%d,%d) outside [0,%d)"
+                                   % (where, s_, e_, T))
+                        break
+    assert not bad, "clip length breaks these cells:\n  " + "\n  ".join(bad)

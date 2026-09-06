@@ -33,6 +33,15 @@ class BarrierPass(Scenario):
     name = "barrier_pass"
     SEG_FLOOR, SEG_BALL, SEG_WALL, SEG_SPLIT = 1, 2, 3, 4
 
+    #: The ball's own friction, named because the approach is solved through it.
+    BALL_FRICTION = 0.05
+
+    #: How fast the ball must still be going when it reaches the wall. Above
+    #: `_geom.first_impact`'s 0.3 m/s floor with margin to spare, and fast
+    #: enough that the lawful rebound is unmistakable -- which is the whole
+    #: premise of the scenario.
+    MIN_ARRIVAL_SPEED = 0.75
+
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
@@ -46,15 +55,35 @@ class BarrierPass(Scenario):
         wall_h = float(rng.uniform(0.62, 0.85))
         flight = tier.num_frames / float(tier.fps)
 
-        # Solve the approach so the impact lands just under halfway through the
-        # clip: early enough that the rebound (or the pass-through) has room to
-        # play out, late enough that the lawful approach is established first.
-        # Derived from the frame -- see `collision` for why a fixed speed only
-        # ever frames one clip length. The ball also rebounds, so its budget
-        # covers the approach *and* the run back out.
-        speed = float(cam.traverse_speed(CAMERA, LOOK_AT, flight,
-                                         fraction=float(rng.uniform(0.46, 0.56))))
-        gap = speed * 0.45 * flight
+        # Solve the approach for the ARRIVAL, not the launch.
+        #
+        # It used to pick a launch speed from the frame width and set the gap
+        # to `speed * 0.45 * flight` -- constant-velocity arithmetic on a ball
+        # that is being slowed by friction the whole way. The error grows with
+        # the clip: at the debug tier's 25 frames the ball reached the wall at
+        # 0.93 m/s, at tier v0's 89 it arrived at 0.26 and hit on frame 61 of
+        # 89 rather than "just under halfway". Below 0.3 m/s `_geom.first_impact`
+        # stops calling it an impact at all, so `superelastic x barrier_pass`
+        # planned nothing on any seed at v0 -- a cell the matrix claims and the
+        # release never contained.
+        #
+        # So: choose WHEN it should hit and HOW FAST it should still be going,
+        # then integrate backwards through the deceleration to get the launch.
+        # Both are per-seed draws, which is also what stops every clip of this
+        # scenario impacting on the same frame.
+        arrive_frac = float(rng.uniform(0.38, 0.58))
+        t_travel = arrive_frac * flight
+        # Rolling friction bleeds the approach; a = mu*g is the standard
+        # first-order model and is what `_integrate_profile` already assumes.
+        decel = self.BALL_FRICTION * cam.GRAVITY
+        v_arrive = float(rng.uniform(self.MIN_ARRIVAL_SPEED,
+                                     self.MIN_ARRIVAL_SPEED * 1.6))
+        speed = v_arrive + decel * t_travel
+        gap = speed * t_travel - 0.5 * decel * t_travel ** 2
+        # Keep the launch inside the shot: the ball has to be visible rolling
+        # in, or the approach the rebound is judged against is never seen.
+        reach = cam.frame_extent(CAMERA, LOOK_AT) * 0.92
+        gap = min(gap, max(0.35, wall_x - thickness - radius + reach))
         x0 = wall_x - thickness - radius - gap
 
         # Rolling without slipping only reads correctly on a sphere -- see
@@ -69,7 +98,7 @@ class BarrierPass(Scenario):
             # that hits a wall and stops dead makes a pass-through look like
             # the more sensible of the two.
             angular_velocity=spin,
-            mass=1.0, friction=0.05, restitution=0.78,
+            mass=1.0, friction=BarrierPass.BALL_FRICTION, restitution=0.78,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
         wall = BodySpec(

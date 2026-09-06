@@ -23,6 +23,16 @@ class Collision(Scenario):
     name = "collision"
     SEG_FLOOR, SEG_A, SEG_B, SEG_SPLIT = 1, 2, 4, 6
 
+    #: Both balls' friction, named because the approach is solved through it.
+    #: Low enough that they roll rather than scrub.
+    BALL_FRICTION = 0.05
+
+    #: How fast the striker must still be going when it reaches the target.
+    #: Comfortably above `_geom.first_impact`'s 0.3 m/s floor, and fast enough
+    #: that the struck ball's response is legible -- which is what both Newton
+    #: families are built to test.
+    MIN_MEET_SPEED = 0.85
+
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
@@ -44,12 +54,6 @@ class Collision(Scenario):
         # confound as differing in size, just spelled a different way.
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         flight = tier.num_frames / float(tier.fps)
-        # Derived from the frame, not picked: the balls are all but frictionless
-        # (0.05, so they roll rather than scrub) and therefore travel `v*T`
-        # whatever we choose. A fixed 2.2-2.8 m/s framed the 13-frame clips it
-        # was tuned against and rolled the struck ball out of shot at 25 and 49.
-        speed = float(cam.traverse_speed(CAMERA, LOOK_AT, flight,
-                                         fraction=float(rng.uniform(0.60, 0.72))))
 
         # A striker into a body at REST, not two balls closing head-on. Both
         # Newton families hinge on how the struck ball responds, and a target
@@ -60,7 +64,26 @@ class Collision(Scenario):
         # `newton3` is simply "it never moved" -- no overlap, nothing to
         # misread.
         target_x = float(rng.uniform(0.15, 0.45))
-        gap = speed * 0.45 * flight
+        # Solve the approach for the MEETING, not the launch -- the same fix
+        # `barrier_pass` needed, for the same reason. `gap = speed * 0.45 *
+        # flight` is constant-velocity arithmetic on a ball that friction is
+        # slowing, so the striker arrived later and slower the longer the clip
+        # got, and every family that fires on the impact -- friction, fusion,
+        # newton1, newton2, solidity, superelastic -- fired on the same frame
+        # in every clip, because the arrival was pinned to whatever that
+        # arithmetic produced.
+        #
+        # Choosing WHEN they should meet and HOW FAST the striker should still
+        # be going fixes the drift and varies the moment, both at once.
+        meet_frac = float(rng.uniform(0.34, 0.56))
+        t_travel = meet_frac * flight
+        decel = self.BALL_FRICTION * cam.GRAVITY
+        v_meet = float(rng.uniform(self.MIN_MEET_SPEED, self.MIN_MEET_SPEED * 1.7))
+        speed = v_meet + decel * t_travel
+        gap = speed * t_travel - 0.5 * decel * t_travel ** 2
+        # The struck ball has to stay in shot after it is hit, so the pair
+        # cannot start further out than the frame allows.
+        gap = min(gap, cam.frame_extent(CAMERA, LOOK_AT) * 1.15)
         striker_x = target_x - r_a - r_b - gap
 
         # Rolling without slipping only reads correctly on a sphere -- a cube
@@ -73,12 +96,12 @@ class Collision(Scenario):
             position=(striker_x, 0.0, r_a), scale=(r_a,) * 3,
             velocity=(speed, 0.0, 0.0),
             angular_velocity=striker_spin,
-            mass=1.0, friction=0.05, restitution=0.75,
+            mass=1.0, friction=Collision.BALL_FRICTION, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_A, role="actor")
         target = BodySpec(
             name="ball_b", kind=kind,
             position=(target_x, 0.0, r_b), scale=(r_b,) * 3,
-            mass=1.0, friction=0.05, restitution=0.75,
+            mass=1.0, friction=Collision.BALL_FRICTION, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_B, role="actor")
 
         return SceneSpec(

@@ -104,26 +104,27 @@ def validate_clip(cdir: str) -> List[str]:
 
     T = int(m["num_frames"])
 
-    # 10b. the two new window families are consistent with the union they
-    # decompose. `intervention` is when we are actively changing something and
-    # `consequence` is when the scene differs as a result; both must sit inside
-    # `violation_windows`, which is defined as their union.
+    # 10b. the three window families are consistent with each other.
+    #
+    # `violation_windows` is where the EVIDENCE is -- the frames the mask and
+    # the severity map actually cover. `intervention` is when we are actively
+    # changing something; `consequence` is when the scene differs as a result,
+    # and it legitimately runs on past the evidence: a teleported ball is
+    # somewhere else for the rest of the clip, but only the jump is visible as
+    # a violation. So consequence is NOT required to sit inside the violation
+    # window -- requiring that was what forced `violation_windows` to be the
+    # union, and the union is what made the mask check below unsatisfiable for
+    # every `event` family.
+    #
+    # The intervention must still be inside it: we cannot be changing something
+    # on a frame we are not calling violating.
     if v is not None:
-        for key in ("intervention_windows", "consequence_windows"):
-            wins = v.get(key)
-            if not wins:
-                continue
+        wins_iv = v.get("intervention_windows")
+        if wins_iv:
             union = win_rasterise([tuple(w) for w in v["violation_windows"]], T)
-            part = win_rasterise([tuple(w) for w in wins], T)
+            part = win_rasterise([tuple(w) for w in wins_iv], T)
             if bool((part & ~union).any()):
-                bad("%s falls outside violation_windows" % key)
-        if v.get("intervention_windows") and v.get("consequence_windows"):
-            union = win_rasterise([tuple(w) for w in v["violation_windows"]], T)
-            both = (win_rasterise([tuple(w) for w in v["intervention_windows"]], T)
-                    | win_rasterise([tuple(w) for w in v["consequence_windows"]], T))
-            if not np.array_equal(both, union):
-                bad("intervention | consequence does not reconstruct "
-                    "violation_windows")
+                bad("intervention_windows falls outside violation_windows")
 
     # 10c. the invalid-side mask is a subset of the union it was carved from.
     ipath = os.path.join(cdir, "mask_invalid.npz")

@@ -50,14 +50,43 @@ class InterventionPlan:
     consequence_windows: Optional[List[Tuple[int, int]]] = None
 
     def __post_init__(self) -> None:
-        # `windows` stays the union of the two and remains the field every
-        # existing consumer reads. A family that says nothing declares an
-        # intervention that lasts the whole window, which is what every family
-        # meant before the split existed.
+        # A family that says nothing declares an intervention that lasts the
+        # whole window, which is what every family meant before the split
+        # existed.
         if self.intervention_windows is None:
             self.intervention_windows = list(self.windows)
         if self.consequence_windows is None:
             self.consequence_windows = list(self.windows)
+        self.windows = self._detectable_windows()
+
+    def _detectable_windows(self) -> List[Tuple[int, int]]:
+        """`windows` is WHERE THE EVIDENCE IS, not the union of the two.
+
+        It used to be the union, and that quietly contradicted the annotation
+        shipped beside it. `annotate.pipeline` paints the mask and the severity
+        on the *scored* window, which for a family whose evidence is the change
+        itself (`detectable == "event"`) is the intervention: a cube that has
+        finished turning green is an ordinary green cube, and no later frame
+        contains anything to see. So `drop x colour_shift` declared
+        `violation_windows [[7, 24]]` and shipped a mask with pixels on 7-12,
+        and `validate` was right to call it -- for all seventeen `event`
+        families, on every clip.
+
+        Reporting the union asks a model to flag frames that provably contain
+        no evidence, which is worse than the narrower claim being occasionally
+        conservative. `consequence_windows` still runs to the end of the clip
+        and still drives the blue `causal_mask` through
+        `(consequence | diverged) & observable`, so a violation whose effects
+        outlive it keeps saying so -- just not in the channel that means "look
+        here".
+        """
+        from ..taxonomy import FAMILIES
+        fam = FAMILIES.get(self.family)
+        if fam is None:                       # a family the taxonomy has not
+            return list(self.windows)         # heard of: leave it alone
+        wins = (self.intervention_windows if fam.detectable == "event"
+                else self.consequence_windows)
+        return list(wins) if wins else list(self.windows)
 
     @property
     def t_end(self) -> int:

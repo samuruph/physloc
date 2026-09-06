@@ -164,15 +164,34 @@ with the second:
 | `consequence_windows` | when the scene **differs from lawful as a result**. Runs on afterwards, and for `permanence` never ends |
 | `observable_windows` | when a viewer **could tell**. Gated by occlusion; the gap from `t_event` is the observability lag |
 
-`violation_windows` is defined as the union of the first two and stays the field every
-existing consumer reads. `timelines.npz` carries `intervening[T]` and `consequence[T]`
-alongside `active[T]`, and `meta.json` adds `t_intervention_end_frame` and
-`t_consequence_end_frame`.
+`violation_windows` is **where the evidence is** — the frames `violation_mask` and
+`severity_map` actually cover. It is *not* the union of the first two, which is what it used
+to be, and the difference is not cosmetic: `annotate/pipeline.py` paints the mask on the
+intervention window for a family whose evidence is the change itself
+(`FAMILIES[f].detectable == "event"`), and on the consequence window otherwise. Declaring
+the union made every `event` clip claim a violation on frames whose mask was provably empty
+— `drop × colour_shift` shipped `violation_windows [[7, 24]]` with pixels on 7–12 — and
+`validate` rejected all of them.
 
-Concretely, `colour_shift` at strong on a 25-frame clip: `t_event` 9, intervention ends 14
-when the colour has finished turning, consequence runs to 24. `friction` and `support` are
-the other shape — they change a property that keeps acting, so their intervention runs the
-whole clip.
+So the invariant is:
+
+- `intervention_windows ⊆ violation_windows` — we cannot be changing something on a frame we
+  are not calling violating.
+- `consequence_windows` **may extend past** `violation_windows`. A teleported ball is
+  somewhere else for the rest of the clip, but only the jump is visible *as a violation*.
+  Consequences are not lost: they drive the blue `causal_mask` through
+  `(consequence | diverged) & observable`, which is what keeps the mask alive for as long as
+  behaviour is still different.
+
+`timelines.npz` carries `intervening[T]` and `consequence[T]` alongside `active[T]`, and
+`meta.json` adds `t_intervention_end_frame` and `t_consequence_end_frame`.
+
+Concretely, `colour_shift` at strong on a 25-frame clip: `t_event` 9, intervention *and
+violation* end at 14 when the colour has finished turning, consequence runs to 24. `friction`
+and `support` are the other shape — they change a property that keeps acting, so their
+intervention runs the whole clip and all three windows coincide. `permanence` is a third
+shape: the body is *held* absent every frame, so its intervention is the whole absence rather
+than the instant of disappearance.
 
 ### Masks — which side of the twin each one lives on
 

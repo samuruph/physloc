@@ -267,7 +267,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         s_invalid, scored, observable & seen_invalid)
 
     # ---- 3.3 masks (the union rule) --------------------------------------
-    vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)
+    #
+    # The union mask is gated on BOTH gates, not just the two-twin one. The
+    # invalid-side gate can spill the severity to a later frame than the
+    # two-twin gate does -- that is the whole point of `seen_invalid`, which
+    # skips frames the culprit is missing from the invalid render -- and when
+    # it did, `mask_invalid` ended up with pixels on a frame `violation_mask`
+    # had none on. `phantom_impulse` shipped exactly that, and it breaks the
+    # subset invariant the union rule exists to guarantee.
+    seen = visible | visible_inv
+    vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, seen)
     imask = masks_mod.invalid_mask(seg_i, dynamic_ids, visible_inv)
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
     # Level 2 is MEASURED, not declared. `static_ids` are the participants the

@@ -76,7 +76,19 @@ class Permanence(Injector):
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
-            intervention_windows=[(t0, t0)],
+            # THE WHOLE ABSENCE is the intervention, not just the frame the
+            # body goes. `Vanish` holds it hidden every frame in the span --
+            # this is the case `_split_windows` describes as "genuinely
+            # changes something for the whole clip" -- and the absence is what
+            # the family is about: `frames_absent` below says so.
+            #
+            # It matters now that `windows` follows the intervention rather
+            # than being the union: declaring one frame would collapse the
+            # violation to the instant of disappearance and leave the union
+            # mask empty for the rest of the absence, losing the documented
+            # behaviour where `reference_mask` carries where the body should
+            # have been (CLAUDE.md, non-negotiable 3).
+            intervention_windows=[(t0, t1)],
             consequence_windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",

@@ -49,8 +49,12 @@ class PhantomImpulse(Injector):
         # did before, so on `drop` the shove landed one frame before the actor
         # hit the floor and the floor absorbed it. You reported the strongest
         # bin as barely visible; that was the reason, not the size of the push.
-        t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T,
-                                want=max(1, T // 3))
+        # `want` is left to `default_event_frame`, which jitters per scene. It
+        # used to be the constant `T // 3`, and since `acting_frame` honours a
+        # `want` that already sits inside the usable band, that constant WAS
+        # the answer on every seed: the family fired on frame 8 of 25 in every
+        # clip of ten different scenarios.
+        t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T)
         if t0 is None or not (1 <= t0 < T - 1):
             return None
         # ON A CONSTRAINT, kick it where it is already moving. The intervention

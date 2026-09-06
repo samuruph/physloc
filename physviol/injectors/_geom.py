@@ -127,6 +127,40 @@ WINDOW_FRACTION = 0.55
 EVENT_JITTER = 0.10
 
 
+def scene_fraction(spec) -> float:
+    """A number in [0, 1) that is a property of the SCENE, not the family.
+
+    One draw, reused wherever a family has a *choice* of moment, so that the
+    three severities of a cell fire together -- otherwise their magnitudes stop
+    being comparable -- and two families on the same scene sit at the same
+    relative point in whatever window each of them can use.
+
+    Salted away from `Scenario.rng` so that consulting it cannot shift any
+    physics draw.
+    """
+    seed = (int(spec.seed) * 2654435761 + 0x51ED) % (2 ** 31 - 1)
+    return float(np.random.RandomState(seed).uniform())
+
+
+def frame_in_band(spec, lo: int, hi: int) -> int:
+    """Place the event INSIDE the band that is actually available.
+
+    The difference between this and jittering a fraction of the clip and then
+    clamping it: a clamp collapses to the band's edge whenever the band is
+    narrow or offset, and the randomness silently disappears. `_event_frame`
+    clamped to `num_frames // 4`, and for a body airborne from frame 0 -- every
+    `drop`, `toss` and `pyramid_impact` -- that edge was binding on every seed,
+    so `continuity` fired on frame 6 of 25 in ten clips out of ten while the
+    jitter upstream was working perfectly.
+
+    Interpolating instead means the choice survives however narrow the band is.
+    """
+    lo, hi = int(lo), int(hi)
+    if hi <= lo:
+        return lo
+    return lo + int(round(scene_fraction(spec) * (hi - lo)))
+
+
 def default_event_frame(spec, num_frames: int) -> Optional[int]:
     """When to fire, absent a physical cue: hidden if possible, else a third in.
 
@@ -139,8 +173,8 @@ def default_event_frame(spec, num_frames: int) -> Optional[int]:
     """
     t0 = occluded_midpoint(spec)
     if t0 is None:
-        rng = np.random.RandomState(int(spec.seed) % (2 ** 31 - 1))
-        frac = EVENT_FRACTION + float(rng.uniform(-EVENT_JITTER, EVENT_JITTER))
+        frac = (EVENT_FRACTION
+                + (2.0 * scene_fraction(spec) - 1.0) * EVENT_JITTER)
         t0 = max(1, int(round(frac * num_frames)))
     return int(t0) if 1 <= t0 < num_frames - 1 else None
 
@@ -803,7 +837,13 @@ def acting_frame(spec, traj, body_id: int, num_frames: int,
     lo, hi = int(run[0]), int(run[1])
     latest = hi - int(round(share * max(hi - lo, 0)))
     earliest = max(lo + 1, 1, int(round(floor_fraction * num_frames)))
-    t = min(max(int(want), earliest), max(earliest, latest))
+    # Honour `want` when it already lands inside the usable band; otherwise
+    # place it within the band rather than clamping to whichever edge it
+    # overshot, which is how a family ends up firing on one frame forever.
+    if earliest <= int(want) <= latest:
+        t = int(want)
+    else:
+        t = frame_in_band(spec, earliest, max(earliest, latest))
     if 1 <= t < num_frames - 1:
         return int(t)
     return int(want)
@@ -825,7 +865,18 @@ def unoccluded_event_frame(spec, num_frames: int, span: int,
     is over before it gets there.
     """
     if want is None:
-        want = max(1, int(round(EVENT_FRACTION * num_frames)))
+        # Through `default_event_frame`, not `EVENT_FRACTION` directly, so this
+        # path inherits the per-scene jitter. Computing the fraction here again
+        # was how `dissolve` and every other family that needs an unoccluded
+        # moment kept firing on exactly the same frame in every clip.
+        #
+        # `default_event_frame` seeks an occlusion when the scene has one, and
+        # this function wants the opposite -- but the search below moves off
+        # that frame to the nearest clear one, so starting from the jittered
+        # moment is right either way.
+        want = default_event_frame(spec, num_frames)
+        if want is None:
+            want = max(1, int(round(EVENT_FRACTION * num_frames)))
     occ = set(int(f) for f in (spec.notes.get("occluded_frames") or []))
     span = max(1, int(span))
 

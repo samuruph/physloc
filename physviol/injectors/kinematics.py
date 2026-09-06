@@ -40,11 +40,25 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     run = _geom.longest_airborne_run(traj, bi, _geom.surface_top(spec, body))
     lo = max(1, num_frames // 4)
     if run is not None and run[1] > run[0]:
-        t = min(max(run[0] + 1, lo), run[1])
+        # ANYWHERE in the airborne run, not at its lower edge. This used to be
+        # `min(max(run[0] + 1, lo), run[1])`, and for a body that is airborne
+        # from frame 0 -- every `drop`, every `toss` -- `lo` was binding on
+        # every seed, so the family fired on frame `num_frames // 4` in every
+        # clip it ever produced. `continuity` and `phantom_impulse` were pinned
+        # that way across twelve scenarios each.
+        t = _geom.frame_in_band(spec, max(run[0] + 1, lo), run[1])
         if 1 <= t < num_frames - 1:
             return int(t)
-    t = max(1, num_frames // 3)
-    return int(t) if t < num_frames - 1 else None
+    # No airborne run at all -- a ball rolling the whole clip, a body at rest
+    # on a table. The old fallback was the constant `num_frames // 3`, which is
+    # why `continuity` and `phantom_impulse` fired on the same frame in every
+    # clip of `collision`, `resting_table`, `stack_topple` and `pour`. Nothing
+    # physical dictates the moment for such a body, which is precisely what
+    # `default_event_frame` is for, jitter included.
+    t = _geom.default_event_frame(spec, num_frames)
+    if t is None:
+        t = max(1, num_frames // 3)
+    return int(t) if 1 <= t < num_frames - 1 else None
 
 
 class _GravityScale(Injector):

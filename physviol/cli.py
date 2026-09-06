@@ -107,6 +107,15 @@ def _print_release_size(cells, a) -> None:
 
 
 # ---------------------------------------------------------------- generate
+#: The worker's word for "this family does not apply to this sample".
+NO_PLAN = "injector produced no plan"
+
+#: How many fresh seeds a declined cell is offered before it counts as dead.
+#: A cell that cannot be built on any of them is a genuine matrix error -- the
+#: compatibility table claiming something the code cannot produce.
+RETRY_SEEDS = 4
+
+
 def cmd_generate(a) -> int:
     from .scenarios import TIERS
     from . import scenarios as scen_mod
@@ -168,13 +177,12 @@ def cmd_generate(a) -> int:
     # cannot change what any of them produces: the per-clip rng is keyed by
     # (seed, family, severity) through crc32, never by position in a queue.
     # `tests/test_parallel_determinism.py` pins that.
-    jobs = [(v, scenario, families)
+    jobs = [(a.seed + v, scenario, families)
             for v in range(a.variants)
             for scenario, families in sorted(by_scenario.items())]
 
     def run_one(job):
-        v, scenario, families = job
-        seed = a.seed + v
+        seed, scenario, families = job
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, work, complexity=a.complexity,
                                window=a.window,
@@ -192,7 +200,7 @@ def cmd_generate(a) -> int:
 
     done_count = {"n": 0}
 
-    def run_and_report(job):
+    def run_and_report(job, total=None):
         out = run_one(job)
         done_count["n"] += 1
         # A progress line as each job lands. The parallel path used to collect
@@ -200,8 +208,8 @@ def cmd_generate(a) -> int:
         # nothing at all until it finished. The ordered results still print
         # afterwards, so the transcript stays identical at any worker count.
         print("  [%d/%d] %-16s seed=%-6d %s"
-              % (done_count["n"], len(jobs), out["scenario"], out["seed"],
-                 "ok" if out["rc"] == 0 else "FAILED"), flush=True)
+              % (done_count["n"], total or len(jobs), out["scenario"],
+                 out["seed"], "ok" if out["rc"] == 0 else "FAILED"), flush=True)
         return out
 
     workers = max(1, int(getattr(a, "workers", 1) or 1))
@@ -220,6 +228,44 @@ def cmd_generate(a) -> int:
     else:
         outcomes = [run_and_report(j) for j in jobs]
 
+    # A cell that DECLINED THIS SAMPLE gets another one.
+    #
+    # A family may legitimately refuse a scene without the cell being wrong.
+    # `angular_momentum` declines a sphere, because an untextured sphere's
+    # rotation is invisible however fast it spins -- and `toss` draws its shape
+    # per seed, so `toss x angular_momentum` exists on the cube seeds and not
+    # on the sphere ones. Seed 777 draws a sphere, and the cell silently
+    # vanished from the release.
+    #
+    # `tests/conftest.py::reachable_cell` already walks seeds for exactly this
+    # reason; the generator had no equivalent, so the tests said the cell was
+    # fine and the run produced nothing. Retry seeds start past the variant
+    # block so they can never collide with a seed the main pass already used.
+    declined = sorted({
+        (o["scenario"], b.get("family"))
+        for o in outcomes
+        for b in o["bad"] if b.get("error") == NO_PLAN})
+    for attempt in range(RETRY_SEEDS):
+        if not declined:
+            break
+        retry_jobs, by_scen = [], {}
+        for scenario, family in declined:
+            by_scen.setdefault(scenario, []).append(family)
+        seed = a.seed + a.variants + attempt
+        retry_jobs = [(seed, scen, fams) for scen, fams in sorted(by_scen.items())]
+        print("  retrying %d declined cell(s) at seed %d"
+              % (len(declined), seed), flush=True)
+        total = len(jobs) + len(retry_jobs)
+        for job in retry_jobs:
+            out = run_and_report(job, total=total)
+            outcomes.append(out)
+            if out["rc"] != 0:
+                continue
+            still = {(out["scenario"], b.get("family"))
+                     for b in out["bad"] if b.get("error") == NO_PLAN}
+            declined = [c for c in declined
+                        if c[0] != out["scenario"] or c in still]
+
     # Reported in job order, not completion order, so two runs at different
     # worker counts produce the same transcript.
     for out in outcomes:
@@ -232,6 +278,13 @@ def cmd_generate(a) -> int:
                 return out["rc"]
             continue
         for bad in out["bad"]:
+            # A cell that declined this sample and was then built on a later
+            # seed is not a failure -- reporting it as one is how a healthy
+            # run ends with a scary summary. Only cells still declining after
+            # every retry are listed.
+            if (bad.get("error") == NO_PLAN
+                    and (scenario, bad.get("family")) not in set(declined)):
+                continue
             failed.append((scenario, bad.get("family"), bad.get("error")))
             print("  !! %-15s %-17s %-6s %s"
                   % (scenario, bad.get("family"), bad.get("severity"),

@@ -272,3 +272,196 @@ def pick_shape(rng, choices=FREE_SHAPES) -> str:
     made, and the same seed keeps producing the same rollout at L0 and L1.
     """
     return str(choices[int(rng.randint(0, len(choices)))])
+
+
+#: Segmentation ids for distractors start here. Clear of every scenario's own
+#: ids, and clear of `pour`, whose grains run to 111 at release size.
+SEG_DISTRACTOR_BASE = 500
+
+#: Attempts per distractor before giving up on it. The constraints pull
+#: against each other -- clear of the path, not in front of it, inside the
+#: frame -- so a scene can genuinely have room for fewer than were asked for.
+#: `distractors()` returns what it managed, and the caller records it, because
+#: silently placing four when six were requested is the kind of thing that
+#: turns into a puzzling number in a results table months later.
+PLACEMENT_TRIES = 400
+
+#: How many points along the actor's predicted path are protected. Six is
+#: enough to cover a fall or a roll at this scale without the rejection
+#: sampler running out of room to place anything.
+PATH_SAMPLES = 6
+
+#: A distractor's size, as a fraction of the actor's. Comparable on purpose:
+#: something a tenth the size is a speck, and a benchmark level called
+#: "distractors" should contain things that actually compete for attention.
+DISTRACTOR_SIZE = (0.55, 1.15)
+
+#: How much of the actor's silhouette a distractor must clear, in actor radii.
+#: Smaller than the physical margin on purpose -- see the note at its use.
+SIGHTLINE_RADII = 1.35
+
+#: How far a distractor must stay from the actor's path, in actor radii. The
+#: point of a distractor is to be *distracting*, not to take part: one that
+#: wanders into the collision changes the physics the clip is a claim about,
+#: and there is no label saying it did.
+KEEP_CLEAR_RADII = 3.0
+
+
+def distractors(spec, n: int, rng, floor_top: float = 0.0):
+    """`n` inert bodies placed around the scene, clear of the action.
+
+    MOVi places its distractors with `kb.move_until_no_overlap`, which
+    resamples a pose until the SIMULATOR reports no overlap
+    (`refs/kubric/kubric/randomness.py:119`). That is not available here: a
+    `SceneSpec` is declarative and is built host-side, with no simulator in
+    reach, and it has to stay that way because the annotator reconstructs the
+    scene from a seed to read the camera and the bodies back. So placement is
+    geometric -- rejection sampling against bounding radii, which for convex
+    primitives on a floor is the same test the simulator would do.
+
+    Two rules the placement has to respect, and they pull in opposite
+    directions:
+
+    * FAR ENOUGH from the actor and its path that it cannot join the physics.
+      A distractor that rolls into the collision changes the event the clip is
+      labelled for, and nothing in the annotation says so.
+    * NEAR ENOUGH to be in shot. A distractor outside the frustum is not a
+      distractor, it is a body that costs render time.
+
+    They are `role="distractor"`, which every actor query already excludes --
+    the injectors select on `role == "actor"` -- so no family can target one by
+    accident.
+    """
+    import numpy as np
+
+    from . import materials as M
+    from .base import BodySpec
+
+    actors = [b for b in spec.bodies if b.role == "actor" and not b.dormant]
+    if not actors or n <= 0:
+        return []
+    actor_r = float(np.median([a.bounding_radius for a in actors]))
+    # The band to place in: outside the action, inside the shot. Sized from the
+    # camera's own framing so it holds whatever scale the scenario works at.
+    from .. import camera as cam
+    extent = cam.frame_extent(spec.camera_position, spec.camera_look_at)
+    aim = np.asarray(spec.camera_look_at, np.float64)
+
+    eye = np.asarray(spec.camera_position, np.float64)
+    # THE WHOLE PATH, not the starting point. The first version protected the
+    # start and one second of travel, which for `drop` -- where the actor
+    # begins three metres up and falls -- guards empty air and leaves the
+    # landing site, the part the violation is about, completely unprotected. A
+    # distractor placed there occluded the actor and its `severity_map` went
+    # from 0.23 to empty.
+    #
+    # A coarse ballistic sweep is enough: exact enough to know where the body
+    # spends its time, and it costs nothing because it is arithmetic on the
+    # declared start state rather than a rollout.
+    duration = float(spec.tier.num_frames) / float(spec.tier.fps)
+    g = np.asarray(spec.gravity, np.float64)
+    keep_clear, sightlines = [], []
+    for a in actors:
+        p0 = np.asarray(a.position, np.float64)
+        v0 = np.asarray(a.velocity, np.float64)
+        keep = float(a.bounding_radius) * KEEP_CLEAR_RADII
+        for k in range(PATH_SAMPLES):
+            t = duration * k / float(PATH_SAMPLES - 1)
+            p = p0 + v0 * t + 0.5 * g * t * t
+            # It cannot go below the floor, and a body resting on it is
+            # exactly where a distractor must not stand.
+            p[2] = max(float(p[2]), floor_top + float(a.bounding_radius))
+            keep_clear.append((p, keep))
+            # TWO DIFFERENT MARGINS, because they answer different questions.
+            # Physical clearance wants room for a body to move without meeting
+            # anything; a sightline only has to clear the actor's silhouette.
+            # Using the physical margin for both excluded most of the visible
+            # floor -- `drop` placed zero distractors on some seeds, because a
+            # three-metre fall sampled six times casts a very wide shadow.
+            sightlines.append((p, float(a.bounding_radius) * SIGHTLINE_RADII))
+
+    # How far the exclusion reaches from the aim point, in the ground plane.
+    aim_xy = aim[:2]
+    exclusion = max(
+        [float(np.linalg.norm(np.asarray(c)[:2] - aim_xy)) + keep
+         for c, keep in keep_clear] or [0.0])
+
+    out = []
+    for i in range(int(n)):
+        for _ in range(PLACEMENT_TRIES):
+            ang = float(rng.uniform(0.0, 2.0 * np.pi))
+            # SIZED AGAINST THE ACTOR, not the frame. Sizing off the frustum
+            # gave distractors 6 to 34 pixels against the actor's 83 at debug
+            # resolution -- specks, not distractions. A distractor has to be
+            # comparable to the thing it competes with for attention, which is
+            # what MOVi does by drawing its distractors from the same size
+            # distribution as its objects.
+            r = actor_r * float(rng.uniform(*DISTRACTOR_SIZE))
+            # The band starts OUTSIDE the exclusion, not at a fixed fraction of
+            # the frame. A falling actor's keep-clear column can be wider than
+            # the inner edge of a fixed band, and then most candidates are
+            # rejected before they are even considered -- `drop` and
+            # `pyramid_impact` placed zero distractors on some seeds that way.
+            # Deriving the inner radius from the exclusion means the sampler is
+            # always drawing from somewhere it can succeed.
+            inner = max(0.30 * extent, exclusion + r)
+            outer = max(inner * 1.25, 0.75 * extent)
+            rad = float(rng.uniform(inner, outer))
+            pos = np.array([aim[0] + rad * np.cos(ang),
+                            aim[1] + rad * np.sin(ang), floor_top + r])
+            if any(float(np.linalg.norm(pos - c)) < (keep + r)
+                   for c, keep in keep_clear):
+                continue
+            # AND NOT IN FRONT OF IT. Distance in world space is not enough: a
+            # distractor three metres from the actor can still sit squarely
+            # between the actor and the camera, and then it does not distract,
+            # it OCCLUDES. Measured when this check was missing -- the actor
+            # lost a frame of visibility and its `severity_map` went from 0.23
+            # to empty, because severity is painted through the segmentation of
+            # a body the camera can no longer see.
+            if _occludes(eye, pos, r, sightlines):
+                continue
+            # AND VISIBLE. A distractor the camera cannot see is not a
+            # distractor, it is render time -- one placed off the edge of the
+            # frame came back with zero pixels.
+            if not cam.visible(spec.camera_position, spec.camera_look_at,
+                               pos[None, :])[0]:
+                continue
+            if any(float(np.linalg.norm(pos - np.asarray(o.position))) <
+                   (r + float(o.bounding_radius)) * 1.15 for o in out):
+                continue
+            kind = pick_shape(rng)
+            body = BodySpec(
+                name="distractor_%02d" % i, kind=kind, position=tuple(pos),
+                scale=(r,) * 3, mass=1.0, friction=0.5, restitution=0.3,
+                color=hue_rgb(float(rng.uniform(0, 1))),
+                segmentation_id=SEG_DISTRACTOR_BASE + i, role="distractor")
+            out.append(with_material(body, M.pick(rng), rng))
+            break
+    return out
+
+
+def _occludes(eye, pos, radius: float, keep_clear) -> bool:
+    """Would a body at `pos` hide any of the protected points from `eye`?
+
+    An angular test rather than a projection: a candidate occludes when it sits
+    NEARER the camera than the thing it would hide, and its angular radius
+    overlaps that thing's. Nearer matters -- a body behind the actor is a
+    backdrop, which is what a distractor is for.
+    """
+    import numpy as np
+
+    to_c = np.asarray(pos, np.float64) - eye
+    d_c = float(np.linalg.norm(to_c))
+    if d_c < 1e-6:
+        return True
+    for centre, keep in keep_clear:
+        to_a = np.asarray(centre, np.float64) - eye
+        d_a = float(np.linalg.norm(to_a))
+        if d_a < 1e-6 or d_c >= d_a:
+            continue                      # behind the actor: harmless backdrop
+        cos = float(np.clip(np.dot(to_c / d_c, to_a / d_a), -1.0, 1.0))
+        sep = np.arccos(cos)
+        if sep < (np.arctan2(radius, d_c) + np.arctan2(keep, d_a)):
+            return True
+    return False

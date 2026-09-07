@@ -587,7 +587,8 @@ def _build(suppress: bool = False):
     p.add_argument("-v", "--verbose", action="store_true",
                    help="list every (scenario, family) cell")
     p.add_argument("--tier", default="release", help="debug | release")
-    p.add_argument("--complexity", default="L0")
+    p.add_argument("--complexity", default="L0",
+                   help="L0..L5 -- see README section 8. L0-L3 are built.")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
     p.add_argument("--workers", type=int, default=4,
@@ -709,7 +710,8 @@ def _build(suppress: bool = False):
     p.add_argument("--seeds", type=int, default=24,
                    help="how many instances of each scenario to sample")
     p.add_argument("--tier", default="debug")
-    p.add_argument("--complexity", default="L0")
+    p.add_argument("--complexity", default="L0",
+                   help="L0..L5 -- see README section 8. L0-L3 are built.")
     p.add_argument("--scenario", help="restrict to one scenario")
     p.set_defaults(fn=cmd_randomisation)
 

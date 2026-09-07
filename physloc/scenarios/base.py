@@ -235,7 +235,7 @@ COMPLEXITY: Dict[str, Complexity] = {
     "L0": Complexity("L0", "solid", "primitive", 0, False, False, 0.0, True),
     "L1": Complexity("L1", "solid", "primitive", 0, True,  False, 0.0, True),
     "L2": Complexity("L2", "solid", "primitive", 0, True,  True,  0.0, True),
-    "L3": Complexity("L3", "solid", "primitive", 6, True,  True,  0.0, False),
+    "L3": Complexity("L3", "solid", "primitive", 6, True,  True,  0.0, True),
     "L4": Complexity("L4", "hdri",  "primitive", 6, True,  True,  0.0, False),
     "L5": Complexity("L5", "hdri",  "gso",      12, True,  True,  0.0, False),
 }
@@ -527,9 +527,44 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
                                zip(light.position,
                                    rng.uniform(-1.0, 1.0, size=3) * 0.9))
     _flatten_materials(spec)
+    _add_distractors(spec, seed)
     _recolour_scenery(spec, seed)
     _maybe_move_camera(spec, seed)
     return spec
+
+
+def _add_distractors(spec: SceneSpec, seed: int) -> None:
+    """Populate the scene with bodies that take no part in the violation.
+
+    From L3 up. Added here rather than in each scenario because the placement
+    rule is a property of the LEVEL, and because it needs the finished scene --
+    where the actor is, where it is heading, and what the camera can see -- all
+    of which exist only once `_sample` has run.
+
+    Drawn off its own salted stream so that adding distractors cannot shift a
+    single physics or appearance draw that a scenario already made: an L3 scene
+    is an L2 scene with more bodies in it, and nothing else different.
+    """
+    import zlib
+
+    from . import _common as C
+
+    n = COMPLEXITY[spec.complexity].n_distractors
+    if not n:
+        return
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0xD157 + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    floor = next((b for b in spec.bodies if b.role == "floor"), None)
+    top = 0.0 if floor is None else (
+        float(floor.position[2] + floor.scale[2]) if floor.kind == "cube"
+        else float(spec.floor_level))
+    placed = C.distractors(spec, n, rng, floor_top=top)
+    spec.bodies.extend(placed)
+    # What was actually placed, not what was asked for. The constraints can
+    # genuinely leave no room, and a clip that says `n_distractors: 6` while
+    # containing four is a clip whose metadata lies.
+    spec.notes["n_distractors_placed"] = len(placed)
 
 
 def _flatten_materials(spec: SceneSpec) -> None:

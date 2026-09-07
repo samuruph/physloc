@@ -39,6 +39,16 @@ def validate_clip(cdir: str) -> List[str]:
         m = json.load(fh)
 
     fam = m.get("family")
+    # A valid clip carries no family: it is shared by every family staged on
+    # its scene, so naming one would name whichever was annotated last. The
+    # checks below are all about the violation, and a valid clip has none.
+    if m.get("label") == "valid":
+        if fam is not None:
+            bad("a valid clip claims family %r; it is shared by every family "
+                "on its scene and must claim none" % fam)
+        if m.get("scenario") not in SCENARIOS:
+            bad("unknown scenario %r" % m.get("scenario"))
+        return errs
     if fam not in FAMILIES:
         bad("unknown family %r" % fam)
         return errs

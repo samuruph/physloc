@@ -706,71 +706,64 @@ which, and what that means for a confusion matrix.
 ## 8. The complexity ladder
 
 **Severity asks how badly the law is broken. Complexity asks how hard the scene is to
-parse.** They are orthogonal, and reporting accuracy across both is what separates "the model
-understands physics" from "the model copes with clutter".
+parse.** Two independent axes; reporting across both is what separates "understands physics"
+from "copes with clutter".
 
-Each level is the one below it **plus exactly one thing**. That is the whole value of a
-ladder: when a score drops between two levels, the drop names its own cause. A level that
-changed the background *and* the objects *and* the clutter at once would tell you only that
-something got harder.
+**Each level is the one below it plus exactly one thing**, so a score drop between two levels
+names its own cause.
 
-| level | adds | background | actors | distractors | camera | materials | built |
+| level | adds | background | actors | distractors | camera | surface | built |
 |---|---|---|---|---|---|---|---|
-| **L0** | *the baseline* | solid | primitives | 0 | static | flat colour | ✅ |
-| **L1** | **camera motion** | solid | primitives | 0 | **1 in 5 moves** | flat colour | ✅ |
-| **L2** | **materials** | solid | primitives | 0 | 1 in 5 | **wood/steel/…** | ✅ |
-| **L3** | **distractors** | solid | primitives | **6** | 1 in 5 | materials | ✗ |
-| **L4** | **HDRI environment** | **hdri** | primitives | 6 | 1 in 5 | materials | ✗ |
-| **L5** | **GSO objects** | hdri | **gso** | 12 | 1 in 5 | materials | ✗ |
+| **L0** | *baseline* | solid | primitives | 0 | static | flat colour | ✅ |
+| **L1** | camera motion | solid | primitives | 0 | **1 in 5 moves** | flat colour | ✅ |
+| **L2** | materials | solid | primitives | 0 | 1 in 5 | **wood/steel/…** | ✅ |
+| **L3** | distractors | solid | primitives | **6** | 1 in 5 | materials | ✅ |
+| **L4** | HDRI environment | **hdri** | primitives | 6 | 1 in 5 | materials | ✗ |
+| **L5** | GSO objects | hdri | **gso** | 12 | 1 in 5 | materials | ✗ |
 
-**Why distractors come before the realistic environment.** Clutter is only legible *as*
-clutter against a plain background: at L3 the only thing that changed is that there are now
-other objects in shot, so a drop there is about distraction and not about lighting or
-unfamiliar geometry. Introducing distractors alongside an HDRI would confound the two. The
-cost is that the built levels are no longer a contiguous prefix — the HDRI path works today
-but now sits behind distractors — and that is the right trade: the ladder is a measuring
-instrument, and its order should serve the measurement rather than the build queue.
+Three things worth knowing:
 
-**How many distractors is a knob, not a level.** "More of the same thing" is a quantity; a
-benchmark axis should be a kind. `n_distractors` lives on the level.
+- **Distractors come before the environment** so clutter is measured against a plain
+  background — otherwise a drop at that level could be lighting instead.
+- **A distractor never joins the physics.** It is placed clear of the actor's whole predicted
+  path, never between the actor and the camera, and always inside the frame; it carries
+  `role="distractor"`, which every injector query excludes. `meta.json` records
+  `n_distractors_placed` — what actually went in, since the constraints can leave no room and
+  a clip claiming six while containing four is a clip whose metadata lies.
+- **Below L2 every object shares one density.** Mass is `density × volume`, so a level
+  without materials would have mass varying *invisibly* — the confound materials exist to
+  remove. With one density mass varies with **size**, which a viewer can see.
+- **L1 and L2 are therefore not the same physics.** Materials change mass, so any "same
+  physics, harder scene" pairing needs two levels on the same side of L2.
 
-### Below L2 every object shares one density
-
-Mass is derived from the material (`density × volume`), so a level without materials would
-otherwise have mass varying **invisibly** — and that is exactly the confound materials were
-introduced to remove: the heavy ball barely moves, nothing in the picture says why, and
-lawful physics reads as a violation.
-
-So at L0 and L1 every body takes a single reference density. Mass still varies, with **size**,
-which a viewer can see. Hue is preserved so objects stay tellable apart; only saturation and
-value are pinned, which is what makes them read as plain colours rather than as steel or
-rubber.
-
-**A consequence worth stating plainly: L1 and L2 are not the same physics.** Materials change
-mass. Any "same physics, harder scene" pairing — which is what the v0/v1 twin is for — has to
-be two levels on the same side of L2.
+`n_distractors` is a knob on the level, not a level of its own.
 
 ## 9. Tiers
 
-| | `debug` | `v0` (`physloc_v0`) | `v1` (`physloc_v1`) |
-|---|---|---|---|
-| resolution | 128² | 512² | 512² |
-| frames @ fps | 25 @ 12 | 89 @ 30 | 89 @ 30 |
-| duration | 2.08 s | 2.97 s | 2.97 s |
-| latent grid | 7×8×8 | 23×16×16 | 23×16×16 |
-| complexity | `L0` | `L0` | **`L1`** |
-| population | single | single | **single + multi** |
-| published | never | yes | yes |
+A tier is a **geometry** — how big and how long. Nothing else.
 
-**v0 and v1 are the same tier geometry on purpose.** v1 is not a bigger render — it is the
-same physics under harder conditions: photographic backgrounds and objects, and crowded
-scenes. Making it a resolution step as well would confound the axes, since a model scoring
-worse on v1 could be failing at realism, at clutter, or merely at an unfamiliar resolution.
-Fixing the geometry is what makes the two **paired**. See [docs/roadmap.md](docs/roadmap.md).
+| | `debug` | `release` |
+|---|---|---|
+| resolution | 128² | 512² |
+| frames @ fps | 25 @ 12 | 89 @ 30 |
+| duration | 2.08 s | 2.97 s |
+| latent grid | 7×8×8 | 23×16×16 |
+| cost | ~8 s/clip | ~637 s/clip |
+| published | never | yes |
 
-**v0 is 30 fps** so the release downsamples cleanly to 15 and 10 without resampling, which a
-12 fps master cannot do. 89 frames rather than 90 because every frame count must be `4k+1`
-for exact VAE latent alignment, and 89 is the nearest that is.
+**`v0` and `v1` are not tiers.** They were, and differed in nothing but their name — what
+actually separated them was complexity, which is [its own ladder](#8-the-complexity-ladder).
+A tier that encodes a release number has to be renamed every release. So: the tier says how
+big, the ladder says how hard, and `v0`/`v1` are what a published **dataset** is called — set
+by `--outdir`, recorded as `release` in every `meta.json`.
+
+Difficulty is deliberately not a resolution step: a model scoring worse on a harder release
+could otherwise be failing at realism, at clutter, or merely at an unfamiliar render size.
+Fixing the geometry is what makes two releases comparable.
+
+**`release` is 30 fps** so it downsamples cleanly to 15 and 10, which a 12 fps master cannot
+do. 89 frames rather than 90 because every frame count must be `4k+1` for exact VAE latent
+alignment, and 89 is the nearest that is.
 
 Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT VAE's
 4× temporal binning. **`debug` is the default** — iterate there.

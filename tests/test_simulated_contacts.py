@@ -24,18 +24,49 @@ from physloc.sim.trajectory import Trajectory
 SIMULATED = ("continuity", "phantom_impulse", "newton1_inertia", "solidity")
 
 
+#: Worker output older than this many seconds relative to the newest source
+#: file is treated as stale and skipped.
+STALE_GRACE = 5.0
+
+
 def _plans():
-    """Every variant directory any worker run left under `out/`.
+    """Variant directories from a worker run, IF they match the current code.
 
     Its own discovery rather than `conftest.find_workdir`, which returns a
     single variant directory; this test wants all of them across every scenario
     a run produced.
+
+    THE STALENESS CHECK IS THE POINT. These tests read whatever a previous
+    `generate` left on disk, so they are checking artefacts rather than code --
+    and an artefact produced by an older version of the injectors says nothing
+    about the current ones. A leftover sweep failed
+    `test_a_prevented_collision_leaves_no_contact` for two full suite runs on a
+    clip whose contact pair the current code does not even produce; regenerating
+    that same cell passed. A test that fails on a file nobody has regenerated is
+    worse than one that skips: it trains you to ignore it.
+
+    So output older than the newest source file under `physloc/` is skipped with
+    a message saying how to refresh it.
     """
     import glob
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return sorted(glob.glob(os.path.join(root, "out", "**", "variants", "*",
-                                         "plan.json"), recursive=True))
+    plans = sorted(glob.glob(os.path.join(root, "out", "**", "variants", "*",
+                                          "plan.json"), recursive=True))
+    if not plans:
+        return []
+    newest_src = max(
+        os.path.getmtime(f)
+        for f in glob.glob(os.path.join(root, "physloc", "**", "*.py"),
+                           recursive=True))
+    fresh = [p for p in plans
+             if os.path.getmtime(p) >= newest_src - STALE_GRACE]
+    if not fresh:
+        pytest.skip(
+            "worker output under out/ predates the current physloc/ sources, "
+            "so it describes code that no longer exists. Regenerate with "
+            "`python -m physloc.cli generate --config review` (or delete out/).")
+    return fresh
 
 
 #: A contact whose normal is within this of vertical is something the body is

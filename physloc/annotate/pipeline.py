@@ -632,13 +632,27 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
     seg_names = [("0", "background")] + [
         (str(i["id"]), i["name"]) for i in instances]
     fam = FAMILIES[family]
-    twin = "%s/%s" % (pair_uid, "invalid_%s_%s" % (family, sev_bin)
-                      if label == "valid" else "valid")
+    # A VALID CLIP HAS NO FAMILY, and no single twin.
+    #
+    # It is shared by every family staged on this scene -- that is the whole
+    # point of it, and why a release renders one valid twin per (scenario,
+    # seed) rather than one per cell. Labelling it with a family recorded
+    # whichever family happened to be annotated LAST: `barrier_pass/0777/valid`
+    # shipped as `family: time_slip` while equally belonging to the other
+    # thirteen, so filtering the index on a family returned a valid clip that
+    # was not specially its own, and any per-family count was off by one.
+    #
+    # `pair_uid` is the join key, and it always was. `twin_uid` on an INVALID
+    # clip still points at its valid partner, which is a real one-to-one edge;
+    # only the reverse direction was a fiction.
+    is_valid = label == "valid"
+    twin = None if is_valid else "%s/valid" % pair_uid
     meta = {
         "schema_version": SCHEMA_VERSION,
         "clip_uid": uid, "pair_uid": pair_uid, "twin_uid": twin,
         "label": label, "tier": tier.name, "release": release,
-        "domain": domain_of(family), "family": family,
+        "domain": None if is_valid else domain_of(family),
+        "family": None if is_valid else family,
         "scenario": scenario, "seed": seed,
         "physics_medium": SCENARIOS[scenario].physics_medium,
         "medium": SCENARIOS[scenario].physics_medium,

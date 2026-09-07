@@ -474,7 +474,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
                            scenario, seed, primary_id, sev_bin, prefix_diff,
                            energy_summary,
-                           _instance_table(spec_d, plan_d, seg_here), r_strong)
+                           _instance_table(spec_d, plan_d, seg_here), r_strong,
+                           spec=spec)
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
@@ -579,13 +580,29 @@ def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
     return out
 
 
-def _camera_block(spec, num_frames: int) -> Dict[str, Any]:
+def _camera_block(spec, spec_d: Dict, num_frames: int) -> Dict[str, Any]:
     """Where the camera was on every frame, and whether it moved.
 
     Consumers need this the moment a fifth of clips move: `flow_fwd`,
     `flow_bwd` and `depth` stop being pure object motion under a moving
     camera, and without the track there is no way to tell the two apart.
+
+    Takes the reconstructed `SceneSpec` so the per-frame poses come from
+    `spec.camera_at` -- the same method the renderer keyframes from. Deriving
+    them here instead would be a second implementation of the track, and an
+    orbit interpolates its ANGLE rather than its endpoints, so the two would
+    disagree by a chord and the shipped extrinsics would describe a camera the
+    clip never had.
+
+    Falls back to the serialised spec when no object is available, which is the
+    case for an older workdir being re-annotated.
     """
+    if spec is None:
+        return {"motion": spec_d.get("camera_motion_kind", "static"),
+                "position": spec_d.get("camera_position"),
+                "look_at": spec_d.get("camera_look_at"),
+                "end_position": spec_d.get("camera_end_position"),
+                "intrinsics": [], "extrinsics_per_frame": []}
     poses = [spec.camera_at(f, num_frames) for f in range(num_frames)]
     return {
         "motion": spec.camera_motion_kind,
@@ -604,7 +621,8 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 primary_id, sev_bin, prefix_diff: int = 0,
                 energy_summary: Optional[Dict[str, float]] = None,
                 instances: Optional[List[Dict[str, object]]] = None,
-                r_strong: Optional[float] = None) -> Dict[str, object]:
+                r_strong: Optional[float] = None,
+                spec=None) -> Dict[str, object]:
     instances = instances or []
     seg_names = [("0", "background")] + [
         (str(i["id"]), i["name"]) for i in instances]
@@ -631,7 +649,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         # per-frame poses ship beside it so a consumer can undo the camera
         # motion rather than having to infer it. A static clip still gets a
         # full-length track, so the field never needs a special case.
-        "camera": _camera_block(spec, T),
+        "camera": _camera_block(spec, spec_d, tier.num_frames),
         "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
         "assets": [{"name": b["name"], "source": "kubric_primitive",
                     "license": "Apache-2.0",

@@ -429,6 +429,7 @@ class SceneSpec:
             "camera_position": list(self.camera_position),
         "camera_end_position": (list(self.camera_end_position)
                                 if self.camera_end_position else None),
+        "camera_motion_kind": self.camera_motion_kind,
             "camera_look_at": list(self.camera_look_at),
             "bodies": [{"name": b.name, "kind": b.kind, "role": b.role,
                         "segmentation_id": b.segmentation_id, "mass": b.mass,

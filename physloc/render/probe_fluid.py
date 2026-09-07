@@ -18,7 +18,7 @@ A future attempt should drive Mantaflow through its own Python bindings, or use 
 newer Blender. Until then fluid is Phase 3 and `pour` is the v0 stand-in.
 See docs/PLAN.md Part 2, "On fluid and deformables".
 
-Run: bash docker/kubric.sh physviol/render/probe_fluid.py --res 32 --frames 25
+Run: bash docker/kubric.sh physloc/render/probe_fluid.py --res 32 --frames 25
 """
 import argparse, json, time
 import bpy

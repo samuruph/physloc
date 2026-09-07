@@ -1,4 +1,4 @@
-from physviol import taxonomy as t
+from physloc import taxonomy as t
 
 
 def test_internally_consistent():
@@ -51,8 +51,8 @@ def test_declared_kind_matches_what_injectors_emit():
     """
     import numpy as np
     import mockroll
-    from physviol import injectors, scenarios
-    from physviol.scenarios import TIERS
+    from physloc import injectors, scenarios
+    from physloc.scenarios import TIERS
 
     have = set(scenarios.available())
     checked = 0

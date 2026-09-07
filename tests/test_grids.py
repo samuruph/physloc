@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from physviol.annotate import grids
-from physviol.scenarios import TIERS
+from physloc.annotate import grids
+from physloc.scenarios import TIERS
 
 
 def test_every_tier_bins_exactly():

@@ -3,7 +3,7 @@
 Runs INSIDE the pinned Kubric image (python 3.9). Everything it writes is on the
 host side of the seam: traj.npz, the raw render passes, and a plan.json.
 
-    bash docker/kubric.sh physviol/render/worker.py \
+    bash docker/kubric.sh physloc/render/worker.py \
         --scenario drop --seed 91731 --tier debug \
         --family solidity --severity medium --outdir out/phase0
 
@@ -27,12 +27,12 @@ import kubric as kb
 from kubric.renderer import Blender
 from kubric.simulator import PyBullet
 
-from physviol import injectors
-from physviol import taxonomy
-from physviol import scenarios
-from physviol.render import stepper
-from physviol.scenarios.base import SceneSpec, Tier
-from physviol.sim.trajectory import Contacts, Trajectory, prefix_identical
+from physloc import injectors
+from physloc import taxonomy
+from physloc import scenarios
+from physloc.render import stepper
+from physloc.scenarios.base import SceneSpec, Tier
+from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
 
 PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
           "normal", "object_coordinates")
@@ -162,7 +162,7 @@ def _fade_control(renderer, obj):
     if bmat is None or getattr(bmat, "node_tree", None) is None:
         return None
     nt = bmat.node_tree
-    existing = nt.nodes.get("physviol_fade")
+    existing = nt.nodes.get("physloc_fade")
     if existing is not None:
         return existing.inputs[0]
     principled = nt.nodes.get("Principled BSDF")
@@ -171,7 +171,7 @@ def _fade_control(renderer, obj):
         return None
     transp = nt.nodes.new("ShaderNodeBsdfTransparent")
     mix = nt.nodes.new("ShaderNodeMixShader")
-    mix.name = "physviol_fade"
+    mix.name = "physloc_fade"
     nt.links.new(transp.outputs[0], mix.inputs[1])
     nt.links.new(principled.outputs["BSDF"], mix.inputs[2])
     nt.links.new(mix.outputs[0], out_node.inputs["Surface"])
@@ -518,7 +518,7 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
 
     # No image files here: the container has no ffmpeg. All mp4s -- previews,
     # released rgb.mp4 and the annotation overlays -- are written host-side by
-    # physviol.viz, which keeps a single encoder and one set of settings.
+    # physloc.viz, which keeps a single encoder and one set of settings.
     return dt, {k: list(v.shape) for k, v in arrays.items()}
 
 

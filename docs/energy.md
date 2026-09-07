@@ -192,7 +192,7 @@ block do.
 
 The `ENERGY` panel appears in three places, all driven by the same arrays:
 
-- **`physviol overlay`** — panel order is RGB / ENERGY / MASK / SEVERITY / CAUSAL /
+- **`physloc overlay`** — panel order is RGB / ENERGY / MASK / SEVERITY / CAUSAL /
   DIVERGENCE. The energy panel carries a VIRIDIS key running `0 → 4x E0` with a tick at the
   frame's largest per-body value, because a field of colours with no key tells you two bodies
   differ but not by how much, which is most of what the panel is for. `E(t)` is drawn inside
@@ -201,8 +201,8 @@ The `ENERGY` panel appears in three places, all driven by the same arrays:
   energy"; the curve answers "what did it do", which is the question the annotation exists
   for. A violation that creates energy is a *step in a line*, and no amount of colouring
   pixels shows a step.
-- **`physviol grid --views energy`** — an ENERGY row beside the other annotation rows.
-- **`physviol sheet --view energy`** — every family of a scenario at once, each cell showing
+- **`physloc grid --views energy`** — an ENERGY row beside the other annotation rows.
+- **`physloc sheet --view energy`** — every family of a scenario at once, each cell showing
   its own `E(t)` in joules.
 
 The map uses VIRIDIS, deliberately not the severity map's INFERNO: the two sit side by side

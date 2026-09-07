@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from conftest import find_workdir
-from physviol.sim.trajectory import Trajectory, prefix_identical
+from physloc.sim.trajectory import Trajectory, prefix_identical
 
 # forward_flow at frame t encodes motion t -> t+1, so its last legal identical
 # frame is t_event-2: at t_event-1 it already points into the diverged future.
@@ -23,7 +23,7 @@ LOOKAHEAD = {"forward_flow": 1}
 def work():
     d = find_workdir()
     if d is None:
-        pytest.skip("no worker output; run `python -m physviol.cli generate --debug`")
+        pytest.skip("no worker output; run `python -m physloc.cli generate --debug`")
     return d
 
 

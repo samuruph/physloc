@@ -1,7 +1,7 @@
 """Run settings as a file rather than a wall of flags.
 
-    python -m physviol.cli generate --config review
-    python -m physviol.cli generate --config configs/review.yaml --seed 42
+    python -m physloc.cli generate --config review
+    python -m physloc.cli generate --config configs/review.yaml --seed 42
 
 **Precedence is CLI > config > argparse default.** A flag you type always wins,
 so a config is a starting point you can lean on, never something that quietly
@@ -50,7 +50,7 @@ def load(name: Optional[str], command: str, valid: Set[str]) -> Dict[str, Any]:
     that could not contain it would not be worth having.
     """
     if not name:
-        name = os.environ.get("PHYSVIOL_CONFIG") or ""
+        name = os.environ.get("PHYSLOC_CONFIG") or ""
     if not name:
         return {}
     path = resolve_path(name)
@@ -60,7 +60,7 @@ def load(name: Optional[str], command: str, valid: Set[str]) -> Dict[str, Any]:
         import yaml
     except ImportError:                                    # pragma: no cover
         raise ConfigError(
-            "reading %s needs PyYAML: conda install -n physviol pyyaml" % path)
+            "reading %s needs PyYAML: conda install -n physloc pyyaml" % path)
 
     with open(path) as fh:
         doc = yaml.safe_load(fh) or {}

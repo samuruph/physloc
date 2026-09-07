@@ -561,7 +561,7 @@ def path_sample(pos: np.ndarray, u: np.ndarray) -> np.ndarray:
 # ------------------------------------------------------------------ frame --
 # Kubric's PerspectiveCamera defaults: 50 mm lens on a 36 mm sensor, so the
 # half-angle tangent is 18/50. Square renders make the vertical the same.
-#: Re-exported from `physviol.camera`, which is the single definition. Scene
+#: Re-exported from `physloc.camera`, which is the single definition. Scene
 #: sampling frames a shot with the same frustum the injectors judge it by, and
 #: two copies of the lens constant is a quiet way for those to disagree.
 TAN_HALF_FOV = _cam.TAN_HALF_FOV

@@ -3,8 +3,8 @@
 Reads what the container worker produced (traj_*.npz, passes_*.npz, plan.json)
 and writes the released clip layout of docs/PLAN.md Part 4.
 
-    conda activate physviol
-    python -m physviol.cli annotate out/phase0/drop/0173
+    conda activate physloc
+    python -m physloc.cli annotate out/phase0/drop/0173
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def _seg(passes) -> np.ndarray:
     return s[..., 0] if s.ndim == 4 else s
 
 
-def annotate_work(workdir: str, outroot: str, release: str = "physviol_v0",
+def annotate_work(workdir: str, outroot: str, release: str = "physloc_v0",
                   write_video: bool = True,
                   only: Optional[Sequence[str]] = None) -> List[Dict[str, object]]:
     """Annotate the variants produced by one batched worker run.
@@ -66,7 +66,7 @@ def annotate_work(workdir: str, outroot: str, release: str = "physviol_v0",
 
 
 def annotate_pair(workdir: str, vdir: str, outroot: str,
-                  release: str = "physviol_v0",
+                  release: str = "physloc_v0",
                   write_video: bool = True) -> Dict[str, object]:
     """Turn one worker variant into a released valid/invalid clip pair."""
     with open(os.path.join(vdir, "plan.json")) as fh:
@@ -667,7 +667,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         },
         "instances": instances,
         "provenance": {
-            "generator_commit": os.environ.get("PHYSVIOL_COMMIT", "uncommitted"),
+            "generator_commit": os.environ.get("PHYSLOC_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",
             "render_seed": seed,
             # MEASURED, not asserted. This was a hardcoded `True` and the

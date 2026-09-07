@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 
 import mockroll
-from physviol import scenarios
-from physviol.injectors import get as get_injector
-from physviol.residuals import energy as E
-from physviol.scenarios import TIERS
+from physloc import scenarios
+from physloc.injectors import get as get_injector
+from physloc.residuals import energy as E
+from physloc.scenarios import TIERS
 
 SEED = 777
 
@@ -198,7 +198,7 @@ def test_inertia_matches_the_textbook_forms():
 
 
 def test_law_is_silent_without_a_spec_rather_than_wrong():
-    from physviol.residuals import laws
+    from physloc.residuals import laws
     sc, spec, traj = _scene("drop")
     got = laws._LAWS["energy_balance"](traj, 0, {})
     assert got.shape == (traj.num_frames,)

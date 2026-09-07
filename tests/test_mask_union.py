@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from conftest import find_release
-from physviol.annotate import masks
+from physloc.annotate import masks
 
 
 def _seg(T=3, H=4, W=4, fill=0):
@@ -107,7 +107,7 @@ def test_invalid_mask_is_a_subset_of_the_union():
 def test_released_clips_have_nonempty_masks_while_active(which):
     root = find_release()
     if root is None:
-        pytest.skip("no release; run `python -m physviol.cli generate --debug`")
+        pytest.skip("no release; run `python -m physloc.cli generate --debug`")
     n = 0
     for mp in glob.glob(os.path.join(root, "clips", "**", "meta.json"),
                         recursive=True):
@@ -126,7 +126,7 @@ def test_released_clips_have_nonempty_masks_while_active(which):
         #
         # Asserting against the union `active` failed on `colour_shift` for
         # exactly that reason, and the mask was right.
-        from physviol.taxonomy import FAMILIES
+        from physloc.taxonomy import FAMILIES
 
         fam = FAMILIES.get(meta.get("family"))
         key = ("intervening" if fam is not None and fam.detectable == "event"

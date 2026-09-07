@@ -16,11 +16,11 @@ import numpy as np
 import pytest
 
 import mockroll
-from physviol import injectors, scenarios
-from physviol.injectors import _geom
-from physviol.residuals import laws
-from physviol.scenarios import TIERS
-from physviol.taxonomy import (EXCLUSIVE_LAWS, ORTHOGONALITY_TOLERANCE,
+from physloc import injectors, scenarios
+from physloc.injectors import _geom
+from physloc.residuals import laws
+from physloc.scenarios import TIERS
+from physloc.taxonomy import (EXCLUSIVE_LAWS, ORTHOGONALITY_TOLERANCE,
                                build_cells)
 from conftest import REACHABLE_SEEDS, reachable_cell
 
@@ -66,7 +66,7 @@ def test_cell_moves_only_its_own_law(scenario, family):
 
 
 def test_every_exclusive_law_has_an_owner_that_exists():
-    from physviol.taxonomy import FAMILIES
+    from physloc.taxonomy import FAMILIES
     for law, owners in EXCLUSIVE_LAWS.items():
         assert law in laws.available(), law
         for fam in owners:

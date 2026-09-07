@@ -6,7 +6,7 @@ specific scenario". A cell that carries a full set of labels describing a
 violation the video does not contain is worse than a cell that does not exist --
 it teaches a model that nothing is something.
 
-Runs against a generated release, so it skips without one. `physviol audit`
+Runs against a generated release, so it skips without one. `physloc audit`
 prints the same measurement in a readable form.
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import os
 import pytest
 
 from conftest import find_release
-from physviol.annotate.audit import audit, is_invisible, is_unscored
-from physviol.taxonomy import BUILD, COMPATIBILITY
+from physloc.annotate.audit import audit, is_invisible, is_unscored
+from physloc.taxonomy import BUILD, COMPATIBILITY
 
 
 def _built_only(rows):
@@ -42,7 +42,7 @@ def _is_stale(root) -> bool:
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     code = max((os.path.getmtime(f) for f in
-                glob.glob(os.path.join(repo, "physviol", "**", "*.py"),
+                glob.glob(os.path.join(repo, "physloc", "**", "*.py"),
                           recursive=True)), default=0.0)
     clips = [os.path.getmtime(f) for f in
              glob.glob(os.path.join(root, "clips", "**", "meta.json"),

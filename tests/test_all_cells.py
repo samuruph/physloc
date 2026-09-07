@@ -12,9 +12,9 @@ import os
 import numpy as np
 import pytest
 
-from physviol import injectors, scenarios
-from physviol.sim.trajectory import prefix_identical
-from physviol.taxonomy import SEVERITY_BINS, build_cells
+from physloc import injectors, scenarios
+from physloc.sim.trajectory import prefix_identical
+from physloc.taxonomy import SEVERITY_BINS, build_cells
 from conftest import REACHABLE_SEEDS, reachable_cell, reachable_ladder
 
 CELLS = [(s, f) for s, f in build_cells() if s in set(scenarios.available())]
@@ -43,7 +43,7 @@ def _prepare(scenario_name, family, severity="strong"):
 
 
 def test_every_family_has_an_injector():
-    from physviol.taxonomy import FAMILIES
+    from physloc.taxonomy import FAMILIES
     assert set(FAMILIES) == set(injectors.available())
 
 
@@ -167,8 +167,8 @@ def test_no_body_moves_without_being_touched(scenario, family):
     is unexplained even though it has been in contact with the ground the whole
     time, and a detector that accepted any contact reported nothing at all.
     """
-    from physviol.injectors import _geom
-    from physviol.injectors.base import Injector
+    from physloc.injectors import _geom
+    from physloc.injectors.base import Injector
 
     spec, traj, inj, plan = _prepare(scenario, family)
     invalid = inj.apply(spec, traj, plan)
@@ -196,13 +196,13 @@ def test_no_body_moves_without_being_touched(scenario, family):
 
 
 #: Checks that cost minutes and only matter before a release run. Opt in with
-#: `PHYSVIOL_RELEASE_CHECKS=1 pytest tests/`. A guard worth 19 minutes before
+#: `PHYSLOC_RELEASE_CHECKS=1 pytest tests/`. A guard worth 19 minutes before
 #: committing a hundred hours of render is not worth 19 minutes per commit.
-RELEASE_CHECKS = os.environ.get("PHYSVIOL_RELEASE_CHECKS") == "1"
+RELEASE_CHECKS = os.environ.get("PHYSLOC_RELEASE_CHECKS") == "1"
 
 
 @pytest.mark.skipif(not RELEASE_CHECKS,
-                    reason="release-geometry sweep; set PHYSVIOL_RELEASE_CHECKS=1")
+                    reason="release-geometry sweep; set PHYSLOC_RELEASE_CHECKS=1")
 def test_every_cell_is_reachable_at_release_geometry():
     """Every cell must build at v0's geometry, not only at the debug tier.
 
@@ -223,7 +223,7 @@ def test_every_cell_is_reachable_at_release_geometry():
     family of a scenario: at 89 frames a mock rollout is the expensive part,
     and re-rolling it 166 times costs minutes.
     """
-    from physviol.scenarios import TIERS
+    from physloc.scenarios import TIERS
     import mockroll
 
     seeds = range(SEED, SEED + V0_SEEDS)
@@ -255,7 +255,7 @@ FRAME_SWEEP = (13, 25, 89)
 
 
 @pytest.mark.skipif(not RELEASE_CHECKS,
-                    reason="clip-length sweep; set PHYSVIOL_RELEASE_CHECKS=1")
+                    reason="clip-length sweep; set PHYSLOC_RELEASE_CHECKS=1")
 def test_every_cell_survives_a_change_of_clip_length():
     """A cell must plan at any clip length, not just the two we ship.
 
@@ -274,7 +274,7 @@ def test_every_cell_survives_a_change_of_clip_length():
     Asserts only what must be true at every length: the cell still builds, the
     event leaves a lawful prefix, and no window runs off either end.
     """
-    from physviol.scenarios import TIERS
+    from physloc.scenarios import TIERS
     import mockroll
 
     bad = []

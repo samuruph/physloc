@@ -2,9 +2,9 @@
 # review -- every cell once, at debug size. The sweep to WATCH before
 # generating anything real.
 #
-#   python -m physviol.cli generate --config review
-#   python -m physviol.cli validate out/release
-#   python -m physviol.cli coverage out/release     # all cells in one video
+#   python -m physloc.cli generate --config review
+#   python -m physloc.cli validate out/release
+#   python -m physloc.cli coverage out/release     # all cells in one video
 #
 # Any flag you type on the command line overrides what is written here, so
 # `--config review --tier v0` is this sweep at release size.
@@ -30,10 +30,10 @@ defaults:
   #   an overnight job into a week.
   #     L0  solid background + one sun lamp. No network. (built)
   #     L1  HDRI environment + dome backdrop, MOVi-style.  (built)
-  #     L2..L4  scaffolded, not built -- see `physviol taxonomy`
+  #     L2..L4  scaffolded, not built -- see `physloc taxonomy`
   complexity: L0
 
-  # tier: the resolution/length ladder. `physviol taxonomy` prints the table.
+  # tier: the resolution/length ladder. `physloc taxonomy` prints the table.
   #     debug  128x128, 12 fps, 25 frames, 16 spp -- NEVER published
   #     v0     256x256, 12 fps, 49 frames, 64 spp
   #     v1     512x512, 24 fps, 97 frames, 64 spp

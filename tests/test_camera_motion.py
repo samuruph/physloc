@@ -9,9 +9,9 @@ import os
 import numpy as np
 import pytest
 
-from physviol import scenarios
-from physviol.scenarios import TIERS
-from physviol.scenarios.base import (CAMERA_MOTION_KINDS, MOVING_CAMERA_SHARE,
+from physloc import scenarios
+from physloc.scenarios import TIERS
+from physloc.scenarios.base import (CAMERA_MOTION_KINDS, MOVING_CAMERA_SHARE,
                                      DOLLY_RANGE)
 
 NAMES = sorted(scenarios.available())
@@ -120,20 +120,20 @@ def test_a_static_camera_really_is_constant():
 
 
 def test_the_debug_override_forces_a_kind():
-    """`PHYSVIOL_CAMERA_MOTION` is how a motion gets looked at without hunting
+    """`PHYSLOC_CAMERA_MOTION` is how a motion gets looked at without hunting
     for a seed that draws it. It must never be set during a release run, so it
     is worth a test that says out loud what it does."""
-    old = os.environ.get("PHYSVIOL_CAMERA_MOTION")
+    old = os.environ.get("PHYSLOC_CAMERA_MOTION")
     try:
         for kind in CAMERA_MOTION_KINDS:
-            os.environ["PHYSVIOL_CAMERA_MOTION"] = kind
+            os.environ["PHYSLOC_CAMERA_MOTION"] = kind
             kinds = {scenarios.get("drop").sample(s, TIERS["debug"], "L0")
                      .camera_motion_kind for s in range(8)}
             assert kinds == {kind}, (kind, kinds)
-        os.environ["PHYSVIOL_CAMERA_MOTION"] = "off"
+        os.environ["PHYSLOC_CAMERA_MOTION"] = "off"
         assert not any(scenarios.get("drop").sample(s, TIERS["debug"], "L0")
                        .camera_moves for s in range(30))
     finally:
-        os.environ.pop("PHYSVIOL_CAMERA_MOTION", None)
+        os.environ.pop("PHYSLOC_CAMERA_MOTION", None)
         if old is not None:
-            os.environ["PHYSVIOL_CAMERA_MOTION"] = old
+            os.environ["PHYSLOC_CAMERA_MOTION"] = old

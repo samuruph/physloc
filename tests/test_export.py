@@ -10,7 +10,7 @@ import tarfile
 import numpy as np
 import pytest
 
-import physviol.release.export as X
+import physloc.release.export as X
 
 
 def _clip(root, pair, name, label, family=None, seed=7):
@@ -57,7 +57,7 @@ def _clip(root, pair, name, label, family=None, seed=7):
 def release(tmp_path):
     root = str(tmp_path / "rel")
     for i in range(12):
-        pair = "physviol_v0/drop/%04d" % i
+        pair = "physloc_v0/drop/%04d" % i
         _clip(root, pair, "valid", "valid")
         _clip(root, pair, "invalid_permanence_strong", "invalid", "permanence")
     return root
@@ -107,7 +107,7 @@ def test_every_split_gets_pairs_even_on_a_small_release():
 def test_splits_are_reproducible():
     """No rng anywhere: the same pairs must always land the same way, or a
     number reported against one build cannot be compared to the next."""
-    uids = ["physviol_v0/drop/%04d" % i for i in range(50)]
+    uids = ["physloc_v0/drop/%04d" % i for i in range(50)]
     assert X.assign_splits(uids) == X.assign_splits(reversed(uids))
 
 
@@ -190,7 +190,7 @@ def test_every_split_sees_every_scenario(tmp_path):
     scenarios and a 5% slice, the small splits would be a couple of scenarios
     each. Stratifying within each scenario is what prevents it.
     """
-    uids = ["physviol_v0/%s/%04d" % (s, i)
+    uids = ["physloc_v0/%s/%04d" % (s, i)
             for s in ("drop", "collision", "pour", "toss") for i in range(20)]
     got = X.assign_splits(uids)
     for name, _ in X.SPLIT_FRACTIONS:

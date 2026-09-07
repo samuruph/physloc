@@ -7,7 +7,7 @@ stream, and tells a reader nothing about what is in it.
 
 This turns that tree into what a dataset host expects:
 
-    physviol_v0/
+    physloc_v0/
       README.md                     the dataset card, with YAML front-matter
       LICENSE
       index.parquet                 one row per clip, for the dataset viewer
@@ -63,7 +63,7 @@ SHARD_BYTES = 400 * 1024 * 1024
 #: Not a random train/val/test, which is what this had first and what neither
 #: prior art does. LikePhys (arXiv:2510.11512) does not split at all -- it is a
 #: training-free evaluator doing pairwise valid-versus-invalid comparison -- and
-#: PhysViol's primary use is the same: evaluation, not fitting. A `train` split
+#: PhysLoc's primary use is the same: evaluation, not fitting. A `train` split
 #: would imply the opposite.
 SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
 
@@ -319,7 +319,7 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
     law is `momentum_conservation`, and that a scenario called `pour` is
     granular rather than rigid.
 
-    Generated from `physviol.taxonomy`, never hand-written, so it cannot drift
+    Generated from `physloc.taxonomy`, never hand-written, so it cannot drift
     from the code the way the prose tables in docs/ did -- five hand-copies of
     the same table disagreed with each other and with the code.
     """
@@ -453,7 +453,7 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "- %s" % ("n<1K" if len(rows) < 1000 else "1K<n<10K"),
         "---",
         "",
-        "# PhysViol",
+        "# PhysLoc",
         "",
         "Physics-violation video clips with **spatio-temporal annotations**: "
         "every invalid clip ships where the violation is, when it happens, and "

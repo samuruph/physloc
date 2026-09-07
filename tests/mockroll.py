@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from physviol.sim.trajectory import Contacts, Trajectory
+from physloc.sim.trajectory import Contacts, Trajectory
 
 SUBSTEPS = 8
 

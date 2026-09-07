@@ -1,8 +1,8 @@
-# PhysViol `meta.json` schema
+# PhysLoc `meta.json` schema
 
 Versioned separately from [PLAN.md](PLAN.md) because the schema will evolve while the design
-does not. The machine-readable copy lives at `physviol/schema/meta.schema.json`; this file is
-the human reference. `physviol validate` enforces both this schema and the cross-checks at
+does not. The machine-readable copy lives at `physloc/schema/meta.schema.json`; this file is
+the human reference. `physloc validate` enforces both this schema and the cross-checks at
 the bottom. The annotation *design* — why each field exists — is [PLAN.md](PLAN.md) Part 3.
 
 **Schema version: 0 (draft — frozen at the end of Phase 1).**
@@ -11,11 +11,11 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 
 ```json
 {
-  "clip_uid": "physviol_v0/collision/0173/invalid_solidity_a",
-  "pair_uid": "physviol_v0/collision/0173",
-  "twin_uid": "physviol_v0/collision/0173/valid",
+  "clip_uid": "physloc_v0/collision/0173/invalid_solidity_a",
+  "pair_uid": "physloc_v0/collision/0173",
+  "twin_uid": "physloc_v0/collision/0173/valid",
   "label": "invalid",
-  "tier": "v0", "release": "physviol_v0",
+  "tier": "v0", "release": "physloc_v0",
   "domain": "contact", "family": "solidity", "scenario": "collision", "seed": 91731,
   "intphys2_category": "solidity", "likephys_domain": "rigid_body",
   "fps": 12, "num_frames": 25, "resolution": [256, 256],
@@ -58,7 +58,7 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 | `twin_uid` | str | the counterpart clip. **Never split a pair across train/val/test.** Several invalid variants may share one valid twin (same scenario+seed → bit-identical valid render), so `pair_uid` groups one valid with N invalids. |
 | `label` | `"valid"` \| `"invalid"` | clip-level ground truth |
 | `tier` | `"v0"` \| `"v1"` | `v0` = 256²/12 fps/49 f; `v1` = 512²/24 fps/97 f. `debug` (128²/25 f) is the iteration loop and is **never published**. Renamed from the old A/B/D letters, which had no C and ran backwards. |
-| `release` | str | `physviol_v0` (tier v0) or `physviol_v1` (tier v1) |
+| `release` | str | `physloc_v0` (tier v0) or `physloc_v1` (tier v1) |
 | `seed` | int | the seed for the whole sampling + render path |
 
 ### Taxonomy (PLAN Part 2)
@@ -75,7 +75,7 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 | `likephys_domain` | str \| null | cross-reference |
 
 `domain` is derivable from `family`, and `(scenario, family)` must be a `●` cell in the
-compatibility matrix. Both are checked by `physviol validate` against `physviol/taxonomy.py`.
+compatibility matrix. Both are checked by `physloc validate` against `physloc/taxonomy.py`.
 Novelty claims (a `null` cross-reference) must be justified in [prior_art.md](prior_art.md).
 
 ### Clip properties
@@ -84,13 +84,13 @@ Novelty claims (a `null` cross-reference) must be justified in [prior_art.md](pr
 `extrinsics_per_frame` (length `num_frames`), `motion` (always `"static"` in v0 -- the camera
 does not move during a clip; `orbit`/`linear` are declared on `Complexity.camera_motion` for a
 later complexity tier and are not yet built), and the actual sampled `position`/`look_at` the
-scenario framed the shot from (world-space, metres -- see `physviol/camera.py`).
+scenario framed the shot from (world-space, metres -- see `physloc/camera.py`).
 
 `prompt` (str) is a textual caption of the clip's *valid* physics, composed per clip from a
 per-scenario template plus whatever shape and color that instance actually sampled --
-`physviol/prompts.py::compose_prompt`. E.g. `"a red cube dropping and colliding with the
+`physloc/prompts.py::compose_prompt`. E.g. `"a red cube dropping and colliding with the
 ground, in an empty background"`. Describes the lawful scene only; it says nothing about
-`family`/`violation` even on an invalid clip; see `physviol/prompts.py`'s docstring for why
+`family`/`violation` even on an invalid clip; see `physloc/prompts.py`'s docstring for why
 invalid captions are not composed the same way.
 
 ### `violation` — null on valid clips
@@ -137,7 +137,7 @@ detector cannot score by flagging weirdness or by keying on the renderer.
 
 ### `assets`
 
-Array of `{name, source, license}`. **`license` is mandatory and non-empty** — `physviol
+Array of `{name, source, license}`. **`license` is mandatory and non-empty** — `physloc
 validate` fails otherwise. This is what makes the Phase 5 audit a check rather than an
 archaeology project.
 
@@ -440,7 +440,7 @@ is expressed -- the body is *gone*, not moved somewhere odd);
 (`violation_windows`, `causal_body_ids`, intervention params). Shipped so renders reproduce
 without re-simulating.
 
-## Cross-checks enforced by `physviol validate`
+## Cross-checks enforced by `physloc validate`
 
 1. jsonschema conformance against `meta.schema.json`
 2. `t_event_frame ≤ t_observable_frame` and `t_event_frame ≤ t_end_frame`

@@ -4,7 +4,7 @@ Four attempts have been ruled out by measuring the OUTPUT. This measures the
 hook itself: every substep it sees, whether it thinks the bodies are touching,
 and what it does when contact ends.
 
-    bash docker/kubric.sh physviol/render/probe_superelastic.py --scenario collision
+    bash docker/kubric.sh physloc/render/probe_superelastic.py --scenario collision
 """
 import argparse
 import os
@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 
 import numpy as np
 
-from physviol import injectors, scenarios
-from physviol.render import stepper
-from physviol.render.worker import build_scene, simulate
+from physloc import injectors, scenarios
+from physloc.render import stepper
+from physloc.render.worker import build_scene, simulate
 
 
 def main():
@@ -49,7 +49,7 @@ def main():
           % (type(inj).__name__, inj.stage.__qualname__,
              getattr(inj, "simulated", None)))
     src = inspect.getsource(inj.stage)
-    print("stage source has DEBUG marker:", "PHYSVIOL_DEBUG_SE" in src)
+    print("stage source has DEBUG marker:", "PHYSLOC_DEBUG_SE" in src)
     print("stage source has moving_partner:", "moving_partner" in src)
     hooks = inj.stage(spec, sim, objs, plan) or ()
     print("hooks returned:", len(hooks))

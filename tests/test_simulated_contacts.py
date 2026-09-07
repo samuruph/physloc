@@ -18,7 +18,7 @@ import os
 import numpy as np
 import pytest
 
-from physviol.sim.trajectory import Trajectory
+from physloc.sim.trajectory import Trajectory
 
 #: (scenario, family) -> must the culprit still touch what it touched lawfully?
 SIMULATED = ("continuity", "phantom_impulse", "newton1_inertia", "solidity")
@@ -77,7 +77,7 @@ def _pairs_after(traj, t_event):
 def work():
     plans = _plans()
     if not plans:
-        pytest.skip("no worker output; run `python -m physviol.cli generate --debug`")
+        pytest.skip("no worker output; run `python -m physloc.cli generate --debug`")
     return plans
 
 

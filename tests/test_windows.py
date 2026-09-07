@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 
-from physviol.annotate import windows as win
+from physloc.annotate import windows as win
 
 
 def test_rasterise_to_windows_roundtrip():
@@ -65,7 +65,7 @@ def test_severity_is_attributed_to_the_frame_it_becomes_visible():
     frame that shows nothing. Carrying it to the next observable frame is what
     keeps the severity field honest about how bad the violation was.
     """
-    from physviol.annotate.severity import attribute_to_evidence
+    from physloc.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 0, 1, 1, 1, 1, 0, 0], bool)
     observable = np.array([0, 0, 0, 1, 1, 1, 1, 1], bool)
@@ -84,7 +84,7 @@ def test_carry_to_visible_is_the_identity_when_nothing_is_hidden():
     release into a monotone step, losing exactly the time variation the
     severity field exists to express.
     """
-    from physviol.annotate.severity import attribute_to_evidence
+    from physloc.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 1, 1, 1, 1, 0], bool)
     s = np.array([0.0, 0.5, 1.0, 1.0, 0.5, 0.0])
@@ -102,7 +102,7 @@ def test_evidence_after_the_window_still_gets_annotated():
     all-zero severity field -- internally consistent and useless. The severity
     spills to the first observable frame instead.
     """
-    from physviol.annotate.severity import attribute_to_evidence
+    from physloc.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 0, 0, 0, 1, 1, 0, 0], bool)
     observable = np.array([0, 0, 0, 0, 0, 0, 1, 1], bool)
@@ -115,7 +115,7 @@ def test_evidence_after_the_window_still_gets_annotated():
 def test_a_never_observable_window_annotates_nothing():
     """Removed while fully occluded: no evidence anywhere, and the annotation
     must say so rather than invent a region."""
-    from physviol.annotate.severity import attribute_to_evidence
+    from physloc.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 1, 1, 1, 0], bool)
     gate, out = attribute_to_evidence(np.array([0, 1.0, 1.0, 1.0, 0]),

@@ -20,9 +20,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import physviol.scenarios  # noqa: F401  -- registers every scenario
-from physviol.injectors import _geom
-from physviol.scenarios import base as B
+import physloc.scenarios  # noqa: F401  -- registers every scenario
+from physloc.injectors import _geom
+from physloc.scenarios import base as B
 
 import mockroll
 

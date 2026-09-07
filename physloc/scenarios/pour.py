@@ -6,7 +6,7 @@ headless baking fails (`NameError: liquid_save_data_N` -> `Manta::Error`),
 Kubric exposes no fluid object, and a liquid does not fit a pose-based
 trajectory seam in any case. So v0 ships the honest neighbour -- a few dozen
 rigid grains, which streams, piles and breaks up like a granular medium -- and
-labels it `physics_medium: "granular"`. `physviol validate` rejects any clip
+labels it `physics_medium: "granular"`. `physloc validate` rejects any clip
 claiming `"fluid"` at schema v0. Real fluid and cloth are Phase 3, behind a
 newer Blender.
 

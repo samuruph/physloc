@@ -539,7 +539,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     # A debug override, for looking at one motion without hunting for a seed
     # that happens to draw it:
     #
-    #     PHYSVIOL_CAMERA_MOTION=orbit  python -m physviol.cli generate ...
+    #     PHYSLOC_CAMERA_MOTION=orbit  python -m physloc.cli generate ...
     #
     # `off` forces every clip static; a kind name forces that kind on every
     # clip that is allowed to move; `always` picks among the kinds as usual but
@@ -548,7 +548,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     # a release run, which is why it is named this loudly.
     import os
 
-    forced = os.environ.get("PHYSVIOL_CAMERA_MOTION", "").strip().lower()
+    forced = os.environ.get("PHYSLOC_CAMERA_MOTION", "").strip().lower()
     if forced in ("off", "static", "none"):
         return
     if not spec.camera_motion:

@@ -1,4 +1,4 @@
-# PhysViol
+# PhysLoc
 
 **A spatio-temporally annotated physics-violation video dataset.** Every clip that breaks a
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
@@ -6,7 +6,7 @@ physical law ships with *where in the frame*, *exactly when*, *for how long*, an
 
 > **Status: every build cell generates, annotates and validates.** 13 built scenarios × 23
 > violation families compose through the trajectory seam into **166 cells**, and
-> `physviol generate` walks the whole matrix in one command. Each clip depicts *one*
+> `physloc generate` walks the whole matrix in one command. Each clip depicts *one*
 > violation — that is asserted, not hoped for; see
 > [§7](#7-orthogonality-what-the-labels-guarantee). Publishing:
 > [§5b](#5b-publishing-a-release).
@@ -20,7 +20,7 @@ physical law ships with *where in the frame*, *exactly when*, *for how long*, an
 # Host environment: annotation, severity, grids, validation, viz.
 # Does NOT contain Kubric/Blender/PyBullet -- those live in the docker image.
 conda env create -f environment.yml
-conda activate physviol
+conda activate physloc
 
 # The render image (digest pinned in docker/IMAGE_DIGEST)
 docker pull kubricdockerhub/kubruntu
@@ -30,14 +30,14 @@ bash scripts/fetch_refs.sh
 ```
 
 **Two environments, never mixed.** The pinned container holds Kubric 2022.4.1 / Blender
-2.93.4 / PyBullet (Python 3.9) and does simulation + rendering. The `physviol` conda env
+2.93.4 / PyBullet (Python 3.9) and does simulation + rendering. The `physloc` conda env
 (Python 3.11) does everything else. They meet at the trajectory seam (`traj.npz`).
 
 ---
 
 ## 2. The runs
 
-Three configs, one command each. `conda activate physviol` first.
+Three configs, one command each. `conda activate physloc` first.
 
 | | config | what it is | cost |
 |---|---|---|---|
@@ -60,9 +60,9 @@ a `grid` per family. Then open `out/release/coverage.mp4` first.
 The same thing by hand, if you want the steps separately:
 
 ```bash
-python -m physviol.cli generate --config review
-python -m physviol.cli validate out/release
-python -m physviol.cli coverage out/release
+python -m physloc.cli generate --config review
+python -m physloc.cli validate out/release
+python -m physloc.cli coverage out/release
 ```
 
 ### The v0 release
@@ -71,14 +71,14 @@ python -m physviol.cli coverage out/release
 run `generate` would perform.
 
 ```bash
-python -m physviol.cli taxonomy --config v0_release
+python -m physloc.cli taxonomy --config v0_release
 bash scripts/run.sh v0_release
 ```
 
 ### The v1 release
 
 ```bash
-python -m physviol.cli taxonomy --config v1_release
+python -m physloc.cli taxonomy --config v1_release
 bash scripts/run.sh v1_release
 ```
 
@@ -96,19 +96,19 @@ is the review settings on one scenario.
 
 ```bash
 # ONE cell -- the fastest loop there is, ~14 s
-python -m physviol.cli generate --config review --scenario occluder_pass --family permanence
+python -m physloc.cli generate --config review --scenario occluder_pass --family permanence
 
 # every family one scenario supports, in a single container run
-python -m physviol.cli generate --config review --scenario drop
+python -m physloc.cli generate --config review --scenario drop
 
 # one family everywhere it is meaningful
-python -m physviol.cli generate --config review --family solidity
+python -m physloc.cli generate --config review --family solidity
 
 # stop after N cells, for a smoke test
-python -m physviol.cli generate --config review -n 6
+python -m physloc.cli generate --config review -n 6
 
 # the review matrix at release resolution
-python -m physviol.cli generate --config review --tier v0
+python -m physloc.cli generate --config review --tier v0
 ```
 
 `--keep-going` carries on past a cell that fails and lists the failures at the end; the
@@ -135,7 +135,7 @@ Anything both `generate` and `taxonomy` understand lives in `defaults:` once —
 `taxonomy --config X` prices exactly what `generate --config X` would build.
 
 `configs/review.yaml` documents every available key and its alternatives inline. An unknown
-key under a command's own block is an error, not a warning. `PHYSVIOL_CONFIG=review` in the
+key under a command's own block is an error, not a warning. `PHYSLOC_CONFIG=review` in the
 environment does the same as passing `--config review`.
 
 ### Randomisation
@@ -169,7 +169,7 @@ cylinder is a crashed render, not a subtly wrong collider.
 Check it without rendering anything:
 
 ```bash
-python -m physviol.cli randomisation --seeds 24      # distinct values per axis, in seconds
+python -m physloc.cli randomisation --seeds 24      # distinct values per axis, in seconds
 ```
 
 A column of `1` is an axis that is not varying. Some are legitimate — `collision` gives both
@@ -179,7 +179,7 @@ justify.
 To look at one camera motion without hunting for a seed that draws it:
 
 ```bash
-PHYSVIOL_CAMERA_MOTION=orbit python -m physviol.cli generate --debug \
+PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --debug \
     --scenario collision --family solidity
 ```
 
@@ -195,17 +195,17 @@ that shape — one `valid` and one or more `invalid` per `pair_uid`.
 ## 3. Look at what came out
 
 **Nothing writes image files.** The container has no ffmpeg, so it writes arrays and every
-mp4 is encoded host-side by `physviol/viz/video.py`.
+mp4 is encoded host-side by `physloc/viz/video.py`.
 
 ```bash
 # five-panel annotated video for ONE clip
-python -m physviol.cli overlay out/release/clips/physviol_v0/drop/0777/invalid_solidity_strong
+python -m physloc.cli overlay out/release/clips/physloc_v0/drop/0777/invalid_solidity_strong
 
 # the valid clip beside every severity bin of one family
-python -m physviol.cli grid out/release/clips/physviol_v0/drop/0777 --family solidity
+python -m physloc.cli grid out/release/clips/physloc_v0/drop/0777 --family solidity
 
 # ONE video tiling every invalid clip in the release -- the coverage check
-python -m physviol.cli coverage out/release
+python -m physloc.cli coverage out/release
 ```
 
 `coverage.mp4` is the one to open first after a sweep: every cell at once, each tile captioned
@@ -249,26 +249,26 @@ Every subcommand takes `--config NAME`.
 
 ```bash
 # Taxonomy: 5 media, 23 families, 15 declared scenarios (13 built), 166 build cells
-python -m physviol.cli taxonomy
-python -m physviol.cli taxonomy -v                    # + every cell
-python -m physviol.cli taxonomy --config v0_release   # + hours and clip counts
+python -m physloc.cli taxonomy
+python -m physloc.cli taxonomy -v                    # + every cell
+python -m physloc.cli taxonomy --config v0_release   # + hours and clip counts
 
 # How varied is the sampler, per axis? Renders nothing, runs in seconds.
-python -m physviol.cli randomisation --seeds 24
+python -m physloc.cli randomisation --seeds 24
 
 # Package a release for distribution -- shards, index, card, splits.  Section 5b.
-python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0
+python -m physloc.cli export out/physloc_v0 --outdir out/hf/physloc_v0
 
 # Re-annotate without re-rendering -- picks up any annotation change for free
-python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
+python -m physloc.cli annotate out/work/drop/0777 --outdir out/release
 
 # Videos
-python -m physviol.cli overlay  out/release/clips/.../invalid_solidity_strong
-python -m physviol.cli grid     out/release/clips/physviol_v0/drop/0777 --family solidity
-python -m physviol.cli sheet    out/release/clips/physviol_v0/drop/0777 --view energy
-python -m physviol.cli coverage out/release
+python -m physloc.cli overlay  out/release/clips/.../invalid_solidity_strong
+python -m physloc.cli grid     out/release/clips/physloc_v0/drop/0777 --family solidity
+python -m physloc.cli sheet    out/release/clips/physloc_v0/drop/0777 --view energy
+python -m physloc.cli coverage out/release
 
-python -m physviol.cli validate out/release
+python -m physloc.cli validate out/release
 
 python -m pytest tests/ -q                    # 1012 tests, no docker needed
 python -m pytest tests/test_all_cells.py -q   # plans and applies all 166 cells
@@ -324,11 +324,11 @@ in a known place instead of a gap the tiles close up around.
 
 ```bash
 # throughput probe (no assets downloaded, pure render cost)
-bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 256 --frames 8
+bash docker/kubric.sh physloc/render/worker_smoke.py --resolution 256 --frames 8
 
 # the real worker: simulate + inject + render both twins.
 # --family takes a comma list; they share one scene build and one valid render.
-bash docker/kubric.sh physviol/render/worker.py \
+bash docker/kubric.sh physloc/render/worker.py \
     --scenario drop --seed 777 --tier debug --complexity L0 \
     --family solidity,antigravity --severity strong --outdir out/work
 ```
@@ -349,7 +349,7 @@ enters version control. Concretely, after `--variants 2 --severity all`:
 out/release/
   coverage_strong.mp4                       every cell in the release, one video
   clips/
-    physviol_v0/
+    physloc_v0/
       drop/                                 <- SCENARIO
         0777/                               <- SEED = base seed + variant index
           valid/                            <- ONE valid twin, shared by every
@@ -449,15 +449,15 @@ into a dataset:
 
 ```bash
 # package (local, repeatable)
-python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0
+python -m physloc.cli export out/physloc_v0 --outdir out/hf/physloc_v0
 
 # package AND upload (deliberately a second step -- publishing is not repeatable)
-python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0 \
-    --push-to <user>/physviol-v0
+python -m physloc.cli export out/physloc_v0 --outdir out/hf/physloc_v0 \
+    --push-to <user>/physloc-v0
 ```
 
 ```
-out/hf/physviol_v0/
+out/hf/physloc_v0/
   README.md                    dataset card, YAML front-matter first
   LICENSE
   taxonomy.json                what every scenario and family MEANS
@@ -474,7 +474,7 @@ hundred gigabytes of optical flow to get it.
 
 ### `taxonomy.json` — the per-scenario metadata
 
-Generated from `physviol/taxonomy.py`, never hand-written, because five hand-copies of this
+Generated from `physloc/taxonomy.py`, never hand-written, because five hand-copies of this
 table in `docs/` already disagreed with each other and with the code. Per scenario:
 `description`, `event_structure`, `physics_medium`, `grounded_in` (the prior-art scenario it
 comes from), `has_occluder`, `provides` (the capabilities it offers injectors), the
@@ -504,7 +504,7 @@ regenerating anything — putting the pairs on the wrong side of a boundary is n
 
 There is deliberately **no `train` split**. LikePhys (arXiv:2510.11512) does not split at
 all — it is a training-free evaluator doing pairwise valid-versus-invalid comparison — and
-PhysViol's primary use is the same. Naming a split `train` would imply the opposite.
+PhysLoc's primary use is the same. Naming a split `train` would imply the opposite.
 
 Three properties, each pinned by a test in `tests/test_export.py`:
 
@@ -531,7 +531,7 @@ so a release that grows should be re-split and re-reported rather than appended 
 
 ## 6. How it is organised
 
-Four levels — `python -m physviol.cli taxonomy` prints the live version, which is the
+Four levels — `python -m physloc.cli taxonomy` prints the live version, which is the
 authority if this ever drifts from the counts below:
 
 ```
@@ -591,7 +591,7 @@ Tested rather than assumed: Blender 2.93.4 in the pinned image ships Mantaflow, 
 scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no
 fluid object, and a liquid's per-frame mesh state does not fit a pose-based trajectory seam.
 `pour` is the v0 stand-in — a few dozen rigid grains that stream, pile and break up —
-and it is labelled `physics_medium: "granular"`. `physviol validate` rejects any clip
+and it is labelled `physics_medium: "granular"`. `physloc validate` rejects any clip
 claiming `"fluid"`. Real fluid and cloth are **Phase 3**, behind a newer Blender.
 
 ---
@@ -618,12 +618,12 @@ rest are separated by *staging*, not by residual: `antigravity`, `phantom_impuls
 `newton1_inertia` all move `linear_momentum`, because they must —
 bend a body's gravity and its momentum residual moves with it. Physics is not separable there
 and pretending otherwise would be the wrong fix. What separates them is the situation, which a
-model has to read from the image. The dataset card written by `physviol export` says which is
+model has to read from the image. The dataset card written by `physloc export` says which is
 which, and what that means for a confusion matrix.
 
 ## 8. Tiers
 
-| | `debug` | `v0` (`physviol_v0`) | `v1` (`physviol_v1`) |
+| | `debug` | `v0` (`physloc_v0`) | `v1` (`physloc_v1`) |
 |---|---|---|---|
 | resolution | 128² | 512² | 512² |
 | frames @ fps | 25 @ 12 | 89 @ 30 | 89 @ 30 |
@@ -654,7 +654,7 @@ the alphabet implies ran backwards from the one that matters. `scenarios.base.ti
 changed, so `v0+res128f25` never gets confused with `v0` in `meta.json`:
 
 ```bash
-python -m physviol.cli generate --tier v0 --frames 25 --resolution 128
+python -m physloc.cli generate --tier v0 --frames 25 --resolution 128
 ```
 
 | flag | overrides | note |
@@ -681,7 +681,7 @@ docker/               kubric.sh wrapper + pinned image digest
 scripts/run.sh        generate + validate + every video, from a config
 scripts/fetch_refs.sh pinned read-only Kubric checkout -> refs/
 configs/*.yaml        run settings: review, v0_release, v1_release
-physviol/
+physloc/
   taxonomy.py         Part 2 as data: domains, families, scenarios, compatibility
   scenarios/          seeded scene samplers (declarative SceneSpec, no Kubric import)
                       _common.py ground/lights/ramps/understudies; _hdri.py environments
@@ -708,7 +708,7 @@ population, a realistic twin of every clip, and deeper randomisation.
 ## 11. Evaluating on it
 
 Report **per family (23)**, aggregate to **domain (8)**, and cross with **severity** and
-**camera motion**. `index.parquet` from `physviol export` carries every one of those fields
+**camera motion**. `index.parquet` from `physloc export` carries every one of those fields
 per clip, so a breakdown is a groupby rather than a crawl over 1500 `meta.json` files.
 
 Three things that will bite otherwise:

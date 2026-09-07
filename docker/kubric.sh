@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run a worker script inside the pinned Kubric image.
 #
-#   bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 512
+#   bash docker/kubric.sh physloc/render/worker_smoke.py --resolution 512
 #
 # The pattern is "your script, their container": the image already contains a
 # complete Kubric + Blender install, so we mount this repo at /kubric and run our
@@ -35,7 +35,7 @@ fi
 # unset dial cannot silently become an empty string inside the container.
 exec docker run --rm --interactive \
   --user "$(id -u):$(id -g)" \
-  --env PHYSVIOL_CAMERA_MOTION \
+  --env PHYSLOC_CAMERA_MOTION \
   --volume "$REPO_ROOT:/kubric" \
   --workdir /kubric \
   "$IMAGE" \

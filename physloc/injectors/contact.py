@@ -1032,7 +1032,7 @@ class SuperElastic(Injector):
             else:
                 f += 1
         # Merge anything that touches, so the windows stay sorted and disjoint
-        # -- `physviol validate` rejects overlaps, and a bounce two frames after
+        # -- `physloc validate` rejects overlaps, and a bounce two frames after
         # another is one violation, not two.
         merged: List[Tuple[int, int]] = []
         for s, e in sorted(out):

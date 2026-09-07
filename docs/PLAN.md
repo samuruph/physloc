@@ -1,4 +1,4 @@
-# PhysViol — the design
+# PhysLoc — the design
 
 **What this file is for.** The *reasoning* behind the annotations: why a violation is a set
 of intervals rather than an onset, and how severity is derived. That reasoning is still
@@ -11,7 +11,7 @@ docs, and the repo skeleton listed fifteen files that do not exist. For anything
 | you want | look at |
 |---|---|
 | how to run anything | [../README.md](../README.md) |
-| counts, families, scenarios, cells | `python -m physviol.cli taxonomy` |
+| counts, families, scenarios, cells | `python -m physloc.cli taxonomy` |
 | what a `meta.json` field means | [schema.md](schema.md) |
 | locked decisions and traps | [../CLAUDE.md](../CLAUDE.md) |
 | what is next, and what is undecided | [roadmap.md](roadmap.md) |
@@ -175,7 +175,7 @@ Rasterised into **`timelines.npz`** so consumers never expand intervals themselv
   `observable_windows = [[19,26],[38,50]]`
 - `instant` violations are the degenerate case, a single window of length 1
 
-**Invariant, enforced by `physviol validate`:** `t_event ≤ t_observable` and `t_event ≤ t_end`;
+**Invariant, enforced by `physloc validate`:** `t_event ≤ t_observable` and `t_event ≤ t_end`;
 `violation_windows` are sorted, non-overlapping, and within `[0, T)`; `active` is exactly the
 rasterisation of `violation_windows`.
 

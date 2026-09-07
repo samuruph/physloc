@@ -4,8 +4,8 @@ One valid-physics caption template per scenario (LikePhys style: a short noun
 phrase naming the scene and what happens in it, e.g. their "two balls
 colliding with each other"), with `{color}`/`{shape}` slots that
 `compose_prompt` fills from whatever a given clip actually sampled -- see
-`physviol/scenarios/base.py::SceneSpec.to_dict` for where `color` and `kind`
-reach `spec_d`. `physviol/annotate/pipeline.py::_build_meta` calls
+`physloc/scenarios/base.py::SceneSpec.to_dict` for where `color` and `kind`
+reach `spec_d`. `physloc/annotate/pipeline.py::_build_meta` calls
 `compose_prompt` once per clip and writes the result to `meta.json["prompt"]`,
 so two clips of the same scenario read differently when they sampled
 differently ("a red cube dropping..." vs "a blue ball dropping...").
@@ -29,7 +29,7 @@ VLM against the rendered frames instead, later; see docs/PLAN.md.
 Run as a script to (re)write `docs/prompts_v0.json` -- the templates
 themselves, placeholders and all, not any one clip's filled-in prompt:
 
-    python -m physviol.prompts
+    python -m physloc.prompts
 """
 from __future__ import annotations
 

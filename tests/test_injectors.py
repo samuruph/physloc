@@ -3,9 +3,9 @@ import numpy as np
 import pytest
 
 import mockroll
-from physviol import injectors, scenarios
-from physviol.scenarios import TIERS
-from physviol.sim.trajectory import Contacts, Trajectory, prefix_identical
+from physloc import injectors, scenarios
+from physloc.scenarios import TIERS
+from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
 
 
 def _valid_traj(spec, T=13, fps=12.0):
@@ -186,7 +186,7 @@ def test_bounce_gate_does_not_eat_the_antigravity_signal():
 def _collision_traj():
     """Two equal spheres closing head-on, with a lawful elastic exchange."""
     import mockroll
-    from physviol import scenarios
+    from physloc import scenarios
     sc = scenarios.get("collision")
     spec = sc.sample(4242, TIERS["debug"], "L0")
     return spec, mockroll.roll(spec, sc)
@@ -209,7 +209,7 @@ def test_newton3_reaction_is_retired():
     momentum, unreliable across severity bins. `taxonomy.RETIRED` keeps the
     reasoning so the question is not reopened from scratch.
     """
-    from physviol import injectors, taxonomy
+    from physloc import injectors, taxonomy
 
     assert "newton3_reaction" not in taxonomy.FAMILIES
     assert "newton3_reaction" not in injectors.available()
@@ -218,7 +218,7 @@ def test_newton3_reaction_is_retired():
 
 def test_newton2_needs_visually_identical_bodies():
     """The scenario has to hold up its end: same radius, same colour."""
-    from physviol import scenarios
+    from physloc import scenarios
     for seed in (1, 777, 4242):
         spec = scenarios.get("collision").sample(seed, TIERS["debug"], "L0")
         # Dormant understudies carry role "actor" too -- they are the body

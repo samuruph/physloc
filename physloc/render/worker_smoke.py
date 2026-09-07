@@ -3,7 +3,7 @@
 Deliberately uses only built-in primitives -- no AssetSource, so nothing is
 downloaded from GCS and the timing measures render cost alone.
 
-Run:  bash docker/kubric.sh physviol/render/worker_smoke.py --frames 4
+Run:  bash docker/kubric.sh physloc/render/worker_smoke.py --frames 4
 
 Reports seconds per frame at the master clip settings (512 sq, Cycles) so the
 CPU-vs-OptiX decision in docs/PLAN.md Part 6 rests on a number, not a guess.

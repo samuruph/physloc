@@ -49,8 +49,8 @@ def reachable_cell(scenario_name, family, seed, severity="strong"):
     """
     import numpy as np
     import mockroll
-    from physviol import injectors, scenarios
-    from physviol.scenarios import TIERS
+    from physloc import injectors, scenarios
+    from physloc.scenarios import TIERS
 
     sc = scenarios.get(scenario_name)
     inj = injectors.get(family)
@@ -78,8 +78,8 @@ def reachable_ladder(scenario_name, family, seed, severities):
     """
     import numpy as np
     import mockroll
-    from physviol import injectors, scenarios
-    from physviol.scenarios import TIERS
+    from physloc import injectors, scenarios
+    from physloc.scenarios import TIERS
 
     sc = scenarios.get(scenario_name)
     inj = injectors.get(family)

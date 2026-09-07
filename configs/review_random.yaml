@@ -7,21 +7,21 @@
 # camera all vary per instance now, and none of that is visible in a sweep that
 # renders each cell once.
 #
-#   python -m physviol.cli generate --config review_random
-#   python -m physviol.cli validate out/review_random     # must exit 0
-#   python -m physviol.cli audit    out/review_random     # cells depicting nothing
-#   python -m physviol.cli coverage out/review_random     # every cell, one video
+#   python -m physloc.cli generate --config review_random
+#   python -m physloc.cli validate out/review_random     # must exit 0
+#   python -m physloc.cli audit    out/review_random     # cells depicting nothing
+#   python -m physloc.cli coverage out/review_random     # every cell, one video
 #
 # Four variants of 166 cells is 664 invalid clips plus their valid twins. At
 # the debug tier's ~8 s a clip that is roughly ninety minutes at four workers.
 # Price it exactly before starting:
 #
-#   python -m physviol.cli taxonomy --config review_random
+#   python -m physloc.cli taxonomy --config review_random
 #
 # To look at ONE thing instead, do not run this file -- render a single cell:
 #
-#   python -m physviol.cli generate --debug --scenario drop --family continuity
-#   PHYSVIOL_CAMERA_MOTION=orbit python -m physviol.cli generate --debug \
+#   python -m physloc.cli generate --debug --scenario drop --family continuity
+#   PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --debug \
 #       --scenario collision --family solidity
 # ============================================================================
 

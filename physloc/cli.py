@@ -1,11 +1,11 @@
-"""physviol command line.
+"""physloc command line.
 
-    conda activate physviol
-    python -m physviol.cli taxonomy
-    python -m physviol.cli generate --debug -n 2
-    python -m physviol.cli annotate out/work/drop/0173
-    python -m physviol.cli overlay out/release/clips/.../invalid_solidity_a
-    python -m physviol.cli validate out/release
+    conda activate physloc
+    python -m physloc.cli taxonomy
+    python -m physloc.cli generate --debug -n 2
+    python -m physloc.cli annotate out/work/drop/0173
+    python -m physloc.cli overlay out/release/clips/.../invalid_solidity_a
+    python -m physloc.cli validate out/release
 
 `generate` is the end-to-end path: it shells out to docker/kubric.sh for the
 simulate+render half (container) and then runs annotation and overlays here
@@ -398,7 +398,7 @@ def cmd_generate(a) -> int:
 def _run_worker(scenario, seed, tier, family, severity, workdir,
                 complexity="L0", window=None, dials=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
-           "physviol/render/worker.py", "--scenario", scenario,
+           "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
            "--severity", severity, "--complexity", complexity,
            "--outdir", workdir]
@@ -421,11 +421,11 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
 def _annotate(workdir, outroot, overlay=True, only=None):
     from .annotate.pipeline import annotate_work
     # The release NAME comes from where the release is being written. It
-    # defaulted to the literal "physviol_v0" and nothing ever passed it, so a
-    # v1 run wrote `out/physviol_v1/clips/physviol_v0/...` and stamped
-    # `"release": "physviol_v0"` into every meta.json it produced -- a whole
+    # defaulted to the literal "physloc_v0" and nothing ever passed it, so a
+    # v1 run wrote `out/physloc_v1/clips/physloc_v0/...` and stamped
+    # `"release": "physloc_v0"` into every meta.json it produced -- a whole
     # release mislabelled as the previous one.
-    release = os.path.basename(os.path.normpath(outroot)) or "physviol_v0"
+    release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
     results = annotate_work(workdir, outroot, release=release, only=only)
     if overlay:
         from .viz.overlay import build
@@ -559,7 +559,7 @@ def _build(suppress: bool = False):
     indistinguishable from "the user typed nothing".
     """
     kw = {"argument_default": argparse.SUPPRESS} if suppress else {}
-    ap = argparse.ArgumentParser(prog="physviol", **kw)
+    ap = argparse.ArgumentParser(prog="physloc", **kw)
     sub = ap.add_subparsers(dest="cmd", required=True)
     subs = {}
 
@@ -586,7 +586,7 @@ def _build(suppress: bool = False):
     p = add_parser("generate", help="simulate+render+annotate end to end")
     p.add_argument("--debug", action="store_true", help="the debug tier (fast, unpublished)")
     p.add_argument("--tier", default="debug",
-                   help="debug | v0 | v1 -- see `physviol taxonomy`")
+                   help="debug | v0 | v1 -- see `physloc taxonomy`")
     p.add_argument("--variants", type=int, default=1,
                    help="randomisations per cell: each is a fresh seed, so "
                         "sizes, speeds, colours, camera, HDRI and (where "
@@ -687,7 +687,7 @@ def _build(suppress: bool = False):
     p.add_argument("--shard-mb", type=int, default=400)
     p.add_argument("--push-to", metavar="REPO_ID",
                    help="after packaging, upload to this HuggingFace dataset "
-                        "repo (e.g. samueleruf/physviol-v0). Needs "
+                        "repo (e.g. samueleruf/physloc-v0). Needs "
                         "huggingface_hub and a login token.")
     p.add_argument("--private", action="store_true",
                    help="create the hub repo private")

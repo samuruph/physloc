@@ -1,8 +1,8 @@
 # ============================================================================
 # v0_release -- the published dataset.
 #
-#   python -m physviol.cli taxonomy --config v0_release   # price it FIRST
-#   python -m physviol.cli generate --config v0_release
+#   python -m physloc.cli taxonomy --config v0_release   # price it FIRST
+#   python -m physloc.cli generate --config v0_release
 #
 # See configs/review.yaml for what every key means; only the values that
 # differ from a review sweep are commented here.
@@ -11,7 +11,7 @@
 # Shared by `generate` and `taxonomy`, so the sizing estimate is of exactly the
 # run that would happen. This is why the two commands are not repeated blocks:
 # anything both understand belongs here once.
-# Sizing at 512x512 (`physviol taxonomy --config v0_release`). Complexity and
+# Sizing at 512x512 (`physloc taxonomy --config v0_release`). Complexity and
 # variants are the dials; the severity ladder costs 3x the clips but the valid
 # twin and the scene build are shared, so it is the cheapest breadth you can
 # buy:
@@ -33,4 +33,4 @@ generate:
   keep_going: true
   workers: 4
   workdir: out/work_v0
-  outdir: out/physviol_v0
+  outdir: out/physloc_v0

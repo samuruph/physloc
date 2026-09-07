@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from physviol import cli, config
+from physloc import cli, config
 
 
 def _valid(subs, cmd):

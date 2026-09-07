@@ -1,4 +1,4 @@
-# PhysViol — orientation
+# PhysLoc — orientation
 
 A spatio-temporally annotated physics-violation video dataset: every invalid clip ships
 *where*, *when* and *how badly*, derived from the simulator rather than annotated by hand.
@@ -7,15 +7,15 @@ A spatio-temporally annotated physics-violation video dataset: every invalid cli
 current. [docs/PLAN.md](docs/PLAN.md) is the design document: its *reasoning* is sound, its
 *numbers* have drifted, so trust the code over any count you read there.
 [docs/schema.md](docs/schema.md) holds the `meta.json` reference. The IntPhys 2 and
-LikePhys mapping is DATA, on each family in `physviol/taxonomy.py` — the prose copy of it was
+LikePhys mapping is DATA, on each family in `physloc/taxonomy.py` — the prose copy of it was
 deleted because it drifted from the data it described.
 
-**Counts live in `physviol/taxonomy.py` and nowhere else.** `python -m physviol.cli taxonomy`
+**Counts live in `physloc/taxonomy.py` and nowhere else.** `python -m physloc.cli taxonomy`
 prints them. Prose copies of these tables have drifted five different ways; do not add a
 sixth.
 
 **Status: the whole matrix builds.** 13 scenarios x 23 families compose into **166 cells**;
-`physviol generate` walks them, `validate` checks them, `export` packages them for
+`physloc generate` walks them, `validate` checks them, `export` packages them for
 publication. Nothing has been published yet.
 
 ## Locked decisions — don't relitigate without saying so
@@ -24,10 +24,10 @@ publication. Nothing has been published yet.
   the trajectory seam.
 - **Three tiers.** **the debug tier (debug, default)**: 128×128, 12 fps, 25 frames, 16 spp — **~8 s per
   clip**, never published; this is what you iterate on. tier v0
-  (`physviol_v0`, build now): **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip.
+  (`physloc_v0`, build now): **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip.
   30 fps so the release downsamples cleanly to 15 and 10; 89 rather than 90 because every
   frame count must be `4k+1` for VAE latent alignment.
-  tier v1 (`physviol_v1`, later): **the same geometry as v0**; it differs by
+  tier v1 (`physloc_v1`, later): **the same geometry as v0**; it differs by
   complexity (L1, photographic) and population (multi), not by resolution — so a
   model scoring worse on v1 is failing at realism or clutter, not at an unfamiliar
   render size. See docs/roadmap.md §3. Same generators, one config
@@ -50,7 +50,7 @@ publication. Nothing has been published yet.
   `severity_map`). There is no "severity mask": `violation_mask` is binary *where*,
   `severity_map` is continuous *how badly*. PLAN §3.4 works a full numeric example.
 - **Taxonomy is five levels**: medium (5) → domain (8) → family (23) → scenario (15
-  declared, 13 built) → instance. Encoded as data in `physviol/taxonomy.py`, including the
+  declared, 13 built) → instance. Encoded as data in `physloc/taxonomy.py`, including the
   scenario × family compatibility matrix. `clutter_toss` and `tumble` are `UNBUILT`.
 - **`reference_mask` ships on both twins** -- the culprit's lawful footprint, taken from the
   valid render and ungated in time. It is the counterfactual "where it should be", and for a
@@ -133,14 +133,14 @@ publication. Nothing has been published yet.
    clocks burned in, every phase, before generating more.
 6. **Generated output never enters git.** `data/ renders/ out/ clips/ *.npz *.mp4` are
    gitignored; keep it that way.
-7. **Every asset carries a license string.** Enforced by `physviol validate`. Record it when
+7. **Every asset carries a license string.** Enforced by `physloc validate`. Record it when
    you enable an asset source, not at release.
 
 ## Two environments, never mixed
 
 - **container** (pinned image): Kubric 2022.4.1, Blender 2.93.4, PyBullet, Python 3.9 —
   scene sampling, simulation, rendering. Writes `traj.npz` + raw passes.
-- **host** (`conda activate physviol`, Python 3.11): numpy/scipy/opencv/jsonschema —
+- **host** (`conda activate physloc`, Python 3.11): numpy/scipy/opencv/jsonschema —
   residuals, annotation, masks, severity, grids, validation, viz.
 
 Never install Kubric, Blender or PyBullet on the host. The trajectory seam is the boundary.
@@ -159,7 +159,7 @@ Never install Kubric, Blender or PyBullet on the host. The trajectory seam is th
 ## Visualisation
 
 `overlay.mp4` only -- **no image files anywhere**. The container has no ffmpeg, so it writes
-arrays and every mp4 comes from `physviol/viz/video.py`. Nine panels in one order everywhere -- RGB,
+arrays and every mp4 comes from `physloc/viz/video.py`. Nine panels in one order everywhere -- RGB,
 energy, segmentation, depth, optical flow, mask, severity, causal, divergence: evidence
 first, then the annotation derived from it. A red dot while the violation is active, and a
 timeline with both window families and the three clocks. `grid`, `sheet` and `coverage` use
@@ -175,7 +175,7 @@ Kubric is **not** a Python dependency — it lives in the docker image. Pattern 
 script, their container*:
 
 ```bash
-bash docker/kubric.sh physviol/render/worker_smoke.py --frames 4
+bash docker/kubric.sh physloc/render/worker_smoke.py --frames 4
 ```
 
 `refs/kubric` is a **pinned, gitignored, read-only reference checkout** (`bash
@@ -193,7 +193,7 @@ Blender 2.93.4 / Python 3.9.5 / kubric 2022.4.1 in the image. **1.75 s per 256²
 Clip-level parallelism, measured on this box (8 cores) over 8 jobs of 14 cells each:
 **1826 s at one worker, 729 s at four, 685 s at eight** — so 2.50× at four, and doubling to
 eight buys 7%. Blender already uses every core per render, so workers oversubscribe and the
-curve flattens hard. `physviol/cli.py` holds these as live constants (`SPEEDUP`,
-`SECONDS_PER_CLIP`) and prices a run from them: `physviol taxonomy --config <name>`.
+curve flattens hard. `physloc/cli.py` holds these as live constants (`SPEEDUP`,
+`SECONDS_PER_CLIP`) and prices a run from them: `physloc taxonomy --config <name>`.
 
 An older 1.92× figure appears in `docs/`; it was four clips at 256² and is superseded.

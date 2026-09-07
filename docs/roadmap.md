@@ -6,7 +6,7 @@ Three questions came out of reviewing the v0 clips, and they have different answ
 
 ## 1. Macro-categories like LikePhys — yes, and they cost almost nothing
 
-LikePhys groups by **medium**: Rigid Body, Optical, Fluid, Continuum. PhysViol groups by
+LikePhys groups by **medium**: Rigid Body, Optical, Fluid, Continuum. PhysLoc groups by
 **law**: identity, kinematics, contact, dynamics, equilibrium, optical, appearance, global.
 
 These are not competing schemes. They are two independent groupings of the same cells, and
@@ -36,7 +36,7 @@ Level 4  INSTANCE  scenario x family x seed x severity
 | `continuum` | — | **Phase 3**: cloth and soft bodies, needs MuJoCo/MJX behind the seam |
 
 `physics_medium` already exists on every scenario and is already cross-checked by
-`physviol validate`; today it only takes `rigid` and `granular`. Promoting it means widening
+`physloc validate`; today it only takes `rigid` and `granular`. Promoting it means widening
 the enum, tagging `shadow_track` as `optical`, and reporting on it. **Half a day**, and it
 makes head-to-head comparison with LikePhys a table rather than an argument.
 
@@ -128,7 +128,7 @@ That requires the rollout to be **bit-identical across complexity**, and today i
 
 ### 3b. Population — single vs multi
 
-A third orthogonal axis beside severity and complexity, in `physviol/scenarios/base.py`
+A third orthogonal axis beside severity and complexity, in `physloc/scenarios/base.py`
 next to `TIERS` and `COMPLEXITY`:
 
 ```python
@@ -208,9 +208,9 @@ pieces and should land last, because it multiplies whatever the other two produc
 via a Transparent BSDF mix), `fusion`, medium as Level 0, and the compatibility matrix
 derived from declared capabilities rather than written out by hand. Also: materials with
 matching density, five actor shapes, per-scene floor and backdrop colour, camera motion on
-about a fifth of clips, and `physviol export` for publication.
+about a fifth of clips, and `physloc export` for publication.
 
-For the current counts run `python -m physviol.cli taxonomy` — they are not repeated here,
+For the current counts run `python -m physloc.cli taxonomy` — they are not repeated here,
 because every prose copy of them in this repository drifted.
 
 **Still open, in order:**
@@ -239,7 +239,7 @@ abstract.
 
 **Release configuration.** Which severity bins and how many variants per cell the published
 run uses. `configs/v0_release.yaml` proposes tier v0 / L0 / all three bins / 3 variants;
-`physviol taxonomy --config v0_release` prices it exactly. **Settle this with the user before
+`physloc taxonomy --config v0_release` prices it exactly. **Settle this with the user before
 starting** — it is the difference between an overnight job and a week.
 
 **Taxonomy v2.** A proposal to replace `domain` with a derived `principle`, agreed in outline

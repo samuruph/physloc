@@ -1,4 +1,4 @@
-# Host-side environment for PhysViol.
+# Host-side environment for PhysLoc.
 #
 # NOTE: this env does NOT contain Kubric, Blender or PyBullet. Those live inside
 # the pinned docker image and are never installed here -- see docs/PLAN.md Part 0.
@@ -6,8 +6,8 @@
 # severity maps, token grids, schema validation, visualisation and evaluation.
 #
 #   conda env create -f environment.yml
-#   conda activate physviol
-name: physviol
+#   conda activate physloc
+name: physloc
 channels:
   - conda-forge
 dependencies:
@@ -20,12 +20,12 @@ dependencies:
   - imageio-ffmpeg      # mp4 encode for rgb_*.mp4 and viz overlays
   - opencv              # mask overlays, resizing, contact sheets
   - matplotlib          # severity heatmaps, report figures
-  - jsonschema          # physviol validate
+  - jsonschema          # physloc validate
   - pyyaml              # configs/*.yaml -- run settings as files, not flags
   - tqdm
   - pytest
   - pypdf               # reading the papers in context/
-  # Packaging a release. `physviol export` writes index.parquet with
+  # Packaging a release. `physloc export` writes index.parquet with
   # pyarrow and uploads with huggingface_hub. Both are optional at
   # runtime -- the exporter falls back to JSONL and skips the upload --
   # but a published release should carry the parquet the dataset

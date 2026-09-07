@@ -8,7 +8,7 @@ of the prefix-identity failures found in the review sweep (29 of 176 clips
 differing a frame or two *before* t_event, on families that touch no material
 channel at all).
 
-    bash docker/kubric.sh physviol/render/probe_replay.py --scenario pendulum_swing
+    bash docker/kubric.sh physloc/render/probe_replay.py --scenario pendulum_swing
 """
 import argparse
 import json
@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 
 import numpy as np
 
-from physviol import scenarios
-from physviol.render.worker import build_scene, render_and_save, replay, simulate
+from physloc import scenarios
+from physloc.render.worker import build_scene, render_and_save, replay, simulate
 
 
 def main():

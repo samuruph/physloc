@@ -1,4 +1,4 @@
-"""`physviol validate` -- docs/schema.md "Cross-checks".
+"""`physloc validate` -- docs/schema.md "Cross-checks".
 
 Structural checks that catch the failure modes the design actually has, not
 just JSON well-formedness.

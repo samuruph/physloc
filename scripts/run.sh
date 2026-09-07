@@ -14,7 +14,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONFIG="${1:-review}"
 shift || true
-PV="conda run --no-capture-output -n physviol python -m physviol.cli"
+PV="conda run --no-capture-output -n physloc python -m physloc.cli"
 
 echo "== generate: --config $CONFIG $* =="
 $PV generate --config "$CONFIG" "$@"

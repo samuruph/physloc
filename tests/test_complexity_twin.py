@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 import mockroll
-from physviol import scenarios
-from physviol.scenarios import TIERS
+from physloc import scenarios
+from physloc.scenarios import TIERS
 
 SEED = 777
 NAMES = sorted(scenarios.available())

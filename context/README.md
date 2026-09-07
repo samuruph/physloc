@@ -16,4 +16,4 @@ curl -L -o context/2510.11512v3.pdf https://arxiv.org/pdf/2510.11512v3
 ```
 
 Each family records which prior-art cell it covers, as `intphys2` and `likephys` fields in
-`physviol/taxonomy.py`. `python -m physviol.cli taxonomy` prints the taxonomy.
+`physloc/taxonomy.py`. `python -m physloc.cli taxonomy` prints the taxonomy.

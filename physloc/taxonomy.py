@@ -348,7 +348,7 @@ TIME_SLIP_NEEDS_MOTION = (
 #: the clip carries a full set of labels describing a violation the video does
 #: not contain, which teaches a model that nothing is something.
 #:
-#: The second kind is found, not guessed. `physviol audit <release>` measures
+#: The second kind is found, not guessed. `physloc audit <release>` measures
 #: severity, observable frames and peak pixel evidence inside the mask for every
 #: cell, and `tests/test_visible_violation.py` fails the build if one that is
 #: still marked BUILD depicts nothing. Move a flagged cell here with its
@@ -526,7 +526,7 @@ def is_compatible(scenario: str, family: str, require_build: bool = False) -> bo
 
 
 def validate_taxonomy() -> None:
-    """Internal consistency. Called by tests and by `physviol validate`."""
+    """Internal consistency. Called by tests and by `physloc validate`."""
     for name, fam in FAMILIES.items():
         assert fam.domain in DOMAINS, "%s: unknown domain %s" % (name, fam.domain)
         assert fam.kind in ("instant", "sustained", "repeated"), name

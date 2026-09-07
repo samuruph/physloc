@@ -1,6 +1,6 @@
 """Can a body be faded out rather than switched off? Measured, and yes.
 
-    bash docker/kubric.sh physviol/render/probe_opacity2.py
+    bash docker/kubric.sh physloc/render/probe_opacity2.py
 
 Two mechanisms were tried against the pinned image (Kubric 2022.4.1 / Blender
 2.93.4). The Principled BSDF's own `Alpha` input does nothing here. Mixing the

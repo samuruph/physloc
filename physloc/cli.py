@@ -72,6 +72,16 @@ SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
                     ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
 
 
+#: What each distractor adds to a clip's render time, as a fraction of the base
+#: rate. Measured: 14 families of `drop` at the debug tier took 216 s with six
+#: distractors -- 15.5 s a clip against the 8.0 s baseline -- so six bodies
+#: nearly double it, and one costs about 16%.
+#:
+#: Without this, `taxonomy` priced an L3 sweep at 2.0 h when it would have taken
+#: 3.9, which defeats the point of pricing a run before committing to it.
+DISTRACTOR_COST = 0.157
+
+
 def _print_release_size(cells, a) -> None:
     """What a given configuration would actually produce, and how long it takes.
 
@@ -89,8 +99,11 @@ def _print_release_size(cells, a) -> None:
     valid = len(scenarios) * variants          # one per scenario+seed, shared
     renders = invalid + valid
     from .scenarios.base import COMPLEXITY
-    bg = COMPLEXITY[a.complexity].background if a.complexity in COMPLEXITY else "solid"
+    cx = COMPLEXITY.get(a.complexity)
+    bg = cx.background if cx else "solid"
     rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
+    # Every extra body in the scene is more geometry to shade, every frame.
+    rate *= 1.0 + DISTRACTOR_COST * (cx.n_distractors if cx else 0)
     serial = renders * rate
 
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"

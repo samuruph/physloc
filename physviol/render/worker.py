@@ -362,12 +362,47 @@ def _empty_trajectory(spec) -> Trajectory:
 GONE_Z = -1000.0
 
 
-def replay(spec, objs, traj: Trajectory, renderer=None) -> None:
+def _keyframe_camera(scene, spec, num_frames: int) -> None:
+    """Lay the camera track down as keyframes, every variant, unconditionally.
+
+    UNCONDITIONALLY is the whole point, and it is the rule `_clear_animation`
+    already states for body channels. One scene is built per (scenario, seed)
+    and reused for the valid render and for every family and severity after it
+    (see `render_variants`), so a track keyframed once and not rewritten would
+    leak into every clip that follows -- and a camera that differs between the
+    twins shows up as a pre-`t_event` pixel diff, which is the one thing the
+    whole trajectory seam exists to prevent.
+
+    Static cameras are keyframed too, at a constant pose, so that a moving
+    camera in one variant cannot survive into a still one in the next.
+
+    The loop runs one frame either side of the clip, as
+    `movi_def_worker.py:165-201` does: the forward and backward flow passes are
+    differences between neighbouring frames, and without the extra keyframes
+    the first and last of them are computed against a camera that was still.
+    """
+    cam = scene.camera
+    if cam is None:
+        return
+    for frame in range(-1, num_frames + 1):
+        position, look_at = spec.camera_at(frame, num_frames)
+        cam.position = position
+        # `look_at` sets the quaternion NOW and animates nothing by itself, so
+        # it has to be re-called per frame and the quaternion keyframed beside
+        # the position.
+        cam.look_at(look_at)
+        cam.keyframe_insert("position", frame)
+        cam.keyframe_insert("quaternion", frame)
+
+
+def replay(spec, objs, traj: Trajectory, renderer=None, scene=None) -> None:
     """Write a trajectory back onto the scene as keyframes -- the seam's read side.
 
     Same mechanism Kubric's own simulator.run uses to hand animation to Blender
     (see refs/kubric/kubric/simulator/pybullet.py), so this is a supported path.
     """
+    if scene is not None:
+        _keyframe_camera(scene, spec, int(traj.num_frames))
     present = traj.present
     scale_mul = traj.scale_mul
     colour = traj.colour
@@ -515,7 +550,7 @@ def main() -> int:
     scenarios.get(a.scenario).script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
-    replay(spec, objs, traj_valid, renderer)
+    replay(spec, objs, traj_valid, renderer, scene)
     t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
 
     families = [f.strip() for f in a.family.split(",") if f.strip()]
@@ -609,7 +644,7 @@ def main() -> int:
                 json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
                            "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
 
-            replay(spec, objs, traj_invalid, renderer)
+            replay(spec, objs, traj_invalid, renderer, scene)
             dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
             timings[tag] = round(dt, 2)
             variants.append({"family": family, "severity": sev, "ok": True,

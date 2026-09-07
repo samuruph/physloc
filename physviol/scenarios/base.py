@@ -331,6 +331,75 @@ class SceneSpec:
     #: `toss`/`tumble` regression a wide swing would reintroduce).
     camera_jitter_deg: Tuple[float, float] = (35.0, 12.0)
 
+    #: Where the camera ENDS, when it moves. `None` -- the usual case -- is a
+    #: static camera and the whole rest of the pipeline's assumption.
+    #:
+    #: A linear translation with the aim point held fixed, which is MOVi-D/E's
+    #: `linear_movement`. The aim stays put on purpose: a camera that also pans
+    #: makes "did the object move, or did the camera?" a question the clip
+    #: cannot answer, and every violation here is a claim about object motion.
+    #:
+    #: Drawn in `_vary`, so it is a pure function of the seed and the host can
+    #: reconstruct it without reading anything the container wrote.
+    camera_end_position: Optional[Tuple[float, float, float]] = None
+
+    #: Set False by a scenario that cannot tolerate a moving camera. Only
+    #: `occluder_pass` does: it precomputes its occlusion interval from a
+    #: single camera pose, and that list is where every observability label in
+    #: the dataset comes from.
+    camera_motion: bool = True
+
+    #: Which motion this clip uses: "static", "track", "orbit" or "dolly".
+    #: Shipped in `meta.json` so a consumer can condition on it.
+    camera_motion_kind: str = "static"
+
+    @property
+    def camera_moves(self) -> bool:
+        return self.camera_end_position is not None
+
+    def camera_at(self, frame: int, num_frames: int
+                  ) -> Tuple[Tuple[float, float, float],
+                             Tuple[float, float, float]]:
+        """The camera pose on one frame. Constant unless the camera moves.
+
+        The single source of truth for where the camera was: the renderer
+        keyframes from it, the framing guards evaluate against it, and
+        `meta.json` ships what it returns. If any of those computed the path
+        separately they could disagree, and a violation would be fitted to a
+        frustum the clip never had.
+
+        `track` and `dolly` interpolate position linearly. `orbit` interpolates
+        the ANGLE about the aim point instead: lerping its endpoints would cut
+        the chord, so the camera would dip towards the subject mid-arc and the
+        actor would swell and shrink again -- turning the one motion that
+        preserves apparent size into the one that does not.
+        """
+        if self.camera_end_position is None or num_frames <= 1:
+            return self.camera_position, self.camera_look_at
+        t = min(max(int(frame), 0), num_frames - 1) / float(num_frames - 1)
+        start = np.asarray(self.camera_position, np.float64)
+        end = np.asarray(self.camera_end_position, np.float64)
+        if self.camera_motion_kind != "orbit":
+            return (tuple(float(v) for v in (1.0 - t) * start + t * end),
+                    self.camera_look_at)
+
+        aim = np.asarray(self.camera_look_at, np.float64)
+        u, v = start - aim, end - aim
+        ru, rv = float(np.linalg.norm(u)), float(np.linalg.norm(v))
+        if ru < 1e-9 or rv < 1e-9:
+            return self.camera_position, self.camera_look_at
+        cos = float(np.clip(np.dot(u / ru, v / rv), -1.0, 1.0))
+        ang = math.acos(cos)
+        if ang < 1e-6:
+            eye = (1.0 - t) * start + t * end
+        else:
+            # Slerp on the direction, lerp on the radius. The radius is equal
+            # at both ends by construction, so this holds it fixed.
+            s = math.sin(ang)
+            eye = aim + ((math.sin((1.0 - t) * ang) / s) * u
+                         + (math.sin(t * ang) / s) * v)
+        return tuple(float(x) for x in eye), self.camera_look_at
+
     @property
     def actors(self) -> List[BodySpec]:
         """Every body the violation may act on, in declaration order."""
@@ -358,6 +427,8 @@ class SceneSpec:
             "complexity": COMPLEXITY[self.complexity].to_dict(),
             "hdri_id": self.hdri_id,
             "camera_position": list(self.camera_position),
+        "camera_end_position": (list(self.camera_end_position)
+                                if self.camera_end_position else None),
             "camera_look_at": list(self.camera_look_at),
             "bodies": [{"name": b.name, "kind": b.kind, "role": b.role,
                         "segmentation_id": b.segmentation_id, "mass": b.mass,
@@ -413,7 +484,125 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
                                zip(light.position,
                                    rng.uniform(-1.0, 1.0, size=3) * 0.9))
     _recolour_scenery(spec, seed)
+    _maybe_move_camera(spec, seed)
     return spec
+
+
+#: Share of clips whose camera moves. One in five: enough that a model cannot
+#: assume a fixed viewpoint, few enough that the dataset default stays the
+#: clean case where object motion is the only motion in the frame.
+MOVING_CAMERA_SHARE = 0.20
+
+#: The motions, and how often each is chosen among the clips that move.
+#:
+#: `track`  slides across the view with the aim held  -- parallax, no size change
+#: `orbit`  swings around the subject at fixed radius -- new angle, no size change
+#: `dolly`  approaches or retreats along the view axis
+#:
+#: A panning variant (translate AND swing the aim, MOVi's
+#: `linear_movement_linear_lookat`) is deliberately absent: with both moving,
+#: "did the object move or did the camera?" stops being answerable from the
+#: clip, and every violation here is a claim about object motion.
+CAMERA_MOTION_KINDS = ("track", "orbit", "dolly")
+CAMERA_MOTION_WEIGHTS = (0.40, 0.40, 0.20)
+
+#: How far a `track` or `orbit` camera travels, as a fraction of its distance
+#: to the aim point (`orbit` reads it as an arc length). Small on purpose:
+#: every scenario's viewpoint was derived for one shot, and a camera that
+#: travels a third of its own standoff has turned it into a different shot --
+#: the actor drifts out of frame, and every guard that fitted a violation to
+#: the frustum fitted it to one the clip no longer has.
+CAMERA_TRAVEL = (0.10, 0.22)
+
+#: How much a `dolly` changes its distance to the subject, as a fraction.
+#:
+#: Tighter than the others, because this is the motion that changes APPARENT
+#: SIZE -- the exact cue `immutability` and `deformation` make their claim
+#: about. At 12% the size change is a third of `deformation`'s weakest bin
+#: (1.35 aspect), and unlike a deformation it scales the floor and every other
+#: body by the same amount, so the scene still says "the camera moved" rather
+#: than "that object changed".
+DOLLY_RANGE = (0.06, 0.12)
+
+
+def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
+    """One clip in five gets a moving camera, of one of three kinds.
+
+    Deliberately NOT on the complexity ladder. L3 and L4 declare
+    `camera_motion="linear"` and neither is built, so tying motion to them
+    would mean no moving-camera clips until GSO assets and distractors arrive
+    as well -- and the axis being exercised here is viewpoint, not realism.
+
+    The aim point never moves; see `camera_end_position`.
+    """
+    # A debug override, for looking at one motion without hunting for a seed
+    # that happens to draw it:
+    #
+    #     PHYSVIOL_CAMERA_MOTION=orbit  python -m physviol.cli generate ...
+    #
+    # `off` forces every clip static; a kind name forces that kind on every
+    # clip that is allowed to move; `always` picks among the kinds as usual but
+    # never declines. Unset is the real behaviour, and this is the only thing
+    # in the sampler that reads the environment -- it must never be set during
+    # a release run, which is why it is named this loudly.
+    import os
+
+    forced = os.environ.get("PHYSVIOL_CAMERA_MOTION", "").strip().lower()
+    if forced in ("off", "static", "none"):
+        return
+    if not spec.camera_motion:
+        return
+    # Its own stream, salted by scenario. Sharing `_vary`'s would do two bad
+    # things: appending a draw there shifts every camera angle already
+    # sampled, and a stream keyed on the seed alone makes the decision
+    # identical across scenarios -- measured at exactly 22% for all thirteen,
+    # which is one coin flip reported thirteen times, not thirteen flips.
+    import zlib
+
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0xCA31 + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    if not forced and float(rng.uniform()) >= MOVING_CAMERA_SHARE:
+        return
+
+    eye = np.asarray(spec.camera_position, np.float64)
+    target = np.asarray(spec.camera_look_at, np.float64)
+    view = eye - target
+    standoff = float(np.linalg.norm(view))
+    if standoff < 1e-6:
+        return
+    view = view / standoff
+    right = np.cross(np.array([0.0, 0.0, 1.0]), view)
+    if float(np.linalg.norm(right)) < 1e-6:
+        right = np.array([1.0, 0.0, 0.0])
+    right = right / float(np.linalg.norm(right))
+    up = np.cross(view, right)
+
+    kind = str(CAMERA_MOTION_KINDS[int(np.searchsorted(
+        np.cumsum(CAMERA_MOTION_WEIGHTS), float(rng.uniform())))])
+    if forced in CAMERA_MOTION_KINDS:
+        kind = forced
+    theta = float(rng.uniform(0.0, 2.0 * math.pi))
+
+    if kind == "dolly":
+        # Signed, so the camera pulls back as often as it closes in. Pulling
+        # back is the safer half and there is no reason to prefer one.
+        frac = float(rng.uniform(*DOLLY_RANGE)) * float(rng.choice([-1.0, 1.0]))
+        end = target + view * (standoff * (1.0 + frac))
+    elif kind == "orbit":
+        # An arc of the same length a `track` would travel, so the two motions
+        # are comparable in how much the view changes. The end point sits on
+        # the same sphere; `camera_at` interpolates the angle, not the chord.
+        arc = float(rng.uniform(*CAMERA_TRAVEL))
+        axis = math.cos(theta) * right + math.sin(theta) * up
+        axis = axis / float(np.linalg.norm(axis))
+        end = target + standoff * (math.cos(arc) * view + math.sin(arc) * axis)
+    else:                                                        # "track"
+        travel = standoff * float(rng.uniform(*CAMERA_TRAVEL))
+        end = eye + travel * (math.cos(theta) * right + math.sin(theta) * up)
+
+    spec.camera_motion_kind = kind
+    spec.camera_end_position = tuple(float(v) for v in end)
 
 
 #: How far the scenery must stay from every actor, in CIE-Lab distance. Below

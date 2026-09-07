@@ -653,7 +653,12 @@ class Injector:
         if not idx:
             return 0
         pts = traj.pos[from_frame:, idx, :]
-        vis = _geom.in_frame(spec, pts)
+        # Per frame, because the camera may be moving. This block is the sole
+        # visibility measure behind the fit ladder, so testing it against one
+        # pose would fit every intervention to a frustum a fifth of the clips
+        # do not have.
+        vis = _geom.in_frame(spec, pts, from_frame=from_frame,
+                             num_frames=int(traj.num_frames))
         # Only bodies that are actually in the scene count. A dormant
         # understudy is parked far below the world until something summons it,
         # so including it made the *valid* baseline "half the culprits are off

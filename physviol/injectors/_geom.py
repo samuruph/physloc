@@ -565,21 +565,50 @@ def path_sample(pos: np.ndarray, u: np.ndarray) -> np.ndarray:
 TAN_HALF_FOV = _cam.TAN_HALF_FOV
 
 
-def camera_basis(spec):
-    """(eye, forward, right, up) for the scenario's camera."""
-    return _cam.camera_basis(spec.camera_position, spec.camera_look_at)
+def camera_basis(spec, frame: Optional[int] = None,
+                 num_frames: Optional[int] = None):
+    """(eye, forward, right, up) for the scenario's camera.
+
+    Pass the frame the intervention acts on when the camera may move. The
+    consumers all pick a direction to act ALONG -- the axis a body is squashed
+    on, the line two halves separate across, the plane a snake wiggles in --
+    and those only need to read correctly at the moment of the intervention.
+    Frame 0 would aim them for a shot the clip has already left.
+    """
+    if frame is None or num_frames is None:
+        return _cam.camera_basis(spec.camera_position, spec.camera_look_at)
+    eye, aim = spec.camera_at(int(frame), int(num_frames))
+    return _cam.camera_basis(eye, aim)
 
 
-def in_frame(spec, points: np.ndarray, margin: float = 0.04) -> np.ndarray:
+def in_frame(spec, points: np.ndarray, margin: float = 0.04,
+             from_frame: Optional[int] = None,
+             num_frames: Optional[int] = None) -> np.ndarray:
     """[...] bool: are these world points inside the camera's view?
 
     Used to keep an intervention's strongest bin from throwing the actor out of
     shot. A body that leaves frame has an empty mask for the rest of the clip,
     and the clip then *depicts* an object vanishing while being labelled
     `antigravity` or `continuity` -- a mislabelled clip, not merely a dull one.
+
+    Pass `from_frame` and `num_frames` when `points` has a LEADING TIME AXIS
+    and the camera may move. Without them every frame is tested against the
+    camera's opening pose, which for a moving camera answers a question nobody
+    asked: a body the camera pans away from reads as visible, and one it pans
+    towards reads as lost. The fit ladder is measured against this, so it would
+    be weakening interventions to fit a frustum the clip never had.
     """
-    return _cam.visible(spec.camera_position, spec.camera_look_at, points,
-                        margin=margin)
+    if (from_frame is None or num_frames is None
+            or not getattr(spec, "camera_moves", False)
+            or np.asarray(points).ndim < 2):
+        return _cam.visible(spec.camera_position, spec.camera_look_at, points,
+                            margin=margin)
+    pts = np.asarray(points, np.float64)
+    out = np.zeros(pts.shape[:-1], bool)
+    for k in range(pts.shape[0]):
+        eye, aim = spec.camera_at(int(from_frame) + k, int(num_frames))
+        out[k] = _cam.visible(eye, aim, pts[k], margin=margin)
+    return out
 
 
 def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,

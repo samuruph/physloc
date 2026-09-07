@@ -578,6 +578,26 @@ def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
     return out
 
 
+def _camera_block(spec, num_frames: int) -> Dict[str, Any]:
+    """Where the camera was on every frame, and whether it moved.
+
+    Consumers need this the moment a fifth of clips move: `flow_fwd`,
+    `flow_bwd` and `depth` stop being pure object motion under a moving
+    camera, and without the track there is no way to tell the two apart.
+    """
+    poses = [spec.camera_at(f, num_frames) for f in range(num_frames)]
+    return {
+        "motion": spec.camera_motion_kind,
+        "position": list(spec.camera_position),
+        "look_at": list(spec.camera_look_at),
+        "end_position": (list(spec.camera_end_position)
+                         if spec.camera_moves else None),
+        "intrinsics": [],
+        "extrinsics_per_frame": [{"position": list(p), "look_at": list(la)}
+                                 for p, la in poses],
+    }
+
+
 def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
                 primary_id, sev_bin, prefix_diff: int = 0,
@@ -604,10 +624,13 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "fps": tier.fps, "num_frames": tier.num_frames,
         "resolution": [tier.resolution, tier.resolution],
         "prompt": compose_prompt(scenario, spec_d),
-        "camera": {"motion": "static", "intrinsics": [],
-                   "position": spec_d.get("camera_position"),
-                   "look_at": spec_d.get("camera_look_at"),
-                   "extrinsics_per_frame": []},
+        # `motion` was hardcoded "static" while `Complexity.camera_motion`
+        # separately claimed "linear" from L3 up -- one clip asserting two
+        # different things. It is now what the scene actually does, and the
+        # per-frame poses ship beside it so a consumer can undo the camera
+        # motion rather than having to infer it. A static clip still gets a
+        # full-length track, so the field never needs a special case.
+        "camera": _camera_block(spec, T),
         "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
         "assets": [{"name": b["name"], "source": "kubric_primitive",
                     "license": "Apache-2.0",

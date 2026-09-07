@@ -92,6 +92,14 @@ class OccluderPass(Scenario):
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.8)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
+            # NO CAMERA MOTION, until `_occluded_frames` can account for it.
+            # That function intersects a camera->ball ray with the screen plane
+            # once, at sample time, and the frame list it returns is where
+            # every observability label in the dataset comes from -- this is
+            # the only scenario that supplies an occlusion interval at all. A
+            # camera that moves changes which frames are hidden, and the
+            # precomputed list would quietly describe a different clip.
+            camera_motion=False,
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "speed": speed,
                    "occluded_frames": occ, "actor_kind": kind,

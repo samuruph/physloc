@@ -30,8 +30,12 @@ if [ -z "$IMAGE" ]; then
   IMAGE="kubricdockerhub/kubruntu"
 fi
 
+# Debug dials the host sets and the container has to see. `--env NAME` with no
+# value forwards the host's value, and forwards nothing when it is unset, so an
+# unset dial cannot silently become an empty string inside the container.
 exec docker run --rm --interactive \
   --user "$(id -u):$(id -g)" \
+  --env PHYSVIOL_CAMERA_MOTION \
   --volume "$REPO_ROOT:/kubric" \
   --workdir /kubric \
   "$IMAGE" \

@@ -738,6 +738,86 @@ Three things worth knowing:
 
 `n_distractors` is a knob on the level, not a level of its own.
 
+### Testing one level at a time
+
+Each level adds exactly one thing, so rendering them separately is how you find out *which*
+thing broke. One scenario at five variants is ~4 minutes a level (L3 is about twice L0 — six
+extra bodies is more geometry to shade).
+
+```bash
+for L in L0 L1 L2 L3; do
+  bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+       --outdir out/$L --workdir out/work_$L
+done
+```
+
+Five variants is the minimum that shows camera motion — the moving variant is index 4 of each
+block — and the minimum that fills all three splits.
+
+| level | what to look for | what would be wrong |
+|---|---|---|
+| **L0** | flat colours, camera dead still, nothing but the actor and the floor | anything moving that should not be |
+| **L1** | variant 4 orbits, tracks or dollies; variants 0–3 identical to L0 | the camera moving on the wrong variant, or the actor drifting out of shot |
+| **L2** | wood looks like wood, steel like steel; heavy things behave heavy | a material whose mass does not match its look |
+| **L3** | six distractors, in shot, clear of the action | one touching the actor, hiding it, or off-frame |
+
+The severity of a given cell should be **identical at L2 and L3** — distractors are
+decoration, and if a number moves, one of them is taking part in the physics:
+
+```bash
+python -m physloc.cli generate --config review --scenario drop --family solidity \
+    --complexity L2 --outdir out/cmpL2 --workdir out/work_cmpL2
+python -m physloc.cli generate --config review --scenario drop --family solidity \
+    --complexity L3 --outdir out/cmpL3 --workdir out/work_cmpL3
+```
+
+Compare the `sev=` in the two summary lines. That comparison is what caught a distractor
+redefining `support`'s reference surface, which moved the score from 0.91 to 0.46.
+
+### Publishing a level, or a whole run
+
+`run.sh` packages every run into `out/hf/<name>/`. Set one environment variable and it
+uploads too:
+
+```bash
+# one level, to its own dataset
+PHYSLOC_PUSH_TO=<user>/physloc-l3 \
+  bash scripts/run.sh review --complexity L3 --scenario drop --variants 5 \
+       --outdir out/L3 --workdir out/work_L3
+
+# a mini sample, private
+PHYSLOC_PUSH_TO=<user>/physloc-mini PHYSLOC_PUSH_PRIVATE=1 \
+  bash scripts/run.sh review -n 45 --variants 5 \
+       --outdir out/physloc_mini --workdir out/work_mini
+
+# every level as its own dataset
+for L in L0 L1 L2 L3; do
+  PHYSLOC_PUSH_TO=<user>/physloc-${L,,} \
+    bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+         --outdir out/$L --workdir out/work_$L
+done
+```
+
+| variable | effect |
+|---|---|
+| `PHYSLOC_PUSH_TO` | dataset repo id, e.g. `samueleruf/physloc-mini`. Created if absent |
+| `PHYSLOC_PUSH_PRIVATE` | set to anything to create it private |
+
+Packaging always happens; **uploading only when `PHYSLOC_PUSH_TO` is set**. That split is
+deliberate: packaging is local and repeatable, uploading is neither — it puts the clips
+somewhere other people can fetch, index and cache them.
+
+Without the variable, or to publish a run you already have:
+
+```bash
+python -m physloc.cli export out/L3 --outdir out/hf/L3 --push-to <user>/physloc-l3
+```
+
+**A push replaces the card and index at that repo id**, so use a distinct name per artefact
+rather than overwriting a release with a sample. What lands: `README.md` (the card),
+`index.parquet` with the videos playable inline, `taxonomy.json`, `splits/`, `LICENSE`, and
+the shards. See [§5b](#5b-publishing-a-release).
+
 ## 9. Tiers
 
 A tier is a **geometry** — how big and how long. Nothing else.

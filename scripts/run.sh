@@ -7,9 +7,43 @@
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
+#   # generate, package AND publish in one go:
+#   PHYSLOC_PUSH_TO=samueleruf/physloc bash scripts/run.sh review ...
+#
 #   # a small run that still shows everything -- ~13 min:
 #   bash scripts/run.sh review -n 45 --variants 5 \
 #        --outdir out/physloc_mini --workdir out/work_mini
+#
+# ONE LEVEL AT A TIME. Each adds exactly one thing to the level below, so
+# rendering them separately is how you find out WHICH thing broke. ~4 min each
+# for one scenario at five variants; L3 is about twice L0 because six extra
+# bodies is more geometry to shade.
+#
+#   bash scripts/run.sh review --complexity L0 --variants 5 --outdir out/L0 --workdir out/work_L0     # baseline: flat, static
+#   bash scripts/run.sh review --complexity L1 ... # + camera moves on variant 4
+#   bash scripts/run.sh review --complexity L2 ... # + materials, varied mass
+#   bash scripts/run.sh review --complexity L3 ... # + 6 distractors
+#
+# Or all of them in one go:
+#
+#   for L in L0 L1 L2 L3; do
+#     bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+#          --outdir out/$L --workdir out/work_$L
+#   done
+#
+# PUBLISHING. Packaging always happens; uploading only when PHYSLOC_PUSH_TO is
+# set, because packaging is local and repeatable and uploading is neither.
+#
+#   PHYSLOC_PUSH_TO=<user>/physloc-l3 \
+#     bash scripts/run.sh review --complexity L3 --scenario drop --variants 5 \
+#          --outdir out/L3 --workdir out/work_L3
+#
+#   PHYSLOC_PUSH_TO=<user>/physloc-mini PHYSLOC_PUSH_PRIVATE=1 \
+#     bash scripts/run.sh review -n 45 --variants 5 \
+#          --outdir out/physloc_mini --workdir out/work_mini
+#
+# A push REPLACES the card and index at that repo id, so give each artefact its
+# own name rather than overwriting a release with a sample.
 #
 # 5 variants is the MINIMUM that shows camera motion (the moving variant is
 # index 4 of each block) and the minimum that fills all three splits.
@@ -78,7 +112,22 @@ echo "== randomisation: is the sampler actually varying? (renders nothing) =="
 $PV randomisation --seeds 24 || true
 
 echo "== export: package it as a dataset -- shards, index, card, splits =="
-$PV export "$REL" --outdir "out/hf/$(basename "$REL")" || true
+# Publishing is opt-in and env-driven, not a flag, because everything after the
+# config name is forwarded to `generate` and `generate` has no idea what a
+# HuggingFace repo is. It is deliberately a separate switch from generating:
+# packaging is local and repeatable, uploading is neither -- it puts the clips
+# somewhere other people can fetch, index and cache them.
+#
+#   PHYSLOC_PUSH_TO=<user>/<dataset> bash scripts/run.sh review ...
+#
+# Add PHYSLOC_PUSH_PRIVATE=1 to create the repo private.
+PUSH=()
+if [ -n "${PHYSLOC_PUSH_TO:-}" ]; then
+  PUSH=(--push-to "$PHYSLOC_PUSH_TO")
+  [ -n "${PHYSLOC_PUSH_PRIVATE:-}" ] && PUSH+=(--private)
+  echo "   -> will upload to $PHYSLOC_PUSH_TO"
+fi
+$PV export "$REL" --outdir "out/hf/$(basename "$REL")" "${PUSH[@]}" || true
 
 echo
 echo "done -> $REL"

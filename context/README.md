@@ -15,4 +15,5 @@ curl -L -o context/2506.09849v1.pdf https://arxiv.org/pdf/2506.09849v1
 curl -L -o context/2510.11512v3.pdf https://arxiv.org/pdf/2510.11512v3
 ```
 
-The taxonomy these two ground is tabulated in [../docs/prior_art.md](../docs/prior_art.md).
+Each family records which prior-art cell it covers, as `intphys2` and `likephys` fields in
+`physviol/taxonomy.py`. `python -m physviol.cli taxonomy` prints the taxonomy.

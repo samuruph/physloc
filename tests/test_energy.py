@@ -91,7 +91,7 @@ def test_deformation_is_mass_neutral_but_immutability_is_not():
     `deformation` is volume-preserving, so mass follows volume to exactly 1 and
     no matter is created. `immutability` scales volume uniformly, so it does.
     If this ever fails, one of the two injectors has stopped meaning what
-    docs/taxonomy_v2.md says it means.
+    the taxonomy says it means.
 
     **Mass, not energy.** Deformation does move the energy budget, and for a
     reason that belongs to the violation rather than to how it is staged: the

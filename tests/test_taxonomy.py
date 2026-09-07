@@ -18,7 +18,7 @@ def test_build_cells_are_all_compatible():
 
 
 def test_novelty_claims_match_prior_art_doc():
-    """docs/prior_art.md claims a specific breakdown of the 23 families:
+    """The prior-art breakdown of the 23 families:
     12 map cleanly onto prior art, 3 exist there only as discrete flags where we
     make them continuous, and 9 are genuinely new. A null cross-reference is a
     novelty claim, so the counts must keep agreeing with that table."""

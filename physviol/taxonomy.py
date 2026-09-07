@@ -327,7 +327,7 @@ BUILD, DEFER = "build", "defer"
 # the reason recorded. Every entry here is a measurement or an argument, not an
 # omission -- an empty exception list would mean the derivation is trusted
 # completely, and it nearly is.
-#: Deferred *for now*, not on principle -- see docs/decisions_pending.md §3. The
+#: Deferred *for now*, not on principle -- see docs/roadmap.md. The
 #: tier lengthening left several scenarios with their actors at rest for most of
 #: the clip, and `time_slip` refuses to stage a stall when the body has no
 #: motion left to resume into, which is the right behaviour and makes it the
@@ -337,7 +337,7 @@ TIME_SLIP_NEEDS_MOTION = (
     "%s's actor comes to rest well before the clip ends, so there is no window "
     "where it is moving AND has motion left to resume into. A stall staged "
     "there would be indistinguishable from the body simply having stopped. "
-    "Temporary: see docs/decisions_pending.md section 3")
+    "Temporary: see docs/roadmap.md")
 
 #: Cells that are stageable but should not be built, each with a written reason.
 #:

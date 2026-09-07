@@ -3,19 +3,27 @@
 A spatio-temporally annotated physics-violation video dataset: every invalid clip ships
 *where*, *when* and *how badly*, derived from the simulator rather than annotated by hand.
 
-**Read [docs/PLAN.md](docs/PLAN.md) first — it is the single source of truth for this
-project.** [docs/schema.md](docs/schema.md) holds the `meta.json` reference;
-[docs/prior_art.md](docs/prior_art.md) holds the IntPhys 2 × LikePhys coverage matrix.
+**Read [README.md](README.md) first** — it is the operational reference and the one kept
+current. [docs/PLAN.md](docs/PLAN.md) is the design document: its *reasoning* is sound, its
+*numbers* have drifted, so trust the code over any count you read there.
+[docs/schema.md](docs/schema.md) holds the `meta.json` reference. The IntPhys 2 and
+LikePhys mapping is DATA, on each family in `physviol/taxonomy.py` — the prose copy of it was
+deleted because it drifted from the data it described.
 
-**Status: pre-Phase 0.** Environment verified, no clips generated yet, no package code
-beyond `physviol/render/worker_smoke.py`.
+**Counts live in `physviol/taxonomy.py` and nowhere else.** `python -m physviol.cli taxonomy`
+prints them. Prose copies of these tables have drifted five different ways; do not add a
+sixth.
+
+**Status: the whole matrix builds.** 13 scenarios x 23 families compose into **166 cells**;
+`physviol generate` walks them, `validate` checks them, `export` packages them for
+publication. Nothing has been published yet.
 
 ## Locked decisions — don't relitigate without saying so
 
 - **Kubric** (Blender + PyBullet in docker) for v0. MuJoCo replaces PyBullet later, behind
   the trajectory seam.
-- **Three tiers.** **the debug tier (debug, default)**: 128×128, 13 frames, 16 spp — **~11 s per
-  valid/invalid pair**, never published; this is what you iterate on. tier v0
+- **Three tiers.** **the debug tier (debug, default)**: 128×128, 12 fps, 25 frames, 16 spp — **~8 s per
+  clip**, never published; this is what you iterate on. tier v0
   (`physviol_v0`, build now): **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip.
   30 fps so the release downsamples cleanly to 15 and 10; 89 rather than 90 because every
   frame count must be `4k+1` for VAE latent alignment.
@@ -25,24 +33,25 @@ beyond `physviol/render/worker_smoke.py`.
   render size. See docs/roadmap.md §3. Same generators, one config
   block apart. **Debug at the debug tier; a bug found there is fixed for all three.**
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
-  `traj.npz`, which is scenario-agnostic, so 14 scenarios x 17 families needs 13 + 6 files,
-  not 238. `taxonomy.COMPATIBILITY` selects the 48 meaningful cells.
+  `traj.npz`, which is scenario-agnostic, so 13 scenarios x 23 families needs 13 + 8 files,
+  not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
-  liquid does not fit the pose-based seam. `pour` (~200 rigid spheres) is the v0
+  liquid does not fit the pose-based seam. `pour` (40 grains at the debug tier, 96 above)
+  is the v0
   stand-in and is labelled `physics_medium: "granular"` — never call it fluid. True fluid and
   cloth are Phase 3.
 - **CPU rendering, upstream image, unchanged.** GPU/OptiX caps at ~1.37× (only 26% of frame
-  time is sampling); clip-level parallelism measures 1.92× for free. Do not build a GPU
-  image without a new measurement.
+  time is sampling); clip-level parallelism measures **2.50× at four workers** and flattens
+  after that — eight buys 7% more. Do not build a GPU image without a new measurement.
 - **Two different magnitudes, never conflated.** `intervention.magnitude` is the knob we
   turned (one scalar, exact, known *before* simulating, drives weak/medium/strong splits). The
   residual `r`/`z`/`s` is the measured effect (per body per frame, known *after*, becomes
   `severity_map`). There is no "severity mask": `violation_mask` is binary *where*,
   `severity_map` is continuous *how badly*. PLAN §3.4 works a full numeric example.
-- **Taxonomy is four levels**: domain (7) → family (17) → scenario (14) → instance. Encoded
-  as data in `physviol/taxonomy.py`, including the scenario × family compatibility matrix.
-  13 scenarios are built; `clutter_toss` is DEFER-only.
+- **Taxonomy is five levels**: medium (5) → domain (8) → family (23) → scenario (15
+  declared, 13 built) → instance. Encoded as data in `physviol/taxonomy.py`, including the
+  scenario × family compatibility matrix. `clutter_toss` and `tumble` are `UNBUILT`.
 - **`reference_mask` ships on both twins** -- the culprit's lawful footprint, taken from the
   valid render and ungated in time. It is the counterfactual "where it should be", and for a
   vanished body it is the only mask with any pixels. Visualisers draw it as a green outline
@@ -93,10 +102,18 @@ beyond `physviol/render/worker_smoke.py`.
      keyframe does. **This is the default and the goal**; a family stays off it only when
      nothing in the simulator corresponds to what it changes.
    - **edited**: the finished trajectory is rewritten and re-integrated by `_rewrite_from`.
-     Approximate contacts. What remains here is the families whose subject the simulator
-     does not own: `colour_shift`, `dissolve`, `permanence`, `shadow*` and `shadow_shape`
-     (a scripted body), plus the trajectory-shape families `non_parabolic`, `time_slip`
-     and `continuity`'s pivot-scripted neighbours. Every staged family keeps its `_apply`
+     Approximate contacts. **Six families remain here**, and they are the ones whose subject
+     the simulator does not own: `colour_shift` (a material property), `shadow`,
+     `shadow_inverted` and `shadow_shape` (a scripted stand-in body, since Blender's shadow
+     is not an object PyBullet knows about), `time_slip` (a reparameterisation of time
+     itself) and `fusion` (its draw-in is prescribed motion). `solidity` decides **per
+     plan**: a two-body pass-through stages as a disabled collision pair, while its granular
+     `sink_group` mode edits, because removing the floor under forty grains is a scene edit
+     rather than one pair. The other sixteen stage.
+
+     Do not take this list on trust — it has been wrong before. It is derivable:
+     `simulated` on the class, `simulates()` when a family decides per plan.
+     Every staged family keeps its `_apply`
      as a **host-side approximation**, because that is what the mock rollout in `tests/`
      exercises without a docker round trip — so `_apply` and `stage()` must describe the
      same intervention, and where they can share a profile function they do.
@@ -170,6 +187,13 @@ template this project adapts (PLAN Part 0.5). The clone is ~4 years newer than t
 
 Blender 2.93.4 / Python 3.9.5 / kubric 2022.4.1 in the image. **1.75 s per 256² frame,
 7.16 s per 512²**, linear in frames, all seven passes. Frame time fits
-`T = 1.29 + 0.0074·spp` at 256² → only ~26% is sampling, so OptiX caps at ~1.37×. Clip-level
-parallelism: 4 clips serial 46 s → parallel 24 s (**1.92×**). `sim_seconds` is 0.0 — physics
-is free at v0 scale. See PLAN Part 0.
+`T = 1.29 + 0.0074·spp` at 256² → only ~26% is sampling, so OptiX caps at ~1.37×.
+`sim_seconds` is 0.0 — physics is free at v0 scale.
+
+Clip-level parallelism, measured on this box (8 cores) over 8 jobs of 14 cells each:
+**1826 s at one worker, 729 s at four, 685 s at eight** — so 2.50× at four, and doubling to
+eight buys 7%. Blender already uses every core per render, so workers oversubscribe and the
+curve flattens hard. `physviol/cli.py` holds these as live constants (`SPEEDUP`,
+`SECONDS_PER_CLIP`) and prices a run from them: `physviol taxonomy --config <name>`.
+
+An older 1.92× figure appears in `docs/`; it was four clips at 256² and is superseded.

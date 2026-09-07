@@ -206,8 +206,12 @@ pieces and should land last, because it multiplies whatever the other two produc
 
 **Done (v0 complete):** `colour_shift`, `deformation`, `shadow_shape`, `dissolve` (optical,
 via a Transparent BSDF mix), `fusion`, medium as Level 0, and the compatibility matrix
-derived from declared capabilities rather than written out by hand — 176 build cells across
-8 domains, 22 families and 15 scenarios.
+derived from declared capabilities rather than written out by hand. Also: materials with
+matching density, five actor shapes, per-scene floor and backdrop colour, camera motion on
+about a fifth of clips, and `physviol export` for publication.
+
+For the current counts run `python -m physviol.cli taxonomy` — they are not repeated here,
+because every prose copy of them in this repository drifted.
 
 **Still open, in order:**
 
@@ -220,3 +224,27 @@ derived from declared capabilities rather than written out by hand — 176 build
 4. **Randomisation depth** — mostly falls out of 3 (§3c).
 
 1 is the last of v0. 2–4 are v1.
+
+---
+
+## Open questions
+
+Carried over from `docs/decisions_pending.md`, which was deleted once most of its contents
+had shipped. These are the parts that had not.
+
+**Does `causal_mask` earn its place?** Raised and then deferred by the user. What it is for,
+whether consumers can use it, and whether it is distinct enough from `violation_mask` and
+`reference_mask` to justify another array per clip. Decide it against real clips, not in the
+abstract.
+
+**Release configuration.** Which severity bins and how many variants per cell the published
+run uses. `configs/v0_release.yaml` proposes tier v0 / L0 / all three bins / 3 variants;
+`physviol taxonomy --config v0_release` prices it exactly. **Settle this with the user before
+starting** — it is the difference between an overnight job and a week.
+
+**Taxonomy v2.** A proposal to replace `domain` with a derived `principle`, agreed in outline
+and never built; the file arguing for it was deleted with the rest of the speculative docs.
+It is re-labelling only — no re-rendering — so it stays cheap for as long as it is unbuilt.
+
+**Fission is still `geometric`.** Its draw-in is prescribed motion rather than something the
+simulator produces.

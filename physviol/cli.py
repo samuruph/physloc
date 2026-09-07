@@ -106,6 +106,75 @@ def _print_release_size(cells, a) -> None:
         for m in sorted({SCENARIOS[s].physics_medium for s, _ in cells})))
 
 
+# ----------------------------------------------------------- randomisation
+def cmd_randomisation(a) -> int:
+    """Count the distinct values the sampler produces on each axis.
+
+    "Is the dataset varied" is otherwise answered by looking at a few clips and
+    forming an impression, and an impression cannot tell a working draw from
+    one that is being thrown away downstream. Three separate axes turned out to
+    be constants that way -- the event frame was clamped to a fixed fraction,
+    the floor colour was a literal, and the camera decision was one coin flip
+    shared by all thirteen scenarios -- and each of them looked fine.
+
+    Renders nothing. It samples scenes and plans, so it runs in seconds.
+    """
+    import numpy as np
+
+    from . import scenarios as scen_mod
+    from .scenarios import TIERS
+
+    names = ([a.scenario] if a.scenario else sorted(scen_mod.available()))
+    tier = TIERS[a.tier]
+    n = max(2, int(a.seeds))
+
+    def key(v):
+        try:
+            return tuple(np.round(np.asarray(v, float).ravel(), 6))
+        except Exception:                                      # noqa: BLE001
+            return v
+
+    axes = ("camera_pos", "camera_kind", "shape", "material", "mass",
+            "size", "aspect", "colour", "floor", "backdrop", "start", "speed")
+    print("distinct values over %d seeds, tier %s / %s" % (n, a.tier, a.complexity))
+    print("%-16s %s" % ("scenario", " ".join("%-9s" % x for x in axes)))
+    totals = {x: set() for x in axes}
+    for name in names:
+        sc = scen_mod.get(name)
+        seen = {x: set() for x in axes}
+        for seed in range(n):
+            sp = sc.sample(seed, tier, a.complexity)
+            act = next((b for b in sp.bodies
+                        if b.role == "actor" and not b.dormant), None)
+            fl = next((b for b in sp.bodies if b.role == "floor"), None)
+            seen["camera_pos"].add(key(sp.camera_position))
+            seen["camera_kind"].add(sp.camera_motion_kind)
+            seen["backdrop"].add(key(sp.background_color))
+            if fl is not None:
+                seen["floor"].add(key(fl.color))
+            if act is None:
+                continue
+            seen["shape"].add(act.kind)
+            seen["material"].add(act.material)
+            seen["mass"].add(round(float(act.mass), 4))
+            seen["size"].add(key(act.scale))
+            seen["aspect"].add(round(max(act.scale) / max(min(act.scale), 1e-9), 3))
+            seen["colour"].add(key(act.color))
+            seen["start"].add(key(act.position))
+            seen["speed"].add(key(act.velocity))
+        for x in axes:
+            totals[x] |= {(name, v) for v in seen[x]}
+        print("%-16s %s" % (name, " ".join("%-9d" % len(seen[x]) for x in axes)))
+
+    print()
+    print("A column of 1s is an axis that is NOT varying. Some are legitimate:")
+    print("  shape     forced by scenarios whose family list needs one shape")
+    print("  speed     scenarios that start their actor at rest")
+    print("  material  one material per scene is deliberate on collision, pour")
+    print("            and stack_topple -- their families need matched bodies")
+    return 0
+
+
 # ---------------------------------------------------------------- generate
 #: The worker's word for "this family does not apply to this sample".
 NO_PLAN = "injector produced no plan"
@@ -585,6 +654,15 @@ def _build(suppress: bool = False):
                    help="print the outdir a config resolves to")
     p.add_argument("--outdir")
     p.set_defaults(fn=cmd_config_path)
+
+    p = add_parser("randomisation",
+                   help="how much the sampler actually varies, per axis")
+    p.add_argument("--seeds", type=int, default=24,
+                   help="how many instances of each scenario to sample")
+    p.add_argument("--tier", default="debug")
+    p.add_argument("--complexity", default="L0")
+    p.add_argument("--scenario", help="restrict to one scenario")
+    p.set_defaults(fn=cmd_randomisation)
 
     p = add_parser("audit",
                    help="cells whose violation is not visible")

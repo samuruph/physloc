@@ -1,0 +1,52 @@
+# ============================================================================
+# review_random -- every cell FOUR times, at debug size.
+#
+# `review` answers "does every cell build". This answers the question that
+# replaced it: "does every cell build into four visibly different clips".
+# Materials, proportions, floor and backdrop colour, the event moment and the
+# camera all vary per instance now, and none of that is visible in a sweep that
+# renders each cell once.
+#
+#   python -m physviol.cli generate --config review_random
+#   python -m physviol.cli validate out/review_random     # must exit 0
+#   python -m physviol.cli audit    out/review_random     # cells depicting nothing
+#   python -m physviol.cli coverage out/review_random     # every cell, one video
+#
+# Four variants of 166 cells is 664 invalid clips plus their valid twins. At
+# the debug tier's ~8 s a clip that is roughly ninety minutes at four workers.
+# Price it exactly before starting:
+#
+#   python -m physviol.cli taxonomy --config review_random
+#
+# To look at ONE thing instead, do not run this file -- render a single cell:
+#
+#   python -m physviol.cli generate --debug --scenario drop --family continuity
+#   PHYSVIOL_CAMERA_MOTION=orbit python -m physviol.cli generate --debug \
+#       --scenario collision --family solidity
+# ============================================================================
+
+defaults:
+
+  # seed: variant N uses seed+N, so four variants is seeds 20260907..20260910.
+  #   Deliberately NOT `review`'s 777: that seed has been looked at enough that
+  #   it is no longer a fair sample of what the sampler does.
+  seed: 20260907
+
+  complexity: L0
+  tier: debug
+
+  # severity: the strongest bin only. Breadth first -- what this sweep is for
+  #   is seeing every cell four ways, and four variants x three bins x 166
+  #   cells is four times the render for a question about magnitude that
+  #   `--severity all` on a single cell answers better.
+  severity: strong
+
+  # variants: four independent draws per cell. Two is not enough to tell "these
+  #   vary" from "these two happened to differ", and eight is a night.
+  variants: 4
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_review_random
+  outdir: out/review_random

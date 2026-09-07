@@ -4,11 +4,13 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: every build cell generates, annotates and validates.** 15 scenarios (14 built) ×
-> 23 violation families compose through the trajectory seam, and `physviol generate` walks the
-> whole matrix in one command. Each clip depicts *one* violation — that is asserted, not
-> hoped for; see [§7](#7-orthogonality-what-the-labels-guarantee).
-> Design doc: [docs/PLAN.md](docs/PLAN.md) · Evaluating: [docs/evaluation.md](docs/evaluation.md)
+> **Status: every build cell generates, annotates and validates.** 13 built scenarios × 23
+> violation families compose through the trajectory seam into **166 cells**, and
+> `physviol generate` walks the whole matrix in one command. Each clip depicts *one*
+> violation — that is asserted, not hoped for; see
+> [§7](#7-orthogonality-what-the-labels-guarantee). Publishing:
+> [§5b](#5b-publishing-a-release).
+> Design doc: [docs/PLAN.md](docs/PLAN.md)
 
 ---
 
@@ -139,11 +141,50 @@ environment does the same as passing `--config review`.
 ### Randomisation
 
 **`--variants N` is the randomisation knob.** Each variant is a fresh seed, and a seed drives
-every free parameter a scenario has: sizes, speeds, drop heights, restitution, colours, the
-HDRI environment at L1, the camera position and aim, the lamp direction, and — where it is
-physically neutral — whether the actor is a sphere or a cube. So six variants of `drop ×
-solidity` are six visibly different clips of the same violation, not one clip with a
-different random number in the filename.
+every free parameter a scenario has. So six variants of `drop × solidity` are six visibly
+different clips of the same violation, not one clip with a different random number in the
+filename.
+
+| axis | what varies |
+|---|---|
+| shape | `sphere`, `cube`, `cylinder`, `cone`, `torus` where a scenario allows it |
+| material | cork, wood, plastic, rubber, ceramic, stone, steel — appearance **and** density |
+| mass | `density × volume`, so a heavy object *looks* heavy; ~30× spread |
+| size | drawn per instance; boxes also get independent half-extents |
+| colour | actor hue within its material's band, plus **floor and backdrop** |
+| camera | position and aim; and on ~20% of clips it **moves** (`track`, `orbit`, `dolly`) |
+| timing | when the violation fires, and when the physical event it hangs on happens |
+| violation | direction, magnitude and the body it acts on |
+
+**Mass is derived, never drawn.** A randomly-drawn mass is invisible: a clip where the heavy
+ball barely moves reads as a violation while being lawful physics, so the label would say
+valid and the picture would say otherwise. Deriving it from a *visible* material keeps the
+number and the picture in agreement.
+
+**Aspect ratio varies on boxes only**, and that is PyBullet, not a choice.
+`kubric/simulator/pybullet.py` builds a `kb.Cube` from `halfExtents` (three independent
+values), but asserts uniform scaling for spheres and for every mesh asset — a squashed
+cylinder is a crashed render, not a subtly wrong collider.
+
+Check it without rendering anything:
+
+```bash
+python -m physviol.cli randomisation --seeds 24      # distinct values per axis, in seconds
+```
+
+A column of `1` is an axis that is not varying. Some are legitimate — `collision` gives both
+balls one material on purpose, because `newton2_mass` claims a mass ratio the image must not
+justify.
+
+To look at one camera motion without hunting for a seed that draws it:
+
+```bash
+PHYSVIOL_CAMERA_MOTION=orbit python -m physviol.cli generate --debug \
+    --scenario collision --family solidity
+```
+
+Values: `track`, `orbit`, `dolly`, `always`, `off`. Forwarded into the container by
+`docker/kubric.sh`. **Never set it during a release run.**
 
 One valid clip serves every family of the same scenario and seed: the twins are bit-identical
 by construction, so rendering it once is both correct and cheaper. `validate` expects exactly
@@ -207,10 +248,16 @@ Every subcommand takes `--config NAME`.
 | `config-path` | print the outdir a config resolves to |
 
 ```bash
-# Taxonomy: 5 media, 23 families, 15 scenarios, 178 build cells
+# Taxonomy: 5 media, 23 families, 15 declared scenarios (13 built), 166 build cells
 python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v                    # + every cell
 python -m physviol.cli taxonomy --config v0_release   # + hours and clip counts
+
+# How varied is the sampler, per axis? Renders nothing, runs in seconds.
+python -m physviol.cli randomisation --seeds 24
+
+# Package a release for distribution -- shards, index, card, splits.  Section 5b.
+python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0
 
 # Re-annotate without re-rendering -- picks up any annotation change for free
 python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
@@ -224,7 +271,7 @@ python -m physviol.cli coverage out/release
 python -m physviol.cli validate out/release
 
 python -m pytest tests/ -q                    # 1012 tests, no docker needed
-python -m pytest tests/test_all_cells.py -q   # plans and applies all 178 cells
+python -m pytest tests/test_all_cells.py -q   # plans and applies all 166 cells
 ```
 
 ### `generate` flags
@@ -347,6 +394,88 @@ Field reference: [docs/schema.md](docs/schema.md).
 
 ---
 
+## 5b. Publishing a release
+
+`generate` writes a directory per clip, which is the right shape for producing and
+inspecting them and the wrong shape for handing to anyone else. `export` turns that tree
+into a dataset:
+
+```bash
+# package (local, repeatable)
+python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0
+
+# package AND upload (deliberately a second step -- publishing is not repeatable)
+python -m physviol.cli export out/physviol_v0 --outdir out/hf/physviol_v0 \
+    --push-to <user>/physviol-v0
+```
+
+```
+out/hf/physviol_v0/
+  README.md                    dataset card, YAML front-matter first
+  LICENSE
+  taxonomy.json                what every scenario and family MEANS
+  index.parquet                one row per clip (JSONL if pyarrow is absent)
+  splits/{main,held_out,debug}.txt
+  shards/core-*.tar            rgb + every annotation      <- the default download
+  shards/held_out-*.tar        rgb ONLY, no annotations
+  shards/passes-*.tar          depth/flow/normals/coords   <- only with --with-passes
+```
+
+**Why the passes ship separately.** Measured on a debug sweep: `flow_fwd`, `depth` and
+`object_coords` are **86% of the bytes** (~3.2 MB/clip against ~1 KB per annotation), and at
+v0 geometry they are ~57× that. Someone training on `violation_mask` should not download a
+hundred gigabytes of optical flow to get it.
+
+### `taxonomy.json` — the per-scenario metadata
+
+Generated from `physviol/taxonomy.py`, never hand-written, because five hand-copies of this
+table in `docs/` already disagreed with each other and with the code. Per scenario:
+`description`, `event_structure`, `physics_medium`, `grounded_in` (the prior-art scenario it
+comes from), `has_occluder`, `provides` (the capabilities it offers injectors), the
+`families` staged on it, and `clips_in_release`. Per family: `domain`, `law`,
+`magnitude_unit`, `kind`, `detectable`, `graded`, `requires`, and its `intphys2` / `likephys`
+mapping.
+
+### The splits, and what they are for
+
+Modelled on **IntPhys 2** (arXiv:2506.09849), which this project already takes its
+debug/artifact split from. That paper releases 1416 videos as Debug (5 scenes, calibration),
+Main (253 scenes, **with** metadata) and Held-Out (86 scenes, **without** metadata, "to avoid
+training data contamination") — counted in *scenes*, not videos.
+
+| split | share of pairs | ships |
+|---|---|---|
+| `main` | 75% | everything: video + every annotation |
+| `held_out` | 20% | **`rgb.mp4` and a stub `meta.json`** — no masks, no windows, no family, no severity |
+| `debug` | 5% | everything; a small calibration slice |
+
+There is deliberately **no `train` split**. LikePhys (arXiv:2510.11512) does not split at
+all — it is a training-free evaluator doing pairwise valid-versus-invalid comparison — and
+PhysViol's primary use is the same. Naming a split `train` would imply the opposite.
+
+Three properties, each pinned by a test in `tests/test_export.py`:
+
+1. **Grouped by pair, never by clip.** A valid twin and its invalid siblings are
+   bit-identical up to `t_event`. Split them apart and the training set contains every frame
+   of the test clip before the violation — the answer, in other words.
+2. **Stratified within each scenario.** Cutting the whole population in one pass lets a
+   scenario land entirely in one split, and then the held-out set measures *"have you seen
+   `pour` before"* rather than *"do you understand pouring"*.
+3. **Held-out annotations are withheld, not requested.** Its `meta.json` is rebuilt from a
+   whitelist rather than copied, so the full one cannot ride along by accident. A benchmark
+   that ships its answers beside its questions measures whoever remembered not to look.
+
+Assignment is by hash of the `pair_uid`, ordered and cut at the quantiles — no rng, so
+regenerating a release reproduces its splits exactly. **Adding clips moves the boundaries**,
+so a release that grows should be re-split and re-reported rather than appended to.
+
+> **A release needs several variants per scenario before it can be split.** With one pair
+> per scenario there is nothing to hold out — three-way stratification of a single pair is
+> impossible — and `export` says so in its summary rather than quietly shipping an empty
+> held-out set.
+
+---
+
 ## 6. How it is organised
 
 Four levels — `python -m physviol.cli taxonomy` prints the live version, which is the
@@ -356,7 +485,7 @@ authority if this ever drifts from the counts below:
 DOMAIN     8   which physical law is at stake      identity, kinematics, contact, dynamics, equilibrium, optical, appearance, global
 FAMILY    23   the specific way it breaks          solidity, fission, colour_shift, ...
 SCENARIO  15   the staged scene                    drop, occluder_pass, pour, ... (14 built; clutter_toss is deferred)
-CELLS    178   scenario x family combinations actually built (+18 more valid but deferred)
+CELLS    166   scenario x family combinations actually built
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 ```
 
@@ -391,7 +520,7 @@ Two orthogonal augmentation axes:
 
 **Why 22 files and not 345.** Scenarios and injectors are orthogonal and compose through the
 trajectory seam — an injector edits `traj.npz`, per-body poses and velocities, which knows
-nothing about the scene that produced it. So the project needs 14 scenario files + 7 injector
+nothing about the scene that produced it. So the project needs 13 scenario files + 8 injector
 files (one per domain that owns a family — `global` shares its machinery with `kinematics`,
 since `global_gravity` is `antigravity` turned up to the whole scene) + one shared geometry
 helper, not one file per scenario × family pair. `antigravity` written once runs on every

@@ -25,4 +25,12 @@ dependencies:
   - tqdm
   - pytest
   - pypdf               # reading the papers in context/
+  # Packaging a release. `physviol export` writes index.parquet with
+  # pyarrow and uploads with huggingface_hub. Both are optional at
+  # runtime -- the exporter falls back to JSONL and skips the upload --
+  # but a published release should carry the parquet the dataset
+  # viewer reads.
+  - pyarrow
   - pip
+  - pip:
+    - huggingface_hub

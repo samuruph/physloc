@@ -252,25 +252,32 @@ class AngularMomentum(Injector):
     def _pivot(self, spec) -> bool:
         return spec.notes.get("constraint") == "pivot"
 
-    #: Shapes whose rotation the camera can actually see. With the v0 asset set
-    #: the primitives are untextured, so a spinning ball is pixel-identical to a
-    #: still one -- and a violation nobody can see is worse than a cell that
-    #: does not exist. The audit found the consequence on `toss`: 0 observable
-    #: frames, and segmentation byte-identical between the twins.
+    #: Shapes whose rotation the camera CANNOT see, and so the ones this family
+    #: declines. With untextured primitives a spinning ball is pixel-identical
+    #: to a still one -- and a violation nobody can see is worse than a cell
+    #: that does not exist. The audit found the consequence on `toss`: 0
+    #: observable frames, and segmentation byte-identical between the twins.
+    #:
+    #: Stated as the exclusion rather than the allow-list, which is what it
+    #: always meant. As an allow-list of `("cube",)` it silently excluded the
+    #: cylinder, cone and torus the moment those were added -- and since `toss`
+    #: then drew a cube only one seed in five, the cell failed to build on all
+    #: twelve retry seeds and five tests went red. A sphere is the only shape
+    #: here with no visible orientation.
     #:
     #: Checked here rather than in the compatibility matrix because it is a
     #: property of the SAMPLED scene, not of the scenario: `toss` and `drop`
     #: both draw a sphere or a cube per seed, so the same cell is meaningful on
     #: one seed and empty on the next. A constrained body is exempt -- what
     #: turns there is the swing, not the bob.
-    ANISOTROPIC = ("cube",)
+    ISOTROPIC = ("sphere",)
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         actor = self._primary(spec)
         if actor is None:
             return None
         if (not self._pivot(spec)
-                and getattr(actor, "kind", "cube") not in self.ANISOTROPIC):
+                and getattr(actor, "kind", "cube") in self.ISOTROPIC):
             return None
         T = traj.num_frames
         if self._pivot(spec):

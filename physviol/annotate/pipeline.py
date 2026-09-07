@@ -562,6 +562,7 @@ def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
             "track_id": bid,          # ids are stable, so id == track
             "name": b["name"],
             "category": b.get("kind", "unknown"),
+            "material": b.get("material"),
             "color": b.get("color"),
             "role": b.get("role", "unknown"),
             "static": bool(b.get("static", False)),

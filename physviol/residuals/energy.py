@@ -88,6 +88,19 @@ def inertia_diag(kind: str, scale, mass: float) -> np.ndarray:
         return np.array([mass * (3 * r * r + 4 * h * h) / 12.0,
                          mass * (3 * r * r + 4 * h * h) / 12.0,
                          0.5 * mass * r * r])
+    if kind == "cone":                     # axis = z, apex up, half-height h
+        r, h = float(s[0]), float(s[2])
+        # Standard solid cone about its centre of mass, which sits a quarter of
+        # the way up from the base.
+        lat = mass * (3.0 / 20.0 * r * r + 3.0 / 80.0 * (2.0 * h) ** 2)
+        return np.array([lat, lat, 0.3 * mass * r * r])
+    if kind == "torus":                    # axis = z
+        # KuBasic's torus has an outer radius of `scale` and a tube radius of
+        # about a third of it. Close enough: the energy law reads this as a
+        # ratio between rotational and linear terms, not as a spec sheet.
+        R, a = float(s[0]) * 0.75, float(s[0]) * 0.25
+        lat = mass * (5.0 / 8.0 * a * a + 0.5 * R * R)
+        return np.array([lat, lat, mass * (0.75 * a * a + R * R)])
     r = float(s.mean())                    # anything else: solid-sphere stand-in
     return np.full(3, 0.4 * mass * r * r)
 

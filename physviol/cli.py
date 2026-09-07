@@ -106,6 +106,19 @@ def _print_release_size(cells, a) -> None:
         for m in sorted({SCENARIOS[s].physics_medium for s, _ in cells})))
 
 
+# ------------------------------------------------------------------ export
+def cmd_export(a) -> int:
+    from .release.export import export
+    out = export(a.root, a.outdir, with_passes=a.with_passes,
+                 shard_bytes=max(1, int(a.shard_mb)) * 1024 * 1024,
+                 license_name=a.license)
+    if a.push_to:
+        from .release.export import upload
+        out["url"] = upload(a.outdir, a.push_to, private=a.private)
+    print(json.dumps(out, indent=2, default=str))
+    return 0
+
+
 # ----------------------------------------------------------- randomisation
 def cmd_randomisation(a) -> int:
     """Count the distinct values the sampler produces on each axis.
@@ -407,7 +420,13 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
 
 def _annotate(workdir, outroot, overlay=True, only=None):
     from .annotate.pipeline import annotate_work
-    results = annotate_work(workdir, outroot, only=only)
+    # The release NAME comes from where the release is being written. It
+    # defaulted to the literal "physviol_v0" and nothing ever passed it, so a
+    # v1 run wrote `out/physviol_v1/clips/physviol_v0/...` and stamped
+    # `"release": "physviol_v0"` into every meta.json it produced -- a whole
+    # release mislabelled as the previous one.
+    release = os.path.basename(os.path.normpath(outroot)) or "physviol_v0"
+    results = annotate_work(workdir, outroot, release=release, only=only)
     if overlay:
         from .viz.overlay import build
         for r in results:
@@ -654,6 +673,25 @@ def _build(suppress: bool = False):
                    help="print the outdir a config resolves to")
     p.add_argument("--outdir")
     p.set_defaults(fn=cmd_config_path)
+
+    p = add_parser("export",
+                   help="package a release as WebDataset shards + a card")
+    p.add_argument("root", nargs="?", default="out/release",
+                   help="a generated release directory (the one with clips/)")
+    p.add_argument("--outdir", required=True,
+                   help="where to write the packaged dataset")
+    p.add_argument("--with-passes", action="store_true",
+                   help="also shard depth/flow/normals/object coords -- about "
+                        "86%% of the bytes, hence opt-in")
+    p.add_argument("--license", default="CC-BY-4.0")
+    p.add_argument("--shard-mb", type=int, default=400)
+    p.add_argument("--push-to", metavar="REPO_ID",
+                   help="after packaging, upload to this HuggingFace dataset "
+                        "repo (e.g. samueleruf/physviol-v0). Needs "
+                        "huggingface_hub and a login token.")
+    p.add_argument("--private", action="store_true",
+                   help="create the hub repo private")
+    p.set_defaults(fn=cmd_export)
 
     p = add_parser("randomisation",
                    help="how much the sampler actually varies, per axis")

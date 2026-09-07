@@ -209,30 +209,28 @@ def vary_dims(body: BodySpec, rng, max_aspect: float = MAX_ASPECT) -> BodySpec:
     subject is whether a thing is held up -- would be measuring an artefact.
     So the shift is applied to z by exactly the change in half-height.
 
-    SPHERES ARE LEFT ALONE, deliberately. PyBullet has no ellipsoid primitive:
-    a non-uniformly scaled `kb.Sphere` renders as an ellipsoid but keeps a
-    round collider, so the picture and the physics would disagree -- exactly
-    the bug `stepper.ShapeSwap` exists to avoid, and it can only do so because
-    it builds a convex hull per intervention. Anisotropy here would also break
-    the rolling-without-slipping spin the rolling scenarios set as
-    `omega = v / r`, which has no meaning for a body with two radii.
+    EVERY OTHER SHAPE IS LEFT ALONE, and not by preference -- see below. A
+    sphere also could not take it for a second reason: the rolling scenarios
+    set its spin as `omega = v / r`, which has no meaning for a body with two
+    radii.
     """
-    if body.kind not in ("cube", "cylinder", "cone"):
+    # BOXES ONLY, and this is a simulator limit rather than a choice.
+    # `kubric/simulator/pybullet.py` builds a `kb.Cube` as `GEOM_BOX` with
+    # `halfExtents=obj.scale`, so a box may have three different half-extents.
+    # A `kb.Sphere` asserts `scale[0] == scale[1] == scale[2]`, and every
+    # KuBasic mesh -- cylinder, cone, torus -- asserts the same with the
+    # message "Pybullet does not support non-uniform scaling". Those are hard
+    # asserts inside the container, so squashing one is not a subtly wrong
+    # collider, it is a crashed render.
+    if body.kind != "cube":
         return body
     import dataclasses
 
     sx, sy, sz = (float(v) for v in body.scale)
     lo, hi = 1.0 / float(max_aspect) ** 0.5, float(max_aspect) ** 0.5
-    if body.kind == "cube":
-        scale = (sx * float(rng.uniform(lo, hi)),
-                 sy * float(rng.uniform(lo, hi)),
-                 sz * float(rng.uniform(lo, hi)))
-    else:
-        # A cylinder or cone has one radius and a height; varying x and y
-        # independently would make it an elliptical cylinder, which Kubric's
-        # primitive is not.
-        r = sx * float(rng.uniform(lo, hi))
-        scale = (r, r, sz * float(rng.uniform(lo, hi)))
+    scale = (sx * float(rng.uniform(lo, hi)),
+             sy * float(rng.uniform(lo, hi)),
+             sz * float(rng.uniform(lo, hi)))
     x, y, z = (float(v) for v in body.position)
     out = dataclasses.replace(body, scale=scale,
                               position=(x, y, z + scale[2] - sz))
@@ -247,3 +245,30 @@ def vary_dims(body: BodySpec, rng, max_aspect: float = MAX_ASPECT) -> BodySpec:
             out = dataclasses.replace(
                 out, mass=float(body.mass) * (scale[0] * scale[1] * scale[2]) / old_v)
     return out
+
+
+#: Shapes whose motion a viewer can predict, which is the premise of asking
+#: whether a clip obeyed physics. KuBasic also ships `gear`, `torus_knot`,
+#: `sponge`, `spot`, `teapot` and `suzanne`; a tumbling Suzanne head is a fine
+#: picture and a poor test.
+#:
+#: `sphere` and `cube` are Kubric primitives; the rest are KuBasic meshes, and
+#: PyBullet will only take a UNIFORM scale for those (see `vary_dims`).
+FREE_SHAPES = ("sphere", "cube", "cylinder", "cone", "torus")
+
+#: For scenarios that roll or slide their actor along a surface. A sphere rolls
+#: and a box slides, and both scenarios' spin is written for exactly those two
+#: cases -- `omega = v / r` means nothing for a cone, and a torus on its side
+#: rolls in a way the approach solve does not model.
+SURFACE_SHAPES = ("sphere", "cube")
+
+
+def pick_shape(rng, choices=FREE_SHAPES) -> str:
+    """One shape name, drawn off the APPEARANCE stream.
+
+    Shape is physics as much as appearance -- a cone topples where a ball rolls
+    -- but it is drawn here for the same reason the material is: so that
+    adding shapes to the menu cannot shift the physics draws a scenario already
+    made, and the same seed keeps producing the same rollout at L0 and L1.
+    """
+    return str(choices[int(rng.randint(0, len(choices)))])

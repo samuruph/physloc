@@ -133,6 +133,11 @@ def mass_for(name: str, scale, kind: str = "sphere") -> float:
         volume = 3.141592653589793 * sx * sy * (2.0 * sz)
         if kind == "cone":
             volume /= 3.0
+    elif kind == "torus":
+        # KuBasic's torus is an outer radius of `scale` with a tube about a
+        # quarter of it: V = 2*pi^2*R*a^2.
+        R, a = sx * 0.75, sx * 0.25
+        volume = 2.0 * 3.141592653589793 ** 2 * R * a * a
     else:                                    # cube, and anything box-shaped
         volume = 8.0 * sx * sy * sz
     return float(MATERIALS[name].density * volume / MASS_SCALE)

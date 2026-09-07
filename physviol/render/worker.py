@@ -40,6 +40,14 @@ PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
 
 # --------------------------------------------------------------------------
 KUBASIC = "gs://kubric-public/assets/KuBasic/KuBasic.json"
+
+#: KuBasic primitives usable as actors, beyond the two Kubric builds natively.
+#: The full set also has `gear`, `torus_knot`, `sponge`, `spot`, `teapot` and
+#: `suzanne`; these three are the ones whose physics is legible -- a viewer can
+#: predict how a cylinder rolls or a cone topples, which is the premise of
+#: asking whether the clip obeyed physics. A suzanne head tumbling is a fine
+#: picture and a poor test.
+KUBASIC_SHAPES = ("cylinder", "cone", "torus")
 HDRI = "gs://kubric-public/assets/HDRI_haven/HDRI_haven.json"
 
 
@@ -83,6 +91,23 @@ def build_scene(spec: SceneSpec, scratch):
             obj = kb.Sphere(scale=b.scale, **common)
         elif b.kind == "cube":
             obj = kb.Cube(scale=b.scale, **common)
+        elif b.kind in KUBASIC_SHAPES:
+            # A KuBasic mesh, with a collision mesh Kubric bakes for it, so
+            # these simulate as themselves rather than as a bounding box.
+            #
+            # UNIFORM SCALE ONLY: `kubric/simulator/pybullet.py` asserts
+            # `scale[1] == scale[2] == scale[0]` for every file-based object,
+            # with the message "Pybullet does not support non-uniform scaling".
+            # `_common.vary_dims` therefore leaves everything but a box alone,
+            # and this takes `scale[0]` rather than quietly using a mean.
+            kubasic = kb.AssetSource.from_manifest(KUBASIC)
+            obj = kubasic.create(asset_id=b.kind, name=b.name,
+                                 scale=float(b.scale[0]),
+                                 position=b.position, quaternion=b.quaternion,
+                                 static=b.sim_static, mass=b.mass,
+                                 friction=b.friction, restitution=b.restitution)
+            obj.material = material
+            obj.segmentation_id = b.segmentation_id
         elif b.kind == "dome":
             # KuBasic's dome is both the ground plane and the backdrop the HDRI
             # is projected onto -- the idiom movi_def_worker.py uses.

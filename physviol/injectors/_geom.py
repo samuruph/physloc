@@ -37,7 +37,9 @@ def top_of(spec, body) -> float:
     """World z of the walkable top face of `body`."""
     if body is None:
         return float(spec.floor_level)
-    if body.kind == "cube":
+    if body.kind in ("cube", "cylinder", "cone"):
+        # A cylinder and a cone are as tall as their half-height, same as a
+        # box; a cone's tip is the top even though its bulk is lower.
         return float(body.position[2] + body.scale[2])
     if body.kind == "dome":
         # KuBasic's dome is a bowl whose interior floor sits at the origin.

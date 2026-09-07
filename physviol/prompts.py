@@ -97,7 +97,9 @@ SUBJECTS: Dict[str, str] = {
 #: `kind` -> the noun a prompt uses for it. Kubric's two primitives, so two
 #: entries; extend this, not a hardcoded string, if a third primitive ever
 #: joins the actor set.
-SHAPE_NOUN: Dict[str, str] = {"sphere": "ball", "cube": "cube"}
+SHAPE_NOUN: Dict[str, str] = {"sphere": "ball", "cube": "cube",
+                              "cylinder": "cylinder",
+                              "cone": "cone", "torus": "ring"}
 
 #: 8 equal 45-degree hue bands. `hue_rgb` (`scenarios/_common.py`) always
 #: draws `s=0.62, v=0.88` -- a fixed, vivid, non-gray, non-white color -- so

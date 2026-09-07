@@ -81,7 +81,7 @@ class OccluderPass(Scenario):
         # silently under-covering the true silhouette and marking a frame
         # "occluded" while a corner still pokes out past the screen's edge.
         ball = C.with_material(ball, M.pick(arng), arng)
-        silhouette_radius = radius * (math.sqrt(3.0) if kind == "cube" else 1.0)
+        silhouette_radius = radius * (1.0 if kind == "sphere" else math.sqrt(3.0))
         occ = _occluded_frames(eye, ball, screen, tier, radius, y_path,
                                silhouette_radius)
         hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None

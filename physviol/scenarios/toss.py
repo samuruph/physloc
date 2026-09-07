@@ -50,7 +50,11 @@ class Toss(Scenario):
         x0 = -vx * flight * 0.5
 
         hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
-        kind = "sphere" if rng.rand() < 0.6 else "cube"
+        # Any shape it likes: nothing here assumes a rolling contact, so a
+        # cone that topples and a ring that rolls away are both fair
+        # pictures of the same physics. Drawn off the appearance
+        # stream -- see `C.pick_shape`.
+        kind = C.pick_shape(arng)
         # THROWN WITH SPIN, which is what `tumble` used to be for. Retiring that
         # scenario left this one as the only free-flight throw, and a body
         # thrown without any rotation at all is the less interesting half of

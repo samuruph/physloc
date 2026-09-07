@@ -48,7 +48,11 @@ class Drop(Scenario):
 
         # Sphere or cube: both fall and bounce, so the shape is free to vary
         # and two instances of drop do not look like one clip twice.
-        kind = "sphere" if rng.rand() < 0.6 else "cube"
+        # Any shape it likes: nothing here assumes a rolling contact, so a
+        # cone that topples and a ring that rolls away are both fair
+        # pictures of the same physics. Drawn off the appearance
+        # stream -- see `C.pick_shape`.
+        kind = C.pick_shape(arng)
         ball = BodySpec(
             name="ball", kind=kind, position=(0.0, 0.0, drop_height),
             scale=(radius, radius, radius), velocity=(vx, vy, 0.0),

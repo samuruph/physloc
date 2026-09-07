@@ -199,8 +199,10 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         "violation_windows": json.dumps(windows),
         "observability_lag": v.get("observability_lag_frames"),
         "seed": meta.get("seed"),
+        "variant": meta.get("variant"),
         "tier": _name(meta.get("tier")),
         "complexity": _name(meta.get("complexity")),
+        "n_distractors": meta.get("n_distractors"),
         "num_frames": meta.get("num_frames"),
         "fps": meta.get("fps"),
         "camera_motion": cam.get("motion"),
@@ -390,6 +392,31 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
 OVERLAY_IN_SPLITS = ("debug",)
 
 
+#: THE ORDER THE DATASET VIEWER SHOWS. This list is the layout -- edit it to
+#: rearrange the columns on the hub, and nothing else needs to change.
+#:
+#: The videos come SECOND AND THIRD, right after the clip's identity, because
+#: the viewer is the point of the table: a dataset about physics whose physics
+#: cannot be watched at a glance is a poor dataset, and appended columns land
+#: off the right-hand edge behind a scroll. Then what the clip IS, then what
+#: was done to it, then how the scene was built, then the free text.
+#:
+#: Anything a row carries that is not named here is appended in row order
+#: rather than dropped, so adding a field to `_index_row` cannot silently lose
+#: it from the published index.
+INDEX_COLUMNS = (
+    "clip_uid", "overlay", "rgb",
+    "label", "split", "scenario", "family", "domain", "medium",
+    "severity_bin", "magnitude", "peak_severity",
+    "t_event_frame", "violation_windows", "observability_lag",
+    "complexity", "camera_motion", "n_distractors",
+    "actor_shape", "actor_material", "actor_mass",
+    "tier", "num_frames", "fps", "seed", "variant",
+    "pair_uid", "twin_uid",
+    "prompt",
+)
+
+
 def _write_index(rows: List[Dict], outdir: str,
                  clips: Sequence[Tuple[str, Dict]] = ()) -> str:
     """The per-clip table. Parquet when pyarrow is here, JSONL when it is not.
@@ -434,6 +461,13 @@ def _write_index(rows: List[Dict], outdir: str,
                 name, pa.array(videos[name],
                                type=pa.struct([("bytes", pa.binary()),
                                                ("path", pa.string())])))
+    # Ordered LAST, once, rather than by inserting each column at a computed
+    # index: one declared list is the whole layout, and it cannot get out of
+    # step with itself the way two insert positions can.
+    present = set(table.schema.names)
+    ordered = ([c for c in INDEX_COLUMNS if c in present]
+               + [c for c in table.schema.names if c not in INDEX_COLUMNS])
+    table = table.select(ordered)
     table = table.replace_schema_metadata(_video_schema_metadata(table))
     pq.write_table(table, path)
     return path
@@ -474,6 +508,15 @@ def _write_license(outdir: str, license_name: str) -> None:
             % license_name)
 
 
+def _count(rows, field):
+    """(value, n) pairs for one column, for the card's summary table."""
+    import collections
+
+    c = collections.Counter(str(r.get(field)) for r in rows
+                            if r.get(field) is not None)
+    return sorted(c.items())
+
+
 def _write_card(rows: List[Dict], outdir: str, license_name: str,
                 shards: Dict[str, List[str]]) -> None:
     """The dataset card. YAML front-matter first, because the hub parses it."""
@@ -484,6 +527,7 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
     tiers = sorted({r["tier"] for r in rows if r["tier"]})
     invalid = sum(1 for r in rows if r["label"] == "invalid")
     moving = sum(1 for r in rows if r["camera_motion"] not in (None, "static"))
+    cluttered = sum(1 for r in rows if (r.get("n_distractors") or 0) > 0)
     index_kind = ("parquet" if os.path.exists(os.path.join(outdir, "index.parquet"))
                   else "jsonl")
 
@@ -559,6 +603,25 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "| tier | %s |" % ", ".join(tiers),
         "| moving camera | %d clips (%.0f%%) |" % (
             moving, 100.0 * moving / max(len(rows), 1)),
+        # The three axes a consumer filters on, each as a count rather than a
+        # promise: the ladder and the two orthogonal conditions are partitions
+        # INSIDE this release, so the card has to say how much of each landed.
+        "| complexity | %s |" % ", ".join(
+            "%s %d" % (lv, n) for lv, n in sorted(_count(rows, "complexity"))),
+        "| with distractors | %d clips (%.0f%%) |" % (
+            cluttered, 100.0 * cluttered / max(len(rows), 1)),
+        "",
+        "## The complexity ladder",
+        "",
+        "The ladder is SCENE REALISM: `L0` primitives on a solid background, "
+        "`L1` adds materials whose appearance and density agree, `L2` an HDRI "
+        "environment, `L3` GSO objects in it. Every clip carries its rung in "
+        "`complexity`, so a rung is a filter rather than a separate download.",
+        "",
+        "**Camera motion and distractors are not rungs.** They are orthogonal "
+        "conditions applied inside every rung at declared ratios, so \"what "
+        "does clutter cost\" is answerable at each realism level and not only "
+        "at the top. Filter on `camera_motion` and `n_distractors`.",
         "",
         "## Files",
         "",

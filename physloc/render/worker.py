@@ -527,6 +527,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="drop")
     ap.add_argument("--seed", type=int, default=91731)
+    ap.add_argument("--variant", type=int, default=0,
+                    help="which randomisation of this cell this is. Some "
+                         "choices are spread ACROSS a scenario's variants "
+                         "rather than drawn per scene -- camera motion is one "
+                         "-- so the index has to reach the sampler.")
     ap.add_argument("--tier", default="debug", choices=sorted(scenarios.TIERS))
     ap.add_argument("--family", default="solidity",
                     help="one family, or a comma list -- every family named "
@@ -547,7 +552,8 @@ def main() -> int:
     tier = scenarios.TIERS[a.tier].override(
         resolution=a.resolution, fps=a.fps, num_frames=a.frames,
         samples_per_pixel=a.spp)
-    spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity)
+    spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity,
+                                           variant=a.variant)
 
     pair_uid = "%s/%04d" % (a.scenario, a.seed)
     outdir = os.path.join(a.outdir, a.scenario, "%04d" % a.seed)

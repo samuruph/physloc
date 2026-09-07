@@ -259,15 +259,19 @@ def cmd_generate(a) -> int:
     # cannot change what any of them produces: the per-clip rng is keyed by
     # (seed, family, severity) through crc32, never by position in a queue.
     # `tests/test_parallel_determinism.py` pins that.
-    jobs = [(a.seed + v, scenario, families)
+    # The VARIANT INDEX travels with the seed. Some choices are spread across a
+    # scenario's variants rather than drawn per scene -- camera motion is one,
+    # so that every scenario gets the same share rather than each flipping its
+    # own coin -- and the sampler cannot work the index out from the seed.
+    jobs = [(a.seed + v, scenario, families, v)
             for v in range(a.variants)
             for scenario, families in sorted(by_scenario.items())]
 
     def run_one(job):
-        seed, scenario, families = job
+        seed, scenario, families, variant = job
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, work, complexity=a.complexity,
-                               window=a.window,
+                               window=a.window, variant=variant,
                                dials={"resolution": a.resolution, "fps": a.fps,
                                       "frames": a.frames, "spp": a.spp})
         if rc != 0:
@@ -334,7 +338,10 @@ def cmd_generate(a) -> int:
         for scenario, family in declined:
             by_scen.setdefault(scenario, []).append(family)
         seed = a.seed + a.variants + attempt
-        retry_jobs = [(seed, scen, fams) for scen, fams in sorted(by_scen.items())]
+        # Retries reuse the declining cell's variant index, so a cell rebuilt
+        # on another seed keeps the camera treatment its variant called for.
+        retry_jobs = [(seed, scen, fams, a.variants + attempt)
+                      for scen, fams in sorted(by_scen.items())]
         print("  retrying %d declined cell(s) at seed %d"
               % (len(declined), seed), flush=True)
         total = len(jobs) + len(retry_jobs)
@@ -396,12 +403,12 @@ def cmd_generate(a) -> int:
 
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
-                complexity="L0", window=None, dials=None):
+                complexity="L0", window=None, dials=None, variant=0):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
            "--severity", severity, "--complexity", complexity,
-           "--outdir", workdir]
+           "--variant", str(variant), "--outdir", workdir]
     if window:
         cmd += ["--window", str(window)]
     for flag, value in (dials or {}).items():

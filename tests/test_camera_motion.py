@@ -11,45 +11,63 @@ import pytest
 
 from physloc import scenarios
 from physloc.scenarios import TIERS
-from physloc.scenarios.base import (CAMERA_MOTION_KINDS, MOVING_CAMERA_SHARE,
-                                     DOLLY_RANGE)
+from physloc.scenarios.base import (CAMERA_MOTION_KINDS, CAMERA_MOTION_PERIOD,
+                                    DOLLY_RANGE)
 
 NAMES = sorted(scenarios.available())
-SEEDS = range(120)
+BASE = 777
+N_VARIANTS = 20
 
 
-def _specs(name, complexity="L0"):
+def _specs(name, complexity="L0", n=N_VARIANTS):
+    """One spec per VARIANT, which is what the camera rule is defined over."""
     sc = scenarios.get(name)
-    return [sc.sample(s, TIERS["debug"], complexity) for s in SEEDS]
+    return [sc.sample(BASE + v, TIERS["debug"], complexity, variant=v)
+            for v in range(n)]
 
 
-def test_about_a_fifth_of_clips_move_the_camera():
-    """The share the dataset promises, within sampling noise.
+def test_every_scenario_moves_the_camera_on_the_same_share_of_variants():
+    """One variant in five, PER SCENARIO -- not a coin flip per scene.
 
-    Checked in aggregate rather than per scenario: at 120 seeds a single
-    scenario's count has a standard deviation of about 4.4 points, so a
-    per-scenario bound tight enough to be meaningful would flake.
+    An independent flip gives the right share overall and an uneven one per
+    scenario: measured across thirteen scenarios it ranged from 13% to 31%, so
+    some scenarios had moving cameras and others effectively did not, and any
+    per-scenario comparison inherited that as a confound.
     """
-    moving = sum(sp.camera_moves for name in NAMES for sp in _specs(name))
-    total = len(NAMES) * len(SEEDS)
-    share = moving / float(total)
-    assert abs(share - MOVING_CAMERA_SHARE) < 0.04, (
-        "%.1f%% of clips move the camera, expected about %.0f%%"
-        % (100 * share, 100 * MOVING_CAMERA_SHARE))
+    expected = N_VARIANTS // CAMERA_MOTION_PERIOD
+    for name in NAMES:
+        if name == "occluder_pass":
+            continue                       # opts out entirely; see below
+        moving = [sp.variant for sp in _specs(name) if sp.camera_moves]
+        assert len(moving) == expected, (
+            "%s moved on %d of %d variants, expected %d"
+            % (name, len(moving), N_VARIANTS, expected))
 
 
-def test_the_decision_is_not_shared_across_scenarios():
-    """Each scenario flips its own coin.
+def test_the_same_variants_move_in_every_scenario():
+    """Which variants move is a property of the INDEX, not of the scenario.
 
-    Salted on the seed alone, every scenario made the same decision for a given
-    seed -- measured at exactly 22% for all thirteen, which is one coin flip
-    reported thirteen times. It looks like a healthy 22% until you notice the
-    number is identical everywhere.
+    That is what makes the share identical everywhere, and it also means a
+    consumer can say "variant 4 is the moving-camera one" without consulting a
+    table.
     """
-    per = {name: sum(sp.camera_moves for sp in _specs(name)) for name in NAMES}
-    counts = [c for n, c in per.items() if n != "occluder_pass"]
-    assert len(set(counts)) > 1, (
-        "every scenario moves the camera on exactly the same seeds: %s" % per)
+    sets = {name: tuple(sp.variant for sp in _specs(name) if sp.camera_moves)
+            for name in NAMES if name != "occluder_pass"}
+    assert len(set(sets.values())) == 1, sets
+
+
+def test_a_short_run_is_entirely_static():
+    """Fewer variants than the period means no camera motion at all.
+
+    Asked for explicitly: a short run should be the easy case unless motion is
+    requested. The moving variant is the LAST of each block, so a run of four
+    never reaches it -- a run only spends clips on camera motion once it is
+    long enough to afford them.
+    """
+    for n in range(1, CAMERA_MOTION_PERIOD):
+        for name in NAMES:
+            assert not any(sp.camera_moves for sp in _specs(name, n=n)), (
+                "%s moved the camera in a %d-variant run" % (name, n))
 
 
 def test_occluder_pass_never_moves_the_camera():
@@ -90,11 +108,11 @@ def test_orbit_holds_its_distance_and_dolly_does_not():
     T = 25
     seen = {}
     for name in NAMES:
-        for sp in _specs(name):
+        for sp in _specs(name, n=60):
             if sp.camera_moves:
                 seen.setdefault(sp.camera_motion_kind, sp)
     for kind in CAMERA_MOTION_KINDS:
-        assert kind in seen, "no %s clip in %d samples" % (kind, len(NAMES) * len(SEEDS))
+        assert kind in seen, "no %s clip sampled" % kind
 
     def radii(sp):
         aim = np.asarray(sp.camera_look_at, np.float64)
@@ -114,7 +132,8 @@ def test_orbit_holds_its_distance_and_dolly_does_not():
 
 def test_a_static_camera_really_is_constant():
     """`camera_at` must not drift on a clip that declares no motion."""
-    sp = next(sp for name in NAMES for sp in _specs(name) if not sp.camera_moves)
+    sp = next(sp for name in NAMES for sp in _specs(name)
+              if not sp.camera_moves)
     poses = {sp.camera_at(f, 25)[0] for f in range(25)}
     assert len(poses) == 1, "a static camera reported %d poses" % len(poses)
 

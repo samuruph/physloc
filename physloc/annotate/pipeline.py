@@ -99,8 +99,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- rebuild the scene spec so the residual context is available -----
     from .. import scenarios as scen_mod
+    # The variant index matters: camera motion is spread across a scenario's
+    # variants, so re-sampling without it can reconstruct a static scene for a
+    # clip that was rendered with a moving camera -- and every framing guard
+    # and every camera field in `meta.json` would then describe the wrong shot.
     spec = scen_mod.get(scenario).sample(
-        seed, tier, spec_d.get("complexity", {}).get("name", "L0"))
+        seed, tier, spec_d.get("complexity", {}).get("name", "L0"),
+        variant=int(spec_d.get("variant", 0)))
     inj = injectors.get(family)
 
     causal_ids: List[int] = [int(i) for i in plan_d["causal_body_ids"]]

@@ -353,6 +353,11 @@ class SceneSpec:
     #: Shipped in `meta.json` so a consumer can condition on it.
     camera_motion_kind: str = "static"
 
+    #: Which randomisation of this cell this is: variant 0 is the first. Needed
+    #: because some choices have to be spread ACROSS a scenario's variants
+    #: rather than drawn independently per scene -- see `_maybe_move_camera`.
+    variant: int = 0
+
     @property
     def camera_moves(self) -> bool:
         return self.camera_end_position is not None
@@ -430,6 +435,7 @@ class SceneSpec:
         "camera_end_position": (list(self.camera_end_position)
                                 if self.camera_end_position else None),
         "camera_motion_kind": self.camera_motion_kind,
+        "variant": int(self.variant),
             "camera_look_at": list(self.camera_look_at),
             "bodies": [{"name": b.name, "kind": b.kind, "role": b.role,
                         "segmentation_id": b.segmentation_id, "mass": b.mass,
@@ -489,10 +495,22 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     return spec
 
 
-#: Share of clips whose camera moves. One in five: enough that a model cannot
-#: assume a fixed viewpoint, few enough that the dataset default stays the
-#: clean case where object motion is the only motion in the frame.
-MOVING_CAMERA_SHARE = 0.20
+#: One variant in every `CAMERA_MOTION_PERIOD` moves its camera -- so 2 of 10,
+#: 1 of 5, PER SCENARIO.
+#:
+#: Spread across a scenario's variants rather than drawn independently per
+#: scene. An independent coin flip gives the right share overall and an uneven
+#: one per scenario: measured across thirteen scenarios it ranged from 13% to
+#: 31%, so some scenarios had moving cameras and others effectively did not,
+#: and any per-scenario comparison inherited that as a confound.
+#:
+#: The variant INDEX decides, not the seed, and the moving one is the LAST of
+#: each block. That is what makes a short run entirely static: four variants
+#: are 0-3 and none of them is index 4. A run only starts spending clips on
+#: camera motion once it is long enough to afford them, and `--camera-motion`
+#: overrides this for anyone who wants one on purpose.
+CAMERA_MOTION_PERIOD = 5
+MOVING_CAMERA_SHARE = 1.0 / CAMERA_MOTION_PERIOD
 
 #: The motions, and how often each is chosen among the clips that move.
 #:
@@ -563,7 +581,8 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xCA31 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
-    if not forced and float(rng.uniform()) >= MOVING_CAMERA_SHARE:
+    if not forced and (int(spec.variant) % CAMERA_MOTION_PERIOD
+                       != CAMERA_MOTION_PERIOD - 1):
         return
 
     eye = np.asarray(spec.camera_position, np.float64)
@@ -714,7 +733,8 @@ class Scenario:
     name: str = "unnamed"
 
     def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+               complexity: str = DEFAULT_COMPLEXITY,
+               variant: int = 0) -> SceneSpec:
         """Sample one instance, then vary how it looks. Do not override.
 
         Level 4 of the taxonomy is the *instance*, and two instances of one
@@ -724,7 +744,9 @@ class Scenario:
         the scene is lit -- is applied here so it cannot drift between thirteen
         files.
         """
-        return _vary(self._sample(seed, tier, complexity), seed)
+        spec = self._sample(seed, tier, complexity)
+        spec.variant = int(variant)
+        return _vary(spec, seed)
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:

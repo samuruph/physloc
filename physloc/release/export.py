@@ -431,12 +431,20 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         cfg.append("  - split: %s" % n)
         cfg.append("    path: index.parquet")
         break                      # the index carries every split in one file
-    if any(shards.get(n) for n in splits_present):
-        cfg += ["- config_name: clips", "  data_files:"]
-        for n in splits_present:
-            if shards.get(n):
-                cfg.append("  - split: %s" % n)
-                cfg.append("    path: shards/%s-*.tar" % n)
+    # NO webdataset config for the shards, on purpose.
+    #
+    # Declaring one made the hub's viewer fail the whole config with
+    # `SplitsNotFoundError`, and a dataset page showing a broken config is
+    # worse than one showing a working table. The likely reason is that samples
+    # do not have a homogeneous key set -- a valid clip has no
+    # `violation_mask`, `severity_map` or `causal_mask`, because there is no
+    # violation in it -- and webdataset feature inference expects every sample
+    # to carry the same members. Splitting the shards by label would test that,
+    # and is worth doing before claiming it.
+    #
+    # The shards are still in the repository and still the data; they are just
+    # downloaded rather than previewed. The index is what makes the dataset
+    # navigable, and it renders.
 
     lines = [
         "---",
@@ -481,7 +489,9 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "## Files",
         "",
         "- `shards/<split>-*.tar` -- RGB video and every annotation, one set "
-        "per split. **Start here.**",
+        "per split. **This is the data.** The hub previews `index` rather than "
+        "these, so browse the table to find what you want and stream the shard "
+        "to get it.",
         ("- `shards/<split>-passes-*.tar` -- depth, optical flow, normals, "
          "object coordinates. Far larger: about 86% of the bytes, so they ship "
          "separately rather than inside the download everyone needs."

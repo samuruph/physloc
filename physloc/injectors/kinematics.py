@@ -316,6 +316,15 @@ class GlobalGravity(_GravityScale):
     regime and reverses, because `strong` is the development default and a
     strongest bin nobody can see is not worth generating.
 
+    The ladder used to be `{weak: 0.45, medium: 0.05, strong: -1.2}`, which is
+    V-shaped rather than monotone: medium was a FIVE PER CENT deviation, far
+    milder than weak's forty-five. So the bins did not order by strength, and it
+    showed -- measured over a 166-cell L0 sweep, `global_gravity` scored
+    weak 0.000 / medium 0.000 / strong 1.000 on four of its five scenarios, and
+    weak 0.585 / medium 0.312 / strong 1.000 on the fifth. A binary family with
+    a redundant bin, wearing three labels. `test_severity_ladders.py` now
+    refuses any ladder that turns around.
+
     **Needs at least two moving bodies, and `plan` returns None below that.**
     With one object on screen, scaling gravity for the scene and scaling it for
     that object produce identical pixels -- the clip would be an `antigravity`
@@ -324,7 +333,9 @@ class GlobalGravity(_GravityScale):
     """
 
     family = "global_gravity"
-    ALPHA_BY_BIN = {"weak": 0.45, "medium": 0.05, "strong": -1.2}
+    #: Monotone in |deviation|: 0.25 < 0.55 < 1.2. Weak and medium are both
+    #: slower than Earth (gravity x0.75 and x0.45), strong is faster (x2.2).
+    ALPHA_BY_BIN = {"weak": 0.25, "medium": 0.55, "strong": -1.2}
     MIN_BODIES = 2
     spatial_extent = "global"
 

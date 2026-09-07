@@ -720,7 +720,11 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "spatial_extent": plan_d["spatial_extent"],
             "intervention": plan_d["intervention"],
             "consequences": [],
-            "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),
+            # From `t_event` on. See `severity.peak`: the prefix is
+            # bit-identical, so a residual there measures the scene, not a
+            # violation, and letting it win reported `score: 0.0` on 34 clips.
+            "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name,
+                                          t_event=tinfo["t_event_frame"]),
         }
     else:
         meta["violation"] = None

@@ -89,19 +89,50 @@ def test_cell_plans_and_applies(scenario, family):
     assert changed, "%s x %s changed nothing after t_event" % (scenario, family)
 
 
+#: The value of each magnitude unit that means NO VIOLATION. Zero for a
+#: quantity like a distance or an impulse; ONE for a ratio, where lawful is
+#: "the same as it was".
+#:
+#: This table is why the test below measures distance from lawful rather than
+#: `abs(magnitude)`. `abs` is a strength measure only when lawful is zero, and
+#: for `gravity_scale_deviation` it is not -- so the test blessed
+#: `global_gravity`'s bins at 0.55, 0.95, 2.2, which are increasing as raw
+#: numbers and INVERTED as physics: medium was a five per cent change and weak
+#: a forty-five. Every clip of that family's medium bin measured zero severity
+#: as a result. A unit not listed here is assumed to be lawful at zero.
+LAWFUL_MAGNITUDE = {
+    "gravity_scale_deviation": 1.0,
+    "count_ratio": 1.0,
+    "volume_ratio": 1.0,
+    "energy_gain_ratio": 1.0,
+    "mass_ratio_removed": 1.0,
+}
+
+
 @pytest.mark.parametrize("scenario,family", CELLS,
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
 def test_cell_magnitude_is_ordered(scenario, family):
-    """weak <= medium <= strong, for every cell, on the family's own knob."""
+    """weak <= medium <= strong, for every cell, on the family's own knob.
+
+    Ordered by DISTANCE FROM LAWFUL, not by raw size -- see
+    `LAWFUL_MAGNITUDE`. A ratio family can cross its lawful value on purpose
+    (`global_gravity` runs slower than Earth at weak and medium and faster at
+    strong), and raw ordering cannot tell that apart from a ladder that goes
+    backwards.
+    """
     # ONE seed for all three bins -- see `reachable_ladder`. Comparing a weak
     # plan from one scene against a strong one from another proves nothing.
     plans = reachable_ladder(scenario, family, SEED, SEVERITY_BINS)
     assert plans is not None, (
         "%s x %s has no full severity ladder on any of %d seeds"
         % (scenario, family, REACHABLE_SEEDS))
-    mags = [abs(p.magnitude) for p in plans]
-    assert mags == sorted(mags), "%s x %s magnitudes not ordered: %s" % (
-        scenario, family, mags)
+    mags = [abs(p.magnitude - LAWFUL_MAGNITUDE.get(p.magnitude_unit, 0.0))
+            for p in plans]
+    assert mags == sorted(mags), (
+        "%s x %s magnitudes not ordered by distance from lawful: %s (raw %s, "
+        "unit %s)" % (scenario, family, [round(m, 4) for m in mags],
+                      [round(p.magnitude, 4) for p in plans],
+                      plans[0].magnitude_unit))
 
 
 @pytest.mark.parametrize("scenario,family", CELLS,

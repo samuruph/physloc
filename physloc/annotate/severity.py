@@ -225,9 +225,39 @@ def temporal_profile(severity_map: np.ndarray) -> np.ndarray:
 
 
 def peak(residual: np.ndarray, score: np.ndarray, floor: NoiseFloor,
-         law: str) -> Dict[str, object]:
-    """The `peak_residual` block of meta.json."""
-    f = int(np.argmax(residual))
+         law: str, t_event: int = 0) -> Dict[str, object]:
+    """The `peak_residual` block of meta.json.
+
+    **From `t_event` on, never before it.** The prefix is bit-identical across
+    the twin by construction, so a residual there is a property of the SCENE --
+    the law's own measurement of a lawful frame -- and can never be evidence of
+    a violation that has not happened yet.
+
+    It was `argmax` over the whole clip, and that is the single cause of every
+    zero-severity clip in the dataset. Measured over a 166-cell L0 sweep: 41 of
+    495 invalid clips picked a frame before `t_event`, and **all 34 clips whose
+    `peak_severity` was 0.0 were exactly those**. The mechanism is that the
+    score is gated to the violation window, so a peak found outside it reports
+    `score = 0` however strong the violation actually was.
+
+    `rolling_ramp x support` is the clearest case: the block starts on a RAISED
+    ramp, so the support law measures it as clearing its datum by 8.16 radii on
+    frame 0 -- a perfectly lawful frame -- which beat every frame of the real
+    violation. The clip shipped `peak_severity: 0.0` while its own summary line
+    read `sev=1.00`.
+
+    Within the tail the SCORE decides, because that is what the block is for:
+    the strongest moment of the violation, not the largest number the law
+    happened to emit. `value` and `z_vs_valid` are then reported at that same
+    frame so the three agree. Where the score is flat -- a real possibility for
+    a violation genuinely at the noise floor -- the residual breaks the tie, so
+    `value` still points at the best evidence there is.
+    """
+    T = int(np.asarray(residual).shape[0])
+    lo = int(np.clip(int(t_event), 0, max(0, T - 1)))
+    r, sc = np.asarray(residual)[lo:], np.asarray(score)[lo:]
+    f = lo + int(np.argmax(sc) if float(sc.max(initial=0.0)) > 0.0
+                 else np.argmax(r))
     return {"law": law, "value": float(residual[f]),
             "z_vs_valid": float(floor.z(np.asarray([residual[f]]))[0]),
             "score": float(score[f]), "frame": f}

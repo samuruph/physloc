@@ -340,8 +340,55 @@ root-owned, and prefers the pinned digest over `:latest`.
 
 ## 5. What a clip contains
 
-Output lands in `out/release/clips/<release>/<scenario>/<seed>/{valid,invalid_<family>_<bin>}/`
-(gitignored, so it never enters version control).
+### The directory tree
+
+Output lands under `<outdir>/clips/<release>/<scenario>/<seed>/`, gitignored so it never
+enters version control. Concretely, after `--variants 2 --severity all`:
+
+```
+out/release/
+  coverage_strong.mp4                       every cell in the release, one video
+  clips/
+    physviol_v0/
+      drop/                                 <- SCENARIO
+        0777/                               <- SEED = base seed + variant index
+          valid/                            <- ONE valid twin, shared by every
+          invalid_solidity_weak/               family and bin on this scene
+          invalid_solidity_medium/          <- FAMILY _ SEVERITY BIN
+          invalid_solidity_strong/
+          invalid_continuity_weak/
+          ...                                  14 families x 3 bins on `drop`
+          sheet_strong.mp4                  every family of this scene, one frame
+          grid_solidity.mp4                 every severity of one family
+        0778/                               <- variant 2: a different scene
+          valid/
+          invalid_solidity_weak/
+          ...
+      collision/
+        0777/
+        0778/
+      ...                                      13 scenarios
+```
+
+**How the four axes multiply.** A *cell* is one (scenario, family) pair — 166 of them, chosen
+by `taxonomy.COMPATIBILITY`, which is why `drop` has 14 families and `pendulum_swing` has 8.
+Each cell is rendered once per severity bin per variant:
+
+```
+clips = 166 cells x bins x variants          invalid
+      + 13 scenarios x variants              valid  (one per scene, not per family)
+```
+
+So `--variants 2 --severity all` is `166×3×2 = 996` invalid + `13×2 = 26` valid = **1022
+renders**. The valid twin is shared because the twins are bit-identical before `t_event` —
+rendering it per family would be both wasteful and, if anything drifted, wrong.
+
+**A variant is a fresh seed**, not a re-roll of one scene: variant *N* uses `seed + N`, and
+the seed drives every free parameter (see [Randomisation](#randomisation)). So `0777/` and
+`0778/` are different objects, materials, sizes, colours, floor, camera and event timing —
+the same *cell*, a different *instance* of it.
+
+### What one clip directory contains
 
 ```
 meta.json            labels, taxonomy, violation windows, severity, provenance
@@ -416,9 +463,8 @@ out/hf/physviol_v0/
   taxonomy.json                what every scenario and family MEANS
   index.parquet                one row per clip (JSONL if pyarrow is absent)
   splits/{main,held_out,debug}.txt
-  shards/core-*.tar            rgb + every annotation      <- the default download
-  shards/held_out-*.tar        rgb ONLY, no annotations
-  shards/passes-*.tar          depth/flow/normals/coords   <- only with --with-passes
+  shards/<split>-*.tar         rgb + every annotation      <- the default download
+  shards/<split>-passes-*.tar  depth/flow/normals/coords   <- only with --with-passes
 ```
 
 **Why the passes ship separately.** Measured on a debug sweep: `flow_fwd`, `depth` and
@@ -445,9 +491,16 @@ training data contamination") — counted in *scenes*, not videos.
 
 | split | share of pairs | ships |
 |---|---|---|
-| `main` | 75% | everything: video + every annotation |
-| `held_out` | 20% | **`rgb.mp4` and a stub `meta.json`** — no masks, no windows, no family, no severity |
-| `debug` | 5% | everything; a small calibration slice |
+| `main` | 75% | video + every annotation |
+| `held_out` | 20% | video + every annotation |
+| `debug` | 5% | video + every annotation |
+
+**Every split ships everything.** The split is a *label*, not a filter — so you can re-cut
+the boundary later and you can score any clip in the release. IntPhys 2 withholds its
+held-out metadata, and for a leaderboard other people submit to that is the right call; it
+is the wrong one for a release that still has to be re-split and measured. Stripping
+annotations is something you can do at publication time from `splits/held_out.txt` without
+regenerating anything — putting the pairs on the wrong side of a boundary is not.
 
 There is deliberately **no `train` split**. LikePhys (arXiv:2510.11512) does not split at
 all — it is a training-free evaluator doing pairwise valid-versus-invalid comparison — and
@@ -461,9 +514,9 @@ Three properties, each pinned by a test in `tests/test_export.py`:
 2. **Stratified within each scenario.** Cutting the whole population in one pass lets a
    scenario land entirely in one split, and then the held-out set measures *"have you seen
    `pour` before"* rather than *"do you understand pouring"*.
-3. **Held-out annotations are withheld, not requested.** Its `meta.json` is rebuilt from a
-   whitelist rather than copied, so the full one cannot ride along by accident. A benchmark
-   that ships its answers beside its questions measures whoever remembered not to look.
+3. **Shards are written per split**, so one can be fetched without the others — but with
+   identical contents, so the grouping above is the only thing that has to be decided up
+   front.
 
 Assignment is by hash of the `pair_uid`, ordered and cut at the quantiles — no rng, so
 regenerating a release reproduces its splits exactly. **Adding clips moves the boundaries**,
@@ -565,7 +618,7 @@ rest are separated by *staging*, not by residual: `antigravity`, `phantom_impuls
 `newton1_inertia` all move `linear_momentum`, because they must —
 bend a body's gravity and its momentum residual moves with it. Physics is not separable there
 and pretending otherwise would be the wrong fix. What separates them is the situation, which a
-model has to read from the image. [docs/evaluation.md](docs/evaluation.md) says which is
+model has to read from the image. The dataset card written by `physviol export` says which is
 which, and what that means for a confusion matrix.
 
 ## 8. Tiers
@@ -623,7 +676,6 @@ by Amdahl. Clip-level parallelism measures **1.92×** at width 4, for free. Deta
 ```
 docs/PLAN.md          the design document -- start here
 docs/schema.md        meta.json field reference
-docs/prior_art.md     IntPhys 2 x LikePhys x PhysViol coverage matrix
 environment.yml       host conda env
 docker/               kubric.sh wrapper + pinned image digest
 scripts/run.sh        generate + validate + every video, from a config
@@ -650,15 +702,26 @@ out/                  all generated output (gitignored)
 ## 10. Where it is going
 
 [docs/roadmap.md](docs/roadmap.md) — the medium axis that maps onto LikePhys, the perceptual
-families still missing from v0 (`colour_shift`, `illumination_shift`), and what v1 is:
+families still missing from v0 (`illumination_shift`), and what v1 is:
 population, a realistic twin of every clip, and deeper randomisation.
 
 ## 11. Evaluating on it
 
-[docs/evaluation.md](docs/evaluation.md) — which axes to report on, the four tasks the
-annotations support, and what the orthogonality guarantee does and does not cover. The short
-version: report **per family**, cross with **severity** and **complexity**, split by
-`scene_id`, and never train on `divergence_map`.
+Report **per family (23)**, aggregate to **domain (8)**, and cross with **severity** and
+**camera motion**. `index.parquet` from `physviol export` carries every one of those fields
+per clip, so a breakdown is a groupby rather than a crawl over 1500 `meta.json` files.
+
+Three things that will bite otherwise:
+
+- **Do not pool families into one number.** Cell counts are uneven by **sixteen times** —
+  `identity` has 48 build cells, `optical` has 3 — so a pooled score is largely a measurement
+  of `identity`.
+- **Never train on `divergence_map`.** It is `|valid − invalid|` and diverges everywhere
+  downstream of the event, so a model trained on it learns to find the edit, not the physics.
+  Train on `violation_mask` and `severity_map`.
+- **`violation_mask` is not `timelines.active`.** The mask answers *where can this be seen*
+  and is empty while the culprit is hidden; `active` is the unhedged truth about when the law
+  is broken. Use `active` for temporal metrics, the mask for spatial ones.
 
 ## 12. Papers
 

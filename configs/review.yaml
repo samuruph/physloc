@@ -41,6 +41,16 @@ defaults:
   #   new tier.
   tier: debug
 
+  # variants: randomisations per cell. Each is a fresh seed, so six variants
+  #   of `drop x solidity` are six visibly different clips of the same
+  #   violation -- not one clip with a different number in the filename.
+  #
+  #   In `defaults`, not `generate`, so that `taxonomy --config review` prices
+  #   the run `generate --config review` actually performs. Under `generate` it
+  #   was invisible to `taxonomy`, which fell back to its own default of 5 and
+  #   quoted five times the real cost.
+  variants: 1
+
   # severity: which magnitude bins to generate.
   #     weak | medium | strong   one bin
   #     all                      the whole ladder (3x the invalid clips, but
@@ -55,11 +65,6 @@ defaults:
 # generate: only settings `taxonomy` has no use for.
 # --------------------------------------------------------------------------
 generate:
-
-  # variants: randomisations per cell. Each is a fresh seed, so six variants
-  #   of `drop x solidity` are six visibly different clips of the same
-  #   violation -- not one clip with a different number in the filename.
-  variants: 1
 
   # keep_going: carry on past a cell that fails and list the failures at the
   #   end. What you want for a sweep; turn it off to stop at the first error.

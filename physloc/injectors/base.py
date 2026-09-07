@@ -207,6 +207,29 @@ class Injector:
         """
         return self.simulated
 
+    def revives(self, spec, plan: InterventionPlan) -> frozenset:
+        """Scripted causal bodies this family will make DYNAMIC when it stages.
+
+        The worker refuses the staged path for a plan whose causal body is
+        `scripted`, and it is right to: such a body is pinned at mass 0, so
+        resetting the world and running forward leaves it sitting exactly where
+        it was, and five families on `pendulum_swing` all shipped the same
+        picture of a stopped pendulum that way.
+
+        `fission` is the exception the rule did not know about. Its understudy
+        is *deliberately* scripted -- parked and invisible from frame 0 -- and
+        `ShapeSwap(dynamic=True)` exists precisely to stand a genuinely dynamic
+        proxy in its place. So the blanket guard silently sent the one family
+        equipped to overcome it down the edited path instead, where the halves
+        were re-integrated by hand and came to rest 0.41 m in the air: the
+        floating cones you reported. Nothing failed and nothing was logged --
+        `_apply` is a legitimate fallback, just not this family's.
+
+        Declared here rather than inferred, so the worker asks the injector
+        what it is going to do instead of guessing from the spec.
+        """
+        return frozenset()
+
     def stage(self, spec, simulator, objs, plan: InterventionPlan):
         """Apply the intervention to the live physics world at `t_event`.
 

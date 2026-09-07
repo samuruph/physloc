@@ -431,8 +431,20 @@ class Fission(Injector):
     #: the target, in metres of penalty per m/s.
     GENTLER = 0.05
     #: HALF THE VOLUME EACH, so `2 * k**3 == 1`. The halves are placed exactly
-    #: touching, at +/- this many original-radii either side of the centre, and
-    #: three things fall out of that one number.
+    #: touching -- at +/- this many of the body's own HALF-EXTENTS along the
+    #: split axis, which is the correction that made the split read as one
+    #: object coming apart.
+    #:
+    #: It used to be this many `bounding_radius`, and `bounding_radius` is the
+    #: mesh's SCALE FACTOR rather than its width. No KuBasic mesh reaches 1.0
+    #: in its own coordinates, so for a cone -- whose mesh is 0.60 wide -- the
+    #: halves were set down 0.604 m apart while each was 0.363 m across. A
+    #: quarter of a metre of clear air appeared between them on the frame of
+    #: the split, which is two cones popping into existence beside each other,
+    #: not one cone parting. They now start with their surfaces in contact and
+    #: the gap opens under the impulse.
+    #:
+    #: Three more things fall out of the same number.
     #:
     #: They do not overlap, so their contact never has to be suppressed --
     #: which is what let the forward half on `barrier_pass` rebound off the wall
@@ -594,7 +606,7 @@ class Fission(Injector):
         push = np.asarray(push, np.float64)
         n = float(np.linalg.norm(push))
         axis = push / n if n > 1e-9 else np.zeros(3)
-        step = axis * self.CLEAVE_SCALE * float(traj.radius[ai])
+        step = axis * self.CLEAVE_SCALE * actor.half_extent_along(axis)
         origin = np.asarray(traj.pos[t0 - 1, ai], np.float64)
         pair = _geom.Obstacles(spec, traj, exclude_ids=[
             int(actor.segmentation_id), int(twin.segmentation_id)])
@@ -657,6 +669,15 @@ class Fission(Injector):
     def _twin_of(self, spec):
         return next((b for b in spec.bodies if b.dormant), None)
 
+    def revives(self, spec, plan) -> frozenset:
+        """The understudy. It is scripted so it stays parked and invisible
+        until this fires; `ShapeSwap(dynamic=True)` in `stage` is what makes it
+        a body the solver moves. Without this the worker's scripted-causal-body
+        guard sent the whole family down the edited path."""
+        twin = self._twin_of(spec)
+        return frozenset() if twin is None else frozenset(
+            [int(twin.segmentation_id)])
+
     def stage(self, spec, simulator, objs, plan):
         import pybullet as pb
 
@@ -696,10 +717,15 @@ class Fission(Injector):
         n = float(np.linalg.norm(push))
         axis = push / n if n > 1e-9 else np.zeros(3)
         k = float(self.CLEAVE_SCALE)
-        step = axis * k * float(actor.bounding_radius)
+        step = axis * k * actor.half_extent_along(axis)
+        # HALF THE PARENT'S MASS EACH. Both halves are drawn the same size, so
+        # they have to weigh the same; the understudy's own declared mass is a
+        # placeholder for a body that is parked and invisible until now.
+        half_mass = float(actor.mass) * 0.5
         origin = np.asarray(pos, np.float64)
         swap.set_scale((k, k, k), pose=((origin - step).tolist(), quat),
-                       velocity=((v - push).tolist(), list(ang)))
+                       velocity=((v - push).tolist(), list(ang)),
+                       mass=half_mass)
         if swap.proxy is None:
             swap.restore()
             return ()
@@ -710,7 +736,8 @@ class Fission(Injector):
         mine = stepper.ShapeSwap(simulator, objs, spec, actor)
         if mine.ok:
             mine.set_scale((k, k, k), pose=((origin + step).tolist(), quat),
-                           velocity=((v + push).tolist(), list(ang)))
+                           velocity=((v + push).tolist(), list(ang)),
+                           mass=half_mass)
             self._mine = mine
         else:
             pb.resetBasePositionAndOrientation(

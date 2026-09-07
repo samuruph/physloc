@@ -631,7 +631,12 @@ def main() -> int:
             # it changes. Nothing does, for a body the simulator does not move.
             # Checked here rather than in each injector because it is a fact
             # about the SCENE, and no injector should have to learn it.
+            # ...unless the injector says it will bring that body to life. See
+            # `Injector.revives`: `fission`'s understudy is scripted on purpose
+            # and its `stage` stands a dynamic proxy in its place, so the guard
+            # was disqualifying the one family built to pass it.
             scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
+            scripted -= {int(i) for i in inj.revives(spec, plan)}
             staged = (inj.simulates(plan)
                       and not scripted.intersection(plan.causal_body_ids))
             if staged:

@@ -14,7 +14,7 @@ from typing import List, Tuple
 from .base import BodySpec, Complexity, LightSpec
 
 
-def appearance_rng(seed: int) -> "np.random.RandomState":
+def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
     """A stream for how a scene LOOKS, independent of how it behaves.
 
     Appearance draws must not come off the physics stream. `pick_hdri(rng)` did,
@@ -26,10 +26,30 @@ def appearance_rng(seed: int) -> "np.random.RandomState":
     photographically, so a benchmark can ask whether a model's grasp of the
     physics survives the realism. A salted, separate `RandomState` costs nothing
     and makes the two streams independent by construction.
+
+    `salt` is normally the scenario's name. Without it every scenario draws the
+    same first number for a given seed, so seed 0 produced a stone actor in
+    `drop`, in `collision`, in `toss` and in `ramp_slide` alike -- a correlation
+    across the release that buys nothing.
+
+    Call this ONCE per sample and thread the result. It builds a fresh
+    RandomState every call, so asking for it per draw hands every draw the same
+    first number, which is how material, colour and proportions all ended up
+    perfectly correlated.
+
+    The HDRI is the exception and takes a stream of its own. It is drawn only
+    from L1 up, so sharing the scenario's stream would let that one extra draw
+    shift every material and dimension after it -- and then the same seed would
+    produce a different body at L0 and at L1, which is precisely the pairing
+    this function was written to protect. `test_complexity_twin` catches it.
     """
     import numpy as np
-    return np.random.RandomState((int(seed) * 2654435761 + 0x9E3779B9)
-                                 % (2 ** 31 - 1))
+    import zlib
+
+    mixed = int(seed) * 2654435761 + 0x9E3779B9
+    if salt:
+        mixed += int(zlib.crc32(salt.encode()))
+    return np.random.RandomState(mixed % (2 ** 31 - 1))
 
 
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
@@ -127,3 +147,84 @@ def understudy(actor: BodySpec, seg_id: int) -> BodySpec:
         friction=actor.friction, restitution=actor.restitution,
         color=actor.color, segmentation_id=seg_id, role="actor",
         scripted=True, dormant=True)
+
+
+def with_material(body: BodySpec, name: str, rng, look=None) -> BodySpec:
+    """Give a body a material, deriving its mass and look from it.
+
+    The single place a scenario opts in. Returns a NEW spec rather than
+    mutating, so `understudy()` clones stay correct whichever order they are
+    built in.
+
+    Draw `rng` from `appearance_rng`, never the physics stream -- see that
+    function. The mass this produces is physics, but it is a deterministic
+    function of the scene's appearance, so the two streams stay independent.
+    """
+    from . import materials as M
+    import dataclasses
+
+    # `look` lets two bodies share one draw. `collision` needs it: the pair
+    # must be INDISTINGUISHABLE for `newton2_mass` to mean anything, and giving
+    # them the same material off the same stream is not enough -- the second
+    # call advances the stream and comes back a different colour.
+    rgb, roughness, metallic = M.appearance(name, rng) if look is None else look
+    return dataclasses.replace(
+        body, material=name, color=rgb, roughness=roughness, metallic=metallic,
+        mass=M.mass_for(name, body.scale, body.kind))
+
+
+#: How far a body's proportions may stray from cubic, as a ratio between its
+#: longest and shortest axis. 2.2 gives slabs and columns that are obviously
+#: not cubes without producing splinters that tunnel through the floor or
+#: topple the moment they are placed.
+MAX_ASPECT = 2.2
+
+
+def vary_dims(body: BodySpec, rng, max_aspect: float = MAX_ASPECT) -> BodySpec:
+    """Give a box body independent half-extents, and reseat it.
+
+    Sizes already varied per seed, but only as ONE number: `scale=(r,)*3`
+    everywhere, so every cube was a perfect cube and every sphere a perfect
+    sphere. Two clips of the same scenario differed in how big the object was
+    and never in what shape it was.
+
+    Reseating is the part that is easy to get wrong. A body's z is written by
+    the scenario as "resting on the surface", which for a cube means
+    `z = scale[2]`; change the height without moving the body and it is either
+    buried in the floor or hovering above it, and `support` -- whose whole
+    subject is whether a thing is held up -- would be measuring an artefact.
+    So the shift is applied to z by exactly the change in half-height.
+
+    SPHERES ARE LEFT ALONE, deliberately. PyBullet has no ellipsoid primitive:
+    a non-uniformly scaled `kb.Sphere` renders as an ellipsoid but keeps a
+    round collider, so the picture and the physics would disagree -- exactly
+    the bug `stepper.ShapeSwap` exists to avoid, and it can only do so because
+    it builds a convex hull per intervention. Anisotropy here would also break
+    the rolling-without-slipping spin the rolling scenarios set as
+    `omega = v / r`, which has no meaning for a body with two radii.
+    """
+    if body.kind not in ("cube", "cylinder", "cone"):
+        return body
+    import dataclasses
+
+    sx, sy, sz = (float(v) for v in body.scale)
+    lo, hi = 1.0 / float(max_aspect) ** 0.5, float(max_aspect) ** 0.5
+    if body.kind == "cube":
+        scale = (sx * float(rng.uniform(lo, hi)),
+                 sy * float(rng.uniform(lo, hi)),
+                 sz * float(rng.uniform(lo, hi)))
+    else:
+        # A cylinder or cone has one radius and a height; varying x and y
+        # independently would make it an elliptical cylinder, which Kubric's
+        # primitive is not.
+        r = sx * float(rng.uniform(lo, hi))
+        scale = (r, r, sz * float(rng.uniform(lo, hi)))
+    x, y, z = (float(v) for v in body.position)
+    out = dataclasses.replace(body, scale=scale,
+                              position=(x, y, z + scale[2] - sz))
+    # Mass follows the new volume when the body is made of something.
+    if body.material is not None:
+        from . import materials as M
+        out = dataclasses.replace(
+            out, mass=M.mass_for(body.material, scale, body.kind))
+    return out

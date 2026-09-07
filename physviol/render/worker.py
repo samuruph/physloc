@@ -66,8 +66,12 @@ def build_scene(spec: SceneSpec, scratch):
 
     objs = {}
     for b in spec.bodies:
+        # Roughness and metallic come from the body, which gets them from its
+        # material -- steel is smooth and metallic, rubber is rough and dark.
+        # Scenery leaves the defaults.
         material = kb.PrincipledBSDFMaterial(color=kb.Color(*b.color),
-                                             roughness=0.55, metallic=0.0)
+                                             roughness=b.roughness,
+                                             metallic=b.metallic)
         # `sim_static`, not `static`: a scripted body is pinned in the
         # simulator so it neither falls nor generates contacts, and its motion
         # arrives from the trajectory instead. Downstream it is still dynamic.

@@ -234,6 +234,20 @@ class BodySpec:
     segmentation_id: int = 0
     role: str = "prop"        # prop | floor | occluder | actor | shadow
 
+    #: What the body is made of -- see `scenarios/materials.py`. `None` keeps
+    #: the literal `mass`, `color` and default shading, which is what floors,
+    #: ramps, walls and screens want: they are scenery, not objects, and giving
+    #: them materials would put metallic backdrops in the dataset for no gain.
+    #:
+    #: When set, the scenario derives `mass` from `density x volume` and takes
+    #: `color`/`roughness`/`metallic` from the material, so a heavy object
+    #: LOOKS heavy. That agreement is the whole point: a randomly-drawn mass a
+    #: viewer cannot see turns lawful motion into something that reads as a
+    #: violation.
+    material: Optional[str] = None
+    roughness: float = 0.55
+    metallic: float = 0.0
+
     # Motion is written by the scenario rather than solved by the simulator --
     # a pendulum bob on a rigid rod, say, which PyBullet would need a joint for
     # and Kubric exposes no joints. The body is `static` to the simulator so it
@@ -349,7 +363,7 @@ class SceneSpec:
                         "segmentation_id": b.segmentation_id, "mass": b.mass,
                         "restitution": b.restitution, "friction": b.friction,
                         "static": b.static, "scripted": b.scripted,
-                        "dormant": b.dormant, "color": list(b.color),
+                        "dormant": b.dormant, "color": list(b.color), "material": b.material,
                         "render_scale": list(b.draw_scale),
                         "scale": list(b.scale)} for b in self.bodies],
             "notes": self.notes,
@@ -398,7 +412,110 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
         light.position = tuple(float(a + b) for a, b in
                                zip(light.position,
                                    rng.uniform(-1.0, 1.0, size=3) * 0.9))
+    _recolour_scenery(spec, seed)
     return spec
+
+
+#: How far the scenery must stay from every actor, in CIE-Lab distance. Below
+#: about 25 two colours read as "the same, slightly off" rather than as
+#: different things, and an actor that close to the floor it is rolling on is
+#: hard to pick out by eye -- which matters when reviewing whether a mask
+#: landed on the right object is done by looking.
+MIN_SCENERY_SEPARATION = 26.0
+
+#: The floor's lightness band. Not the full range: a black floor swallows
+#: `shadow_track`'s cast shadow, whose entire subject is a shadow you can see,
+#: and a white one blows out under the L0 sun and takes the contact region
+#: with it. Saturation stays low because a vivid floor competes with the actor
+#: for attention and the actor is the thing being annotated.
+#: Wide, because this is the axis separation is bought on: with a mid-grey
+#: actor a narrow band leaves nowhere to go, and the floor ends up 22 Lab from
+#: the ball rolling over it. The scan below picks a point in this box, so the
+#: extremes are only reached when the actors force it.
+FLOOR_VALUE = (0.10, 0.82)
+FLOOR_SATURATION = (0.03, 0.34)
+
+#: The void behind the scene at L0. Kept darker than the floor so the horizon
+#: still reads as a horizon rather than the ground dissolving into the sky.
+BACKDROP_VALUE = (0.04, 0.30)
+BACKDROP_SATURATION = (0.02, 0.25)
+
+
+def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
+    """Vary the floor and the backdrop, keeping them clear of the actors.
+
+    Both were constants -- the floor a hard-coded grey in `_common.ground`, the
+    backdrop the `SceneSpec` default that no scenario ever overrode -- so every
+    clip in the dataset shared a background. A model can learn a fixed
+    background exactly as easily as it can learn a fixed event frame, and
+    neither one is physics.
+
+    Done here rather than in `ground()` because the constraint is about the
+    whole scene: the floor has to stay clear of every actor colour, and the
+    actors do not exist yet at the point `ground()` is called. Once in `_vary`
+    also means all thirteen scenarios get it without thirteen edits.
+
+    Skipped from L1 up, where the floor is the HDRI dome and the environment
+    supplies the ground and the sky together.
+    """
+    import colorsys
+
+    from ..residuals.laws import _srgb_to_lab
+
+    floors = [b for b in spec.bodies if b.role == "floor" and b.kind != "dome"]
+    if not floors:
+        return
+    import zlib
+
+    # Salted by scenario as well as seed, for the reason `appearance_rng`
+    # documents: salted by seed alone, every scenario picks the same floor on
+    # a given seed and the release ships a correlation nobody asked for.
+    rng = np.random.RandomState(
+        (seed * 2654435761 + 0xF100D + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    # The cast shadow counts too. `shadow_track` stages its shadow as a real
+    # near-black body, and the family is about whether that shadow tracks the
+    # object faithfully -- on a floor the same darkness there is nothing to
+    # judge.
+    lab_actors = [_srgb_to_lab(np.asarray(b.color, np.float64))
+                  for b in spec.bodies if b.role in ("actor", "shadow")]
+
+    def separation(rgb) -> float:
+        """Lab distance to the nearest actor -- bigger is better."""
+        lab = _srgb_to_lab(np.asarray(rgb, np.float64))
+        if not lab_actors:
+            return 1e9
+        return min(float(np.linalg.norm(lab - la)) for la in lab_actors)
+
+    # CHOOSE the lightness rather than gambling on it. Rejection sampling
+    # looked fine and quietly failed: the floor palette is deliberately
+    # desaturated, and so are stone, steel, ceramic and cork, so on a scene
+    # with a grey actor all twenty-four draws landed inside the exclusion zone
+    # and the floor fell back to the hard-coded grey it was trying to replace
+    # -- 4.6 Lab from the ball it sat under, on `collision` and `barrier_pass`.
+    #
+    # Hue and saturation are still drawn; the value is then scanned across its
+    # band and the most separated one wins. Lab distance between two
+    # desaturated colours is dominated by L*, so this is the axis that actually
+    # buys separation, and scanning it always finds the best available instead
+    # of giving up.
+    hue = float(rng.uniform(0.0, 1.0))
+    best, best_gap = floors[0].color, -1.0
+    for k in range(17):
+        v = FLOOR_VALUE[0] + (FLOOR_VALUE[1] - FLOOR_VALUE[0]) * k / 16.0
+        for j in range(3):
+            sat = FLOOR_SATURATION[0] + (
+                FLOOR_SATURATION[1] - FLOOR_SATURATION[0]) * j / 2.0
+            cand = tuple(float(c) for c in colorsys.hsv_to_rgb(hue, sat, v))
+            gap = separation(cand)
+            if gap > best_gap:
+                best, best_gap = cand, gap
+    for b in floors:
+        b.color = best
+    spec.background_color = tuple(float(c) for c in colorsys.hsv_to_rgb(
+        float(rng.uniform(0.0, 1.0)),
+        float(rng.uniform(*BACKDROP_SATURATION)),
+        float(rng.uniform(*BACKDROP_VALUE))))
 
 
 class Scenario:

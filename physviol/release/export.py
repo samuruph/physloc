@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import glob
 import hashlib
-import io
 import json
 import os
 import tarfile
@@ -68,17 +67,18 @@ SHARD_BYTES = 400 * 1024 * 1024
 #: would imply the opposite.
 SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
 
-#: The held-out split ships these and nothing else. Withholding the annotations
-#: is the mechanism, not a request: a benchmark whose answers are downloadable
-#: alongside its questions measures whoever remembered not to look.
-HELD_OUT_FILES = ("rgb.mp4",)
-
-#: What the held-out split's meta.json keeps. Enough to identify a clip and
-#: score a submission against it; nothing that gives the answer away -- no
-#: family, no windows, no severity, no masks.
-HELD_OUT_META = ("clip_uid", "pair_uid", "scenario", "seed", "tier",
-                 "num_frames", "fps", "resolution", "release",
-                 "schema_version")
+#: EVERY SPLIT SHIPS EVERY ANNOTATION, and the split is a label rather than a
+#: filter. IntPhys 2 withholds its held-out metadata to stop training
+#: contamination, and that is the right call for a leaderboard someone else
+#: submits to; it is the wrong one here, where the release has to stay
+#: re-splittable and every clip has to be scoreable. A held-out set whose masks
+#: are missing cannot be measured, only guessed at, and the boundary can never
+#: be moved afterwards without regenerating.
+#:
+#: The leakage protection that remains is the part that cannot be undone later:
+#: pairs never straddle a split, and splits are stratified per scenario. Anyone
+#: publishing a leaderboard from this can strip the annotations at that point,
+#: from `splits/held_out.txt`, without regenerating anything.
 
 
 def _clip_dirs(root: str) -> List[str]:
@@ -156,10 +156,6 @@ def _cut(ordered: List[str], names: List[str]) -> Dict[str, str]:
     return out
 
 
-def _held_out_meta(meta: Dict) -> Dict:
-    """The reduced record a held-out clip ships with."""
-    return {k: meta[k] for k in HELD_OUT_META if k in meta}
-
 
 def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
     """One flat record per clip, for the index."""
@@ -207,8 +203,7 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
 
 
 def _write_shards(clips: Sequence[Tuple[str, Dict]], outdir: str, prefix: str,
-                  members: Sequence[str], max_bytes: int,
-                  meta_filter=None) -> List[str]:
+                  members: Sequence[str], max_bytes: int) -> List[str]:
     """Pack each clip into a tar as one WebDataset sample.
 
     A sample's key is its `clip_uid` with slashes replaced, so every file of one
@@ -235,14 +230,6 @@ def _write_shards(clips: Sequence[Tuple[str, Dict]], outdir: str, prefix: str,
                 size = 0
             for name, path in present:
                 tar.add(path, arcname="%s.%s" % (key, name))
-            if meta_filter is not None:
-                # A reduced meta.json, written from memory rather than copied,
-                # so the full one cannot ride along by accident.
-                blob = json.dumps(meta_filter(meta), sort_keys=True).encode()
-                info = tarfile.TarInfo("%s.meta.json" % key)
-                info.size = len(blob)
-                tar.addfile(info, io.BytesIO(blob))
-                size += len(blob)
             size += need
     finally:
         if tar is not None:
@@ -275,25 +262,21 @@ def export(root: str, outdir: str, with_passes: bool = False,
         with open(os.path.join(outdir, "splits", "%s.txt" % name), "w") as fh:
             fh.write("\n".join(members) + ("\n" if members else ""))
 
-    # HELD-OUT CLIPS ARE PACKED SEPARATELY AND STRIPPED. Withholding the
-    # annotations is the mechanism IntPhys 2 uses and the reason its held-out
-    # split means anything: a benchmark that ships its answers next to its
-    # questions measures whoever remembered not to look.
-    held = [(d, m) for d, m in clips
-            if splits.get(str(m.get("pair_uid"))) == "held_out"]
-    open_clips = [(d, m) for d, m in clips
-                  if splits.get(str(m.get("pair_uid"))) != "held_out"]
-
+    # SHARDED BY SPLIT, so a consumer can fetch one without the others -- but
+    # every split gets the same files, so the boundary can be moved later and
+    # any clip can be scored.
     shard_dir = os.path.join(outdir, "shards")
-    shards = {"core": _write_shards(open_clips, shard_dir, "core",
-                                    CORE_FILES, shard_bytes)}
-    if held:
-        shards["held_out"] = _write_shards(
-            held, shard_dir, "held_out", HELD_OUT_FILES, shard_bytes,
-            meta_filter=_held_out_meta)
-    if with_passes:
-        shards["passes"] = _write_shards(open_clips, shard_dir, "passes",
-                                         PASS_FILES, shard_bytes)
+    shards: Dict[str, List[str]] = {}
+    for name, _ in SPLIT_FRACTIONS:
+        part = [(d, m) for d, m in clips
+                if splits.get(str(m.get("pair_uid"))) == name]
+        if not part:
+            continue
+        shards[name] = _write_shards(part, shard_dir, name, CORE_FILES,
+                                     shard_bytes)
+        if with_passes:
+            shards["%s_passes" % name] = _write_shards(
+                part, shard_dir, "%s-passes" % name, PASS_FILES, shard_bytes)
 
     index_path = _write_index(rows, outdir)
     _write_taxonomy(outdir, rows)
@@ -352,7 +335,6 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
                 "description": sc.description,
                 "event_structure": sc.event_structure,
                 "physics_medium": sc.physics_medium,
-                "grounded_in": sc.grounded_in,
                 "has_occluder": bool(sc.has_occluder),
                 "provides": list(sc.provides),
                 "families": sorted(f for f in present_fam
@@ -373,8 +355,6 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
                 "detectable": fam.detectable,
                 "graded": bool(fam.graded),
                 "requires": list(fam.requires),
-                "intphys2": fam.intphys2,
-                "likephys": fam.likephys,
                 "clips_in_release": sum(1 for r in rows if r["family"] == name),
             }
             for name, fam in FAMILIES.items() if name in present_fam
@@ -433,9 +413,35 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
     index_kind = ("parquet" if os.path.exists(os.path.join(outdir, "index.parquet"))
                   else "jsonl")
 
+    # THE VIEWER NEEDS `configs`. Without it the hub shows a repository of
+    # opaque tar and parquet files and nothing renders. Two configs, because
+    # they answer different questions:
+    #
+    #   `index`  parquet, one row per clip -- sortable, filterable, instant.
+    #            Listed FIRST so it is the default: it is guaranteed to render,
+    #            where a webdataset config can fail on an unfamiliar member and
+    #            take the whole viewer down with it.
+    #   `clips`  the shards themselves -- mp4 previews and the annotations.
+    splits_present = [n for n, _ in SPLIT_FRACTIONS
+                      if any(r["split"] == n for r in rows)]
+    cfg = ["configs:",
+           "- config_name: index",
+           "  data_files:"]
+    for n in splits_present:
+        cfg.append("  - split: %s" % n)
+        cfg.append("    path: index.parquet")
+        break                      # the index carries every split in one file
+    if any(shards.get(n) for n in splits_present):
+        cfg += ["- config_name: clips", "  data_files:"]
+        for n in splits_present:
+            if shards.get(n):
+                cfg.append("  - split: %s" % n)
+                cfg.append("    path: shards/%s-*.tar" % n)
+
     lines = [
         "---",
         "license: %s" % license_name.lower(),
+        *cfg,
         "task_categories:",
         "- video-classification",
         "tags:",
@@ -474,11 +480,12 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "## Files",
         "",
-        "- `shards/core-*.tar` -- RGB video and every annotation. **Start here.**",
-        ("- `shards/passes-*.tar` -- depth, optical flow, normals, object "
-         "coordinates. Far larger: these passes are about 86% of the bytes, so "
-         "they ship separately rather than inside the download everyone needs."
-         if shards.get("passes") else
+        "- `shards/<split>-*.tar` -- RGB video and every annotation, one set "
+        "per split. **Start here.**",
+        ("- `shards/<split>-passes-*.tar` -- depth, optical flow, normals, "
+         "object coordinates. Far larger: about 86% of the bytes, so they ship "
+         "separately rather than inside the download everyone needs."
+         if any(k.endswith("_passes") for k in shards) else
          "- The raw geometry passes (depth, optical flow, normals, object "
          "coordinates) are **not** in this release. They are about 86% of the "
          "bytes and are packaged only on request."),
@@ -490,12 +497,18 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "Splits are grouped by `pair_uid`, never by clip. A valid twin and its "
         "invalid siblings share every frame before `t_event`, so splitting them "
-        "apart would put the answer in the training set.",
+        "apart would put the answer on the other side.",
         "",
-        "Pairs are ordered by a hash of their uid and cut at the quantiles, so "
-        "the proportions are exact and reproducing this release reproduces its "
-        "splits. Note that ADDING clips moves the boundaries -- a release that "
-        "grows should be re-split and re-reported rather than appended to.",
+        "Pairs are ordered by a hash of their uid and cut at the quantiles "
+        "WITHIN each scenario, so every split sees every scenario and the "
+        "proportions are exact. There is no rng, so reproducing this release "
+        "reproduces its splits. Adding clips moves the boundaries.",
+        "",
+        "**Every split ships every annotation.** The split is a label, not a "
+        "filter: you can re-cut it, and you can score any clip in the release. "
+        "If you need a genuinely blind held-out set -- for a leaderboard others "
+        "submit to -- strip the annotations from `splits/held_out.txt` at that "
+        "point; nothing here has to be regenerated to do it.",
         "",
         "## Reading a clip",
         "",

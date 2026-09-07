@@ -71,7 +71,7 @@ def test_export_writes_shards_index_card_and_splits(release, tmp_path):
         assert os.path.exists(os.path.join(out, name))
     assert any(os.path.exists(os.path.join(out, n))
                for n in ("index.parquet", "index.jsonl"))
-    assert res["shards"]["core"] >= 1
+    assert res["shards"]["main"] >= 1
 
 
 def test_a_twin_pair_is_never_split_apart(release, tmp_path):
@@ -120,6 +120,7 @@ def test_raw_passes_stay_out_of_the_core_shards(release, tmp_path):
     for shard in sorted(os.listdir(os.path.join(out, "shards"))):
         with tarfile.open(os.path.join(out, "shards", shard)) as tf:
             names += tf.getnames()
+    assert names
     assert any(n.endswith(".violation_mask.npz") for n in names)
     assert not any(n.endswith(".depth.npz") for n in names), (
         "a raw geometry pass leaked into the core shards")
@@ -128,8 +129,11 @@ def test_raw_passes_stay_out_of_the_core_shards(release, tmp_path):
 def test_with_passes_ships_them_separately(release, tmp_path):
     out = str(tmp_path / "pack")
     res = X.export(release, out, with_passes=True)
-    assert res["shards"].get("passes", 0) >= 1
-    with tarfile.open(os.path.join(out, "shards", "passes-000.tar")) as tf:
+    assert any(k.endswith("_passes") for k in res["shards"]), res["shards"]
+    pass_shards = [n for n in os.listdir(os.path.join(out, "shards"))
+                   if "-passes-" in n]
+    assert pass_shards
+    with tarfile.open(os.path.join(out, "shards", pass_shards[0])) as tf:
         assert any(n.endswith(".depth.npz") for n in tf.getnames())
 
 
@@ -150,33 +154,33 @@ def test_the_index_carries_what_a_filter_needs(release, tmp_path):
     assert inv["actor_shape"] == "cone" and inv["actor_material"] == "steel"
 
 
-def test_the_held_out_split_ships_no_answers(release, tmp_path):
-    """The mechanism, not the request.
+def test_every_split_ships_the_same_files(release, tmp_path):
+    """A split is a LABEL, not a filter.
 
-    IntPhys 2 releases its held-out videos without metadata "to avoid training
-    data contamination", and that is the only version of a held-out split that
-    means anything -- one whose annotations sit in the same download measures
-    whoever remembered not to look at them.
+    IntPhys 2 withholds its held-out metadata, and for a leaderboard someone
+    else submits to that is right. Here it would be wrong: the release has to
+    stay re-splittable, and a clip whose masks are missing cannot be scored at
+    all -- so moving the boundary later would mean regenerating.
+
+    The protection that stays is the part that cannot be recovered afterwards:
+    pairs never straddle a split. Stripping annotations, by contrast, can be
+    done at publication time from `splits/held_out.txt` without regenerating.
     """
     out = str(tmp_path / "pack")
     res = X.export(release, out)
-    assert res["shards"].get("held_out"), "no held-out shard was written"
-
-    held = [n for n in sorted(os.listdir(os.path.join(out, "shards")))
-            if n.startswith("held_out")]
-    for shard in held:
+    per_split = {}
+    for shard in sorted(os.listdir(os.path.join(out, "shards"))):
+        split = shard.split("-")[0]
         with tarfile.open(os.path.join(out, "shards", shard)) as tf:
-            names = tf.getnames()
-            assert not any(n.endswith(".violation_mask.npz") for n in names)
-            assert not any(n.endswith(".severity_map.npz") for n in names)
-            assert not any(n.endswith(".timelines.npz") for n in names)
-            for n in names:
-                if not n.endswith(".meta.json"):
-                    continue
-                meta = json.loads(tf.extractfile(n).read())
-                for leaked in ("violation", "family", "label", "instances"):
-                    assert leaked not in meta, (
-                        "held-out meta.json still carries %r" % leaked)
+            per_split.setdefault(split, set()).update(
+                n.split(".", 1)[1] for n in tf.getnames())
+    assert len(per_split) > 1, "expected more than one split to be populated"
+    kinds = list(per_split.values())
+    assert all(k == kinds[0] for k in kinds), (
+        "splits ship different files: %s"
+        % {k: sorted(v) for k, v in per_split.items()})
+    assert "violation_mask.npz" in kinds[0]
+    assert "meta.json" in kinds[0]
 
 
 def test_every_split_sees_every_scenario(tmp_path):

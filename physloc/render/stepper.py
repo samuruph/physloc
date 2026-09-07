@@ -272,6 +272,39 @@ PARKED_Z = -2000.0
 _HULL = None
 
 
+#: Convex hulls per shape, in unit coordinates, scaled by the body's half
+#: extents at use. Cached by kind.
+_KIND_HULLS = {}
+
+
+def hull_for(kind: str) -> np.ndarray:
+    """Unit-coordinate hull vertices for `kind`.
+
+    A convex hull, so it is exact for a cone or a cylinder and an
+    over-approximation for a torus -- whose convex hull is a solid disc, since
+    its hole is not convex. That is the honest limit of `GEOM_MESH` and far
+    closer than the sphere every non-cube used to get: a resized torus now
+    rests on its rim rather than hovering on an invisible ball.
+    """
+    if kind in _KIND_HULLS:
+        return _KIND_HULLS[kind]
+    if kind == "cone":
+        # Apex at +z, base ring at -z: exactly the KuBasic cone.
+        ang = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
+        ring = np.stack([np.cos(ang), np.sin(ang), np.full_like(ang, -1.0)], 1)
+        v = np.vstack([ring, [[0.0, 0.0, 1.0]]])
+    elif kind in ("cylinder", "torus"):
+        # Two rings. For a torus this is its convex hull, not its surface.
+        ang = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
+        c, s_ = np.cos(ang), np.sin(ang)
+        v = np.vstack([np.stack([c, s_, np.full_like(ang, -1.0)], 1),
+                       np.stack([c, s_, np.full_like(ang, 1.0)], 1)])
+    else:
+        v = unit_hull()
+    _KIND_HULLS[kind] = np.ascontiguousarray(v, np.float64)
+    return _KIND_HULLS[kind]
+
+
 def unit_hull(subdivisions: int = 2) -> np.ndarray:
     """Vertices of a unit sphere, for building an ellipsoid collision shape.
 
@@ -398,8 +431,16 @@ class ShapeSwap:
             shape = pb.createCollisionShape(pb.GEOM_BOX,
                                             halfExtents=half.tolist())
         else:
+            # THE HULL HAS TO MATCH THE SHAPE THAT IS DRAWN. A sphere hull for
+            # everything was right while actors were only spheres and cubes,
+            # and became wrong the moment cylinders, cones and tori joined the
+            # actor set: a cone inside a spherical collider FLOATS. Measured on
+            # `drop x fission` -- a full-size cone rests at z = 0.146, while its
+            # two 79% halves came to rest at 0.409, higher than the body they
+            # split from while being drawn smaller.
             shape = pb.createCollisionShape(
-                pb.GEOM_MESH, vertices=(unit_hull() * half[None, :]).tolist())
+                pb.GEOM_MESH,
+                vertices=(hull_for(self.body.kind) * half[None, :]).tolist())
 
         if self.proxy is None:
             self._park()

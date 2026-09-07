@@ -247,5 +247,13 @@ starting** — it is the difference between an overnight job and a week.
 and never built; the file arguing for it was deleted with the rest of the speculative docs.
 It is re-labelling only — no re-rendering — so it stays cheap for as long as it is unbuilt.
 
+**A `mini` split, cut from the full release.** Once the real dataset exists, carve a small
+stratified subset -- a couple of pairs per scenario, spanning every family and both camera
+treatments -- and ship it as a fourth split. It is the split someone reaches for first: to
+try a loader, to sanity-check an evaluation harness, to look at the data before committing
+to a hundred gigabytes of it. Cutting it from the full release rather than generating it
+separately is what makes it representative: same seeds, same code, same clips, just fewer of
+them. It should be a `physloc export` flag rather than a second run.
+
 **Fission is still `geometric`.** Its draw-in is prescribed motion rather than something the
 simulator produces.

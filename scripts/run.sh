@@ -7,6 +7,13 @@
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
+#   # a small run that still shows everything -- ~13 min:
+#   bash scripts/run.sh review -n 45 --variants 5 \
+#        --outdir out/physloc_mini --workdir out/work_mini
+#
+# 5 variants is the MINIMUM that shows camera motion (the moving variant is
+# index 4 of each block) and the minimum that fills all three splits.
+#
 # Tiers are `debug` and `release` -- two geometries, nothing more. Difficulty is
 # the complexity ladder (L0..L5, README section 8), and `v0`/`v1` are what a
 # published dataset is CALLED, set by the config's outdir.
@@ -24,7 +31,19 @@ PV="conda run --no-capture-output -n physloc python -m physloc.cli"
 echo "== generate: --config $CONFIG $* =="
 $PV generate --config "$CONFIG" "$@"
 
-REL=$($PV config-path --config "$CONFIG" 2>/dev/null || echo "out/release")
+# Where the run will write. An `--outdir` typed on the command line beats the
+# config, so it has to reach `config-path` too -- otherwise this script
+# generates into the directory you asked for and then validates, films and
+# packages a DIFFERENT one, silently. Only that flag is forwarded: the
+# `config-path` subcommand does not accept `-n` or `--variants`.
+OUTDIR_ARG=()
+for ((i = 1; i <= $#; i++)); do
+  if [ "${!i}" = "--outdir" ]; then
+    j=$((i + 1)); OUTDIR_ARG=(--outdir "${!j}")
+  fi
+done
+REL=$($PV config-path --config "$CONFIG" "${OUTDIR_ARG[@]}" 2>/dev/null \
+      || echo "out/release")
 
 echo "== validate =="
 $PV validate "$REL" || true

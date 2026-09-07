@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -27,6 +28,12 @@ class Toss(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -42,7 +49,7 @@ class Toss(Scenario):
         # never near an edge at either end of the clip.
         x0 = -vx * flight * 0.5
 
-        hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
+        hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         # THROWN WITH SPIN, which is what `tumble` used to be for. Retiring that
         # scenario left this one as the only free-flight throw, and a body
@@ -62,6 +69,8 @@ class Toss(Scenario):
             angular_velocity=spin, mass=1.0,
             friction=0.4, restitution=0.6, color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
+        ball = C.with_material(ball, M.pick(arng), arng)
+        ball = C.vary_dims(ball, arng)
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,

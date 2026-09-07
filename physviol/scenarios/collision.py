@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -37,6 +38,12 @@ class Collision(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -104,6 +111,17 @@ class Collision(Scenario):
             mass=1.0, friction=Collision.BALL_FRICTION, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_B, role="actor")
 
+        # ONE material for both, and one dimension draw, for the same reason
+        # they already share a radius, a colour and a shape: `newton2_mass`
+        # claims a mass ratio the image cannot justify, and the moment the two
+        # balls differ visibly -- "the steel one is heavier" -- that claim
+        # becomes a lawful reading and the family stops testing anything.
+        # `tests/test_injectors.py` pins the pair's sameness.
+        mat = M.pick(arng)
+        look = M.appearance(mat, arng)
+        striker = C.with_material(striker, mat, arng, look=look)
+        target = C.with_material(target, mat, arng, look=look)
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR), striker, target,
@@ -111,7 +129,7 @@ class Collision(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
                    "identical_actors": True, "target_at_rest": True,
                    "striker_id": self.SEG_A, "target_id": self.SEG_B,

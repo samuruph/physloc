@@ -15,6 +15,7 @@ import math
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -28,6 +29,12 @@ class RollingRamp(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -88,6 +95,8 @@ class RollingRamp(Scenario):
         camera_position, camera_look_at = cam.frame_box(
             x_range=(-x_lip - half, x_land + run_out + half),
             z_range=(0.0, centre[2] + half_len * sin_t + thick + 2 * half))
+        block = C.with_material(block, M.pick(arng), arng)
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR),
@@ -97,7 +106,7 @@ class RollingRamp(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 1.0)),
             camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             camera_jitter_deg=(15.0, 8.0),
             notes={"tilt_rad": tilt, "mu": mu, "lip": list(lip),
                    "block_friction": block_mu, "ramp_friction": ramp_mu,

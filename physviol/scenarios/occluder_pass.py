@@ -18,6 +18,7 @@ import numpy as np
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -35,6 +36,12 @@ class OccluderPass(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -73,10 +80,11 @@ class OccluderPass(Scenario):
         # tumbling, so use that conservative bound for a cube rather than
         # silently under-covering the true silhouette and marking a frame
         # "occluded" while a corner still pokes out past the screen's edge.
+        ball = C.with_material(ball, M.pick(arng), arng)
         silhouette_radius = radius * (math.sqrt(3.0) if kind == "cube" else 1.0)
         occ = _occluded_frames(eye, ball, screen, tier, radius, y_path,
                                silhouette_radius)
-        hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
+        hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
@@ -110,6 +118,7 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path,
     sphere, where the two coincide.
     """
     if silhouette_radius is None:
+        ball = C.with_material(ball, M.pick(arng), arng)
         silhouette_radius = radius
     cx, cy, cz = cam
     sx, sy, sz = screen.position

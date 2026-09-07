@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -46,6 +47,12 @@ class BarrierPass(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -101,6 +108,8 @@ class BarrierPass(Scenario):
             mass=1.0, friction=BarrierPass.BALL_FRICTION, restitution=0.78,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
+        ball = C.with_material(ball, M.pick(arng), arng)
+        ball = C.vary_dims(ball, arng)
         wall = BodySpec(
             name="wall", kind="cube",
             position=(wall_x, 0.0, wall_h), scale=(thickness, 1.15, wall_h),
@@ -115,7 +124,7 @@ class BarrierPass(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,
                    "wall_id": self.SEG_WALL, "actor_kind": kind,
                    "family_targets": {"solidity": [self.SEG_BALL]}})

@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -24,6 +25,12 @@ class RampSlide(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        # ONE appearance stream for the whole sample. `appearance_rng` builds a
+        # fresh RandomState per call, so asking it once per draw handed every
+        # draw the same first number -- material, colour and proportions came
+        # out identical across every scenario on a given seed. Threading one
+        # stream lets the draws advance.
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -50,6 +57,9 @@ class RampSlide(Scenario):
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BLOCK, role="actor")
 
+        block = C.with_material(block, M.pick(arng), arng)
+
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR),
@@ -58,7 +68,7 @@ class RampSlide(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 1.0)),
             camera_position=(0.5, -6.6, 2.5), camera_look_at=(0.0, 0.0, 1.0),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"tilt_rad": tilt, "mu": mu, "half_extent": half,
                    "down_slope": list(d), "ramp_id": self.SEG_RAMP})
 

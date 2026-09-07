@@ -134,6 +134,16 @@ def _cut(ordered: List[str], names: List[str]) -> Dict[str, str]:
     if n == 0:
         return {}
 
+    # TOO FEW TO SPLIT: everything goes to `debug`.
+    #
+    # A scenario with one or two pairs cannot fill three splits, and the old
+    # behaviour dropped them all into `main` -- which is the split that ships
+    # no overlay. `debug` is the calibration slice and the one that carries the
+    # nine-panel overlay video, so a release too small to be a benchmark
+    # becomes the thing it can actually be: something to look at.
+    if n < len(names):
+        return {uid: "debug" for uid in ordered}
+
     sizes = [int(round(frac * n)) for _, frac in SPLIT_FRACTIONS]
     # EVERY SPLIT GETS AT LEAST ONE, whenever there are enough pairs to go
     # round. Rounding alone starves the small splits on a small release -- six
@@ -278,7 +288,7 @@ def export(root: str, outdir: str, with_passes: bool = False,
             shards["%s_passes" % name] = _write_shards(
                 part, shard_dir, "%s-passes" % name, PASS_FILES, shard_bytes)
 
-    index_path = _write_index(rows, outdir)
+    index_path = _write_index(rows, outdir, clips)
     _write_taxonomy(outdir, rows)
     _write_card(rows, outdir, license_name, shards)
     _write_license(outdir, license_name)
@@ -297,7 +307,9 @@ def export(root: str, outdir: str, with_passes: bool = False,
             len({r["scenario"] for r in rows}), 1)
         notes.append(
             "splits %s are empty: %.1f pairs per scenario is too few to "
-            "stratify three ways. Generate more variants per scenario."
+            "stratify three ways, so everything went to `debug` -- which is "
+            "the split that carries the overlay videos. Generate more variants "
+            "per scenario for a real three-way split."
             % (", ".join(sorted(empty)), per))
     return {
         "clips": len(clips),
@@ -366,7 +378,20 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
     return path
 
 
-def _write_index(rows: List[Dict], outdir: str) -> str:
+#: Which splits get the nine-panel overlay embedded beside the RGB.
+#:
+#: `overlay.mp4` is 24x the size of `rgb.mp4` -- 261 KB against 11 KB at debug
+#: geometry, and about 5.3 MB against 0.2 MB at v0 -- because it is nine panels
+#: wide. Embedding it everywhere would be 8.5 GB on a full v0 release against
+#: 0.3 GB for the RGB alone.
+#:
+#: `debug` is the calibration slice, which is exactly where "show me everything
+#: at once" earns its bytes.
+OVERLAY_IN_SPLITS = ("debug",)
+
+
+def _write_index(rows: List[Dict], outdir: str,
+                 clips: Sequence[Tuple[str, Dict]] = ()) -> str:
     """The per-clip table. Parquet when pyarrow is here, JSONL when it is not.
 
     Falling back rather than failing: the index is what makes the dataset
@@ -383,8 +408,57 @@ def _write_index(rows: List[Dict], outdir: str) -> str:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
         return path
-    pq.write_table(pa.Table.from_pylist(rows), path)
+
+    # THE VIDEO GOES IN THE TABLE. A dataset about physics whose physics cannot
+    # be watched is a poor dataset, and the hub will only play a column it is
+    # told is a video -- so the mp4 BYTES are embedded and the schema is
+    # annotated as a `Video` feature. A path is useless here: it resolves on
+    # this machine and nowhere else.
+    by_uid = {str(m.get("clip_uid")): d for d, m in clips}
+    videos = {"rgb": [], "overlay": []}
+    for r in rows:
+        cdir = by_uid.get(str(r["clip_uid"]))
+        for name in ("rgb", "overlay"):
+            blob = None
+            want = (name == "rgb" or r["split"] in OVERLAY_IN_SPLITS)
+            fp = os.path.join(cdir, "%s.mp4" % name) if cdir and want else None
+            if fp and os.path.exists(fp):
+                with open(fp, "rb") as fh:
+                    blob = {"bytes": fh.read(), "path": "%s.mp4" % name}
+            videos[name].append(blob)
+
+    table = pa.Table.from_pylist(rows)
+    for name in ("rgb", "overlay"):
+        if any(v is not None for v in videos[name]):
+            table = table.append_column(
+                name, pa.array(videos[name],
+                               type=pa.struct([("bytes", pa.binary()),
+                                               ("path", pa.string())])))
+    table = table.replace_schema_metadata(_video_schema_metadata(table))
+    pq.write_table(table, path)
     return path
+
+
+def _video_schema_metadata(table) -> Dict[bytes, bytes]:
+    """Tell the hub which columns are videos.
+
+    `datasets` records its feature types in a `huggingface` key on the parquet
+    schema metadata, and the viewer reads that to decide what to render. Written
+    by hand rather than by building a `datasets.Dataset` so that packaging a
+    release does not depend on `datasets` being installed.
+    """
+    feats = {}
+    for field in table.schema:
+        if field.name in ("rgb", "overlay"):
+            feats[field.name] = {"_type": "Video"}
+        else:
+            dtype = {"string": "string", "int64": "int64", "double": "float64"}
+            feats[field.name] = {"dtype": dtype.get(str(field.type),
+                                                    str(field.type)),
+                                 "_type": "Value"}
+    md = dict(table.schema.metadata or {})
+    md[b"huggingface"] = json.dumps({"info": {"features": feats}}).encode()
+    return md
 
 
 def _write_license(outdir: str, license_name: str) -> None:

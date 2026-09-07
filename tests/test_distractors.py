@@ -10,7 +10,7 @@ import pytest
 from physloc import scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios._common import (DISTRACTOR_SIZE, KEEP_CLEAR_RADII,
-                                       SIGHTLINE_RADII)
+                                       MAX_ASPECT, SIGHTLINE_RADII)
 from physloc.scenarios.base import COMPLEXITY
 
 NAMES = sorted(scenarios.available())
@@ -107,15 +107,21 @@ def test_a_distractor_is_big_enough_to_be_one(name):
 
     Sizing off the frustum gave distractors 6 to 34 pixels against the actor's
     83 at debug resolution -- specks rather than distractions.
+
+    The band applies to the size a distractor is DRAWN at; `vary_dims` then
+    varies its axes around that, so a box can end up half an aspect step
+    outside on its longest side. The bound below allows for exactly that and no
+    more -- widening it further would stop it catching the bug it exists for.
     """
     lo, hi = DISTRACTOR_SIZE
+    slack = MAX_ASPECT ** 0.5
     for sp in _specs(name):
         actors, dis = _split(sp)
         med = float(np.median([a.bounding_radius for a in actors]))
         for d in dis:
             ratio = float(d.bounding_radius) / med
-            assert lo - 1e-6 <= ratio <= hi + 1e-6, (
-                "%s: %s is %.2fx the actor, outside %s"
+            assert lo / slack - 1e-6 <= ratio <= hi * slack + 1e-6, (
+                "%s: %s is %.2fx the actor, outside %s widened for aspect"
                 % (name, d.name, ratio, DISTRACTOR_SIZE))
 
 

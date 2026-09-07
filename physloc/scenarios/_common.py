@@ -294,7 +294,19 @@ PATH_SAMPLES = 6
 #: A distractor's size, as a fraction of the actor's. Comparable on purpose:
 #: something a tenth the size is a speck, and a benchmark level called
 #: "distractors" should contain things that actually compete for attention.
-DISTRACTOR_SIZE = (0.55, 1.15)
+DISTRACTOR_SIZE = (0.35, 1.60)
+
+#: How fast a distractor may already be moving, as a fraction of the actor's
+#: own speed (or of a walking pace when the actor starts at rest). Static
+#: clutter is easy clutter: a model can learn "the thing that moves is the
+#: subject" and never look at the physics at all. Moving distractors take that
+#: shortcut away.
+DISTRACTOR_SPEED = (0.0, 0.85)
+
+#: Share of distractors that start ABOVE the floor and fall into the scene,
+#: rather than resting on it. Another shortcut removed -- if only the actor
+#: ever falls, falling identifies the actor.
+DISTRACTOR_AIRBORNE = 0.35
 
 #: How much of the actor's silhouette a distractor must clear, in actor radii.
 #: Smaller than the physical margin on purpose -- see the note at its use.
@@ -304,7 +316,18 @@ SIGHTLINE_RADII = 1.35
 #: point of a distractor is to be *distracting*, not to take part: one that
 #: wanders into the collision changes the physics the clip is a claim about,
 #: and there is no label saying it did.
-KEEP_CLEAR_RADII = 3.0
+#:
+#: Five rather than three because the protected path is BALLISTIC and a body
+#: does not stop when it lands -- it bounces and rolls, into places the sweep
+#: never predicted. On `drop x support` the actor came to rest against a
+#: distractor three radii away, and the violation was then scored against that
+#: cylinder's top instead of the floor.
+#:
+#: The margin cannot be the whole answer, because post-bounce motion is not
+#: predictable from the declared start state. It is paired with a rule in
+#: `_geom.support_under`: a distractor is never a support surface, whatever the
+#: body ends up next to.
+KEEP_CLEAR_RADII = 5.0
 
 
 def distractors(spec, n: int, rng, floor_top: float = 0.0):
@@ -341,6 +364,8 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
     if not actors or n <= 0:
         return []
     actor_r = float(np.median([a.bounding_radius for a in actors]))
+    actor_v = np.median([np.asarray(a.velocity, np.float64) for a in actors],
+                        axis=0)
     # The band to place in: outside the action, inside the shot. Sized from the
     # camera's own framing so it holds whatever scale the scenario works at.
     from .. import camera as cam
@@ -404,6 +429,15 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
             # `pyramid_impact` placed zero distractors on some seeds that way.
             # Deriving the inner radius from the exclusion means the sampler is
             # always drawing from somewhere it can succeed.
+            # The body is BUILT FIRST, then tested, because `vary_dims` can
+            # grow it: checking clearance against the drawn radius and then
+            # stretching the body afterwards let an approved distractor end up
+            # occluding the actor after all.
+            kind = pick_shape(rng)
+            probe = vary_dims(BodySpec(
+                name="probe", kind=kind, position=(0.0, 0.0, 0.0),
+                scale=(r,) * 3, material=None), rng)
+            r = float(probe.bounding_radius)
             inner = max(0.30 * extent, exclusion + r)
             outer = max(inner * 1.25, 0.75 * extent)
             rad = float(rng.uniform(inner, outer))
@@ -430,10 +464,25 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
             if any(float(np.linalg.norm(pos - np.asarray(o.position))) <
                    (r + float(o.bounding_radius)) * 1.15 for o in out):
                 continue
-            kind = pick_shape(rng)
+            # AIRBORNE SOMETIMES. If only the actor ever falls, "the thing
+            # that falls" identifies the actor without looking at physics.
+            if float(rng.uniform()) < DISTRACTOR_AIRBORNE:
+                pos[2] = floor_top + r + float(rng.uniform(0.5, 2.5)) * r
+
+            # AND MOVING SOMETIMES, for the same reason: static clutter lets a
+            # model find the subject by asking what moves.
+            ref = max(float(np.linalg.norm(actor_v)), 0.6)
+            speed = ref * float(rng.uniform(*DISTRACTOR_SPEED))
+            heading = float(rng.uniform(0.0, 2.0 * np.pi))
+            vel = (speed * np.cos(heading), speed * np.sin(heading), 0.0)
+            spin = tuple(float(rng.uniform(-2.5, 2.5)) for _ in range(3))
+
             body = BodySpec(
                 name="distractor_%02d" % i, kind=kind, position=tuple(pos),
-                scale=(r,) * 3, mass=1.0, friction=0.5, restitution=0.3,
+                scale=probe.scale, velocity=vel, angular_velocity=spin,
+                mass=1.0,
+                friction=float(rng.uniform(0.2, 0.8)),
+                restitution=float(rng.uniform(0.1, 0.6)),
                 color=hue_rgb(float(rng.uniform(0, 1))),
                 segmentation_id=SEG_DISTRACTOR_BASE + i, role="distractor")
             out.append(with_material(body, M.pick(rng), rng))

@@ -79,6 +79,16 @@ def support_under(spec, body) -> Tuple[Optional[object], float]:
     for other in spec.bodies:
         if other is body or not other.static:
             continue
+        # A DISTRACTOR IS NEVER A SUPPORT SURFACE. It is scenery: the
+        # scenario stages the floor, the table, the ramp that a violation is
+        # defined against, and letting a decoration redefine that changes what
+        # the violation MEANS. Measured on `drop x support`: with distractors
+        # the actor came to rest near a cylinder and `surface_top` jumped from
+        # 0.0 to 0.87 -- the cylinder's top -- so "held up with nothing under
+        # it" was scored against a reference 0.87 m in the air and the residual
+        # fell from 3.60 to 1.65.
+        if other.role == "distractor":
+            continue
         if not _over(other, body.position, body.bounding_radius):
             continue
         t = top_of(spec, other)

@@ -19,6 +19,26 @@ import numpy as np
 # --------------------------------------------------------------------------
 
 
+#: The LOCAL-MESH BOUNDS of every kind a body can be -- the extent of the mesh
+#: itself, before `scale` multiplies it. Measured in the pinned image with
+#: `AssetSource.from_manifest(KUBASIC).create(...).bounds`, reproduced by
+#: `physloc/render/probe_fission.py`.
+#:
+#: `scale` is NOT a half-extent for anything but a cube and a sphere. A KuBasic
+#: cylinder's mesh is half the size of the [-1, +1] cube everything assumed, a
+#: torus is a disc a fifth as thick as it is wide, and a cone is not centred on
+#: its own origin at all: base at z = -0.306, apex at +0.900. Two things read
+#: this -- the collision hull a resize stands in the body's place, and how far
+#: apart `fission` sets its halves down.
+KIND_BOUNDS = {
+    "cube": ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
+    "sphere": ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
+    "cylinder": ((-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)),
+    "cone": ((-0.6007, -0.6007, -0.3062), (0.6007, 0.6007, 0.8997)),
+    "torus": ((-0.75, -0.75, -0.15), (0.75, 0.75, 0.15)),
+}
+
+
 @dataclass(frozen=True)
 class Tier:
     name: str
@@ -318,7 +338,34 @@ class BodySpec:
 
     @property
     def bounding_radius(self) -> float:
+        """A CONSERVATIVE radius: `scale` is the mesh's scale factor, and no
+        KuBasic mesh reaches 1.0 in its own coordinates, so this over-estimates
+        for a cylinder, cone or torus. Deliberately left that way -- every
+        caller is a clearance or framing margin, where erring large is safe.
+        Anything that needs the real extent wants `extents` below."""
         return float(max(self.scale))
+
+    @property
+    def extents(self) -> Tuple[float, float, float]:
+        """Half-extents in the body's own frame, as DRAWN."""
+        lo, hi = KIND_BOUNDS.get(self.kind, KIND_BOUNDS["sphere"])
+        return tuple(float(s) * (float(h) - float(l)) / 2.0
+                     for s, l, h in zip(self.draw_scale, lo, hi))
+
+    def half_extent_along(self, direction) -> float:
+        """How far the body reaches from its centre along `direction`.
+
+        The support of its bounding ELLIPSOID, which is exact for a sphere and
+        for the case that actually needs it: a horizontal direction across an
+        upright cone, cylinder or torus, where it returns the mesh's own
+        radius. A cube's corner is under-reported, which is why this is not
+        what clearance margins use.
+        """
+        u = np.asarray(direction, np.float64)
+        n = float(np.linalg.norm(u))
+        if n < 1e-12:
+            return float(max(self.extents))
+        return float(np.linalg.norm(np.asarray(self.extents) * (u / n)))
 
     @property
     def sim_static(self) -> bool:

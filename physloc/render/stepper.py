@@ -272,37 +272,57 @@ PARKED_Z = -2000.0
 _HULL = None
 
 
-#: Convex hulls per shape, in unit coordinates, scaled by the body's half
-#: extents at use. Cached by kind.
+#: Re-exported: the mesh bounds live beside `BodySpec`, because `fission` needs
+#: them on the host too -- how far apart it sets its halves down is the same
+#: geometry as what shape their collider is.
+from ..scenarios.base import KIND_BOUNDS  # noqa: E402
+
+#: Points around a ring. Enough that a cylinder rolls rather than clatters.
+RING = 24
+
 _KIND_HULLS = {}
 
 
-def hull_for(kind: str) -> np.ndarray:
-    """Unit-coordinate hull vertices for `kind`.
+def _ring(n, z):
+    ang = np.linspace(0.0, 2.0 * np.pi, int(n), endpoint=False)
+    return np.stack([np.cos(ang), np.sin(ang), np.full_like(ang, float(z))], 1)
+
+
+def hull_for(kind: str, bounds=None) -> np.ndarray:
+    """Hull vertices for `kind`, in the body's own LOCAL MESH coordinates.
+
+    So `set_scale` multiplies by the body's `scale` and gets the collision
+    geometry of the thing that is actually drawn -- which is the whole point,
+    and what a proxy did not do.
 
     A convex hull, so it is exact for a cone or a cylinder and an
-    over-approximation for a torus -- whose convex hull is a solid disc, since
-    its hole is not convex. That is the honest limit of `GEOM_MESH` and far
-    closer than the sphere every non-cube used to get: a resized torus now
-    rests on its rim rather than hovering on an invisible ball.
+    over-approximation for a torus, whose convex hull is a solid disc because
+    the hole is not convex. That is the honest limit of `GEOM_MESH`; a torus
+    now rests on its rim at the right height instead of hovering on a ball.
+
+    `bounds` is the live `kb` asset's, preferred when there is one; the table
+    is the same numbers measured from the image, for the host-side rollout that
+    has no Kubric to ask.
     """
-    if kind in _KIND_HULLS:
-        return _KIND_HULLS[kind]
+    lo, hi = np.asarray(bounds if bounds is not None
+                        else KIND_BOUNDS.get(kind, KIND_BOUNDS["sphere"]),
+                        np.float64)
+    key = (kind, lo.tobytes(), hi.tobytes())
+    if key in _KIND_HULLS:
+        return _KIND_HULLS[key]
+    c, half = (lo + hi) / 2.0, (hi - lo) / 2.0
     if kind == "cone":
-        # Apex at +z, base ring at -z: exactly the KuBasic cone.
-        ang = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
-        ring = np.stack([np.cos(ang), np.sin(ang), np.full_like(ang, -1.0)], 1)
-        v = np.vstack([ring, [[0.0, 0.0, 1.0]]])
+        # Base ring at the mesh's own floor, apex at its own ceiling -- NOT at
+        # +/- half of a symmetric box, which is what put the cone's centre of
+        # collision above the cone.
+        v = np.vstack([_ring(RING, -1.0), [[0.0, 0.0, 1.0]]])
     elif kind in ("cylinder", "torus"):
-        # Two rings. For a torus this is its convex hull, not its surface.
-        ang = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
-        c, s_ = np.cos(ang), np.sin(ang)
-        v = np.vstack([np.stack([c, s_, np.full_like(ang, -1.0)], 1),
-                       np.stack([c, s_, np.full_like(ang, 1.0)], 1)])
+        v = np.vstack([_ring(RING, -1.0), _ring(RING, 1.0)])
     else:
         v = unit_hull()
-    _KIND_HULLS[kind] = np.ascontiguousarray(v, np.float64)
-    return _KIND_HULLS[kind]
+    v = np.ascontiguousarray(c[None, :] + v * half[None, :], np.float64)
+    _KIND_HULLS[key] = v
+    return v
 
 
 def unit_hull(subdivisions: int = 2) -> np.ndarray:
@@ -401,13 +421,19 @@ class ShapeSwap:
         """The PyBullet body currently standing for this one."""
         return self.original if self.proxy is None else self.proxy
 
-    def set_scale(self, scale, pose=None, velocity=None) -> None:
+    def set_scale(self, scale, pose=None, velocity=None, mass=None) -> None:
         """Give the body a collision shape `scale` times its declared size.
 
         `pose` and `velocity` override what the outgoing body was doing, for the
         case where the proxy is not continuing that body's motion at all -- a
         `fission` understudy starts from the *original's* pose, not from the
         parking spot it has been sitting in since frame 0.
+
+        `mass` overrides the declared mass, for the case where the resize is
+        not just a resize: two `fission` halves are each half of one body, and
+        leaving them at their declared masses gave one half 0.300 kg and the
+        other 0.111 kg while both were drawn identically -- so they responded
+        differently to the same knock, for no reason a viewer can see.
         """
         import pybullet as pb
 
@@ -431,24 +457,30 @@ class ShapeSwap:
             shape = pb.createCollisionShape(pb.GEOM_BOX,
                                             halfExtents=half.tolist())
         else:
-            # THE HULL HAS TO MATCH THE SHAPE THAT IS DRAWN. A sphere hull for
-            # everything was right while actors were only spheres and cubes,
-            # and became wrong the moment cylinders, cones and tori joined the
-            # actor set: a cone inside a spherical collider FLOATS. Measured on
-            # `drop x fission` -- a full-size cone rests at z = 0.146, while its
-            # two 79% halves came to rest at 0.409, higher than the body they
-            # split from while being drawn smaller.
+            # THE HULL HAS TO MATCH THE SHAPE THAT IS DRAWN. A unit-sphere
+            # hull was right while actors were only spheres and cubes, and
+            # became wrong the moment cylinders, cones and tori joined the
+            # actor set: a cone inside a spherical collider FLOATS. Measured in
+            # the pinned image at scale 0.5, dropped on a plane -- the KuBasic
+            # cone rests at z = 0.156 and the sphere proxy at 0.397, which is
+            # the pair of halves you saw hanging in the air on `drop x
+            # fission`. Following the asset's own bounds brings it to 0.124.
+            #
+            # `self.obj.bounds` is the live mesh extent, which is the authority;
+            # `KIND_BOUNDS` is the same numbers for anything that has no asset.
             shape = pb.createCollisionShape(
                 pb.GEOM_MESH,
-                vertices=(hull_for(self.body.kind) * half[None, :]).tolist())
+                vertices=(hull_for(self.body.kind,
+                                   getattr(self.obj, "bounds", None))
+                          * half[None, :]).tolist())
 
         if self.proxy is None:
             self._park()
         else:
             pb.removeBody(self.proxy)
 
-        mass = (float(self.body.mass)
-                if (self.dynamic or not self.body.sim_static) else 0.0)
+        want = float(self.body.mass if mass is None else mass)
+        mass = want if (self.dynamic or not self.body.sim_static) else 0.0
         self.proxy = pb.createMultiBody(mass, shape, -1, pos, quat,
                                         useMaximalCoordinates=True)
         pb.changeDynamics(self.proxy, -1, contactProcessingThreshold=0,

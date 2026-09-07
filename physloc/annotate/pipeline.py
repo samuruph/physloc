@@ -399,7 +399,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- write both clips -------------------------------------------------
     sev_bin = plan_d["intervention"]["severity_bin"]
-    pair_uid = "%s/%s/%04d" % (release, scenario, seed)
+    # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY. The same seed and
+    # variant serve every rung on purpose -- that pairing is what makes "what
+    # did materials cost" a paired comparison -- so without the level in the
+    # key, L1 writes over L0's clips in the release tree and the index ends up
+    # with duplicate uids. Measured: a 10-variant `--complexity all` run of
+    # `drop` produced 15 renders and 10 surviving clip directories.
+    level = (spec_d.get("complexity") or {}).get("name") or "L0"
+    pair_uid = "%s/%s/%s/%04d" % (release, level, scenario, seed)
     written = {}
     for label in ("valid", "invalid"):
         uid = "%s/%s" % (pair_uid, "valid" if label == "valid"
@@ -654,6 +661,17 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "domain": None if is_valid else domain_of(family),
         "family": None if is_valid else family,
         "scenario": scenario, "seed": seed,
+        # THE VARIANT INDEX IS DATA, not bookkeeping. Both orthogonal axes --
+        # camera motion and distractors -- are stratified by it, so it is the
+        # only field that says why this clip got clutter and its neighbour did
+        # not, and it is what pairs a clip with its counterpart at another
+        # level.
+        "variant": int(spec_d.get("variant") or 0),
+        # What this clip ACTUALLY has, not what its level allows. The level's
+        # `n_distractors` is a capacity; placement can fall short of it, and
+        # `distractor_share` means most clips have none at all.
+        "n_distractors": int((spec_d.get("notes") or {}).get(
+            "n_distractors_placed") or 0),
         "physics_medium": SCENARIOS[scenario].physics_medium,
         "medium": SCENARIOS[scenario].physics_medium,
         "complexity": spec_d.get("complexity", {}),
@@ -720,11 +738,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "spatial_extent": plan_d["spatial_extent"],
             "intervention": plan_d["intervention"],
             "consequences": [],
-            # From `t_event` on. See `severity.peak`: the prefix is
-            # bit-identical, so a residual there measures the scene, not a
-            # violation, and letting it win reported `score: 0.0` on 34 clips.
-            "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name,
-                                          t_event=tinfo["t_event_frame"]),
+            "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),
         }
     else:
         meta["violation"] = None

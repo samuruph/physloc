@@ -1,9 +1,13 @@
-"""v0 and v1 must name the same physical event -- docs/roadmap.md section 3a.
+"""A rung must change ONE thing -- docs/roadmap.md section 3a.
 
-The design is that `(scenario, seed)` is one event, rendered plainly at L0 and
-photographically at L1, so a benchmark can ask whether a model's grasp of the
-physics survives the realism. That only means anything if the rollout is
-identical across complexity.
+The design is that `(scenario, seed, variant)` names one event, staged at
+several realism levels, so a benchmark can ask whether a model's grasp of the
+physics survives the realism. That only means anything if each rung changes its
+own axis and nothing else.
+
+L0 -> L1 is MATERIALS, so mass is the one physical quantity that is supposed to
+differ across it -- mass is `density x volume`, and giving an object a material
+is giving it a density. Everything else must not move.
 """
 from __future__ import annotations
 
@@ -20,20 +24,23 @@ NAMES = sorted(scenarios.available())
 
 @pytest.mark.parametrize("name", NAMES)
 def test_appearance_draws_do_not_shift_the_physics_stream(name):
-    """The half of the twin that already holds.
+    """Appearance has its own salted stream, so turning materials on does not
+    resample the scene.
 
-    `pick_hdri(rng)` used to draw from the physics stream, and because it only
-    fires at L1 the extra draw shifted every physics value after it. Appearance
-    now has its own salted stream, so everything a scenario samples *before*
-    consulting the floor is the same at both levels.
+    `pick_hdri(rng)` used to draw from the PHYSICS stream, and because it only
+    fired at the realistic level the extra draw shifted every physics value
+    after it -- so the two levels were independent releases wearing the same
+    seed. Everything a scenario samples is now the same at both levels except
+    what materials own: mass, and how the surface looks.
     """
     sc = scenarios.get(name)
     a = sc.sample(SEED, TIERS["release"], "L0")
     b = sc.sample(SEED, TIERS["release"], "L1")
+    assert len(a.bodies) == len(b.bodies)
     for x, y in zip(a.bodies, b.bodies):
         if x.role == "floor":
             continue                      # the known gap, covered below
-        for field in ("kind", "position", "scale", "mass", "friction",
+        for field in ("kind", "position", "scale", "friction",
                       "restitution", "velocity", "quaternion"):
             assert getattr(x, field) == getattr(y, field), (
                 "%s: %s.%s differs across complexity" % (name, x.name, field))
@@ -41,20 +48,47 @@ def test_appearance_draws_do_not_shift_the_physics_stream(name):
     assert a.camera_look_at == b.camera_look_at
 
 
+@pytest.mark.parametrize("name", NAMES)
+def test_materials_are_what_l1_changes(name):
+    """The other half: the rung has to actually DO something.
+
+    A ladder whose rungs are indistinguishable measures nothing, and a test
+    that only checks what stayed the same would pass on a level that changed
+    nothing at all. L1 gives every body a material, which gives it a density,
+    which gives it a mass.
+
+    OVER SEEDS, not on one, because `wood` is `REFERENCE_MATERIAL` -- the single
+    density L0 flattens everything to -- so a body that draws wood at L1 keeps
+    exactly its L0 mass. That is right, and on one seed four scenarios drew it
+    and looked like a level that did nothing.
+    """
+    sc = scenarios.get(name)
+    moved = 0
+    for seed in range(SEED, SEED + 8):
+        a = sc.sample(seed, TIERS["release"], "L0")
+        b = sc.sample(seed, TIERS["release"], "L1")
+        assert not any(x.material for x in a.bodies), (
+            "%s: L0 is the one shared density -- see `_flatten_materials`" % name)
+        assert any(y.material for y in b.bodies), (
+            "%s: L1 gave nothing a material" % name)
+        moved += any(x.mass != y.mass for x, y in zip(a.bodies, b.bodies)
+                     if x.role != "floor")
+    assert moved, "%s: materials changed no mass on any seed" % name
+
+
 @pytest.mark.parametrize("name", ["drop"])
 def test_complexity_twin_rolls_identically(name):
-    """L0 and L1 roll identically -- the ladder reordering is what fixed this.
+    """The GEOMETRY is identical across L0 -> L1, so a `drop` rolls the same.
 
-    It used to be an expected failure: `C.ground` returns a cube at L0 and a
-    KuBasic dome from the HDRI level up, which is a genuine collision-geometry
-    change, so the same seed did not roll the same way and the two levels were
-    independent releases rather than twins.
+    Mass differs by design at this rung, and a body in free fall does not care
+    -- so the one scenario whose rollout is mass-independent is the one that
+    can pin "the collision geometry did not change". That is the property that
+    matters: it used to fail, because `C.ground` returned a cube at the plain
+    level and a KuBasic dome at the realistic one, which is a genuine change of
+    shape, and the two levels were independent releases rather than twins.
 
-    L0 and L1 now share a background -- they differ only in whether the camera
-    may move -- so the geometry is identical and the physics is too. The gap
-    moves up the ladder to L3 -> L4, where the HDRI dome arrives, and it is the
-    same gap: making the collision geometry identical across that step is what
-    would let a release and its harder twin be compared clip for clip.
+    The same gap now sits at L1 -> L2, where the HDRI dome arrives. Closing it
+    is what would let a release and its harder twin be compared clip for clip.
     """
     sc = scenarios.get(name)
     a, b = sc.sample(SEED, TIERS["release"], "L0"), sc.sample(SEED, TIERS["release"], "L1")

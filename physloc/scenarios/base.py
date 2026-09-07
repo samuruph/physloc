@@ -213,51 +213,73 @@ class Complexity:
     name: str
     background: str        # "solid" | "hdri"
     actor_assets: str      # "primitive" | "gso"
-    n_distractors: int
-    camera_moves: bool     # may a clip at this level move the camera?
     materials: bool        # do bodies have a material, or a flat colour?
     motion_blur: float
+    #: This level's share of a full generation, RELATIVE TO L0. A run asking
+    #: for `V` variants per cell gives this level `round(V * share)` of them,
+    #: and skips it entirely when that rounds to zero -- so a short run is all
+    #: baseline and only a long one starts spending clips on realism. Naming a
+    #: level explicitly (`--complexity L2`) overrides that.
+    share: float
+    #: Fraction of THIS LEVEL's clips that move the camera, and that carry
+    #: distractors. Orthogonal to the ladder and to each other: see the note on
+    #: `COMPLEXITY` for why these are ratios rather than rungs.
+    camera_share: float
+    distractor_share: float
+    #: How many distractors a clip gets WHEN it gets them. A quantity, not an
+    #: axis.
+    n_distractors: int
     implemented: bool
-
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "background": self.background,
                 "actor_assets": self.actor_assets,
-                "n_distractors": self.n_distractors,
-                "camera_moves": self.camera_moves,
                 "materials": self.materials,
-                "motion_blur": self.motion_blur}
+                "motion_blur": self.motion_blur,
+                "share": self.share,
+                "camera_share": self.camera_share,
+                "distractor_share": self.distractor_share,
+                "n_distractors": self.n_distractors}
+
+    @property
+    def camera_moves(self) -> bool:
+        """Whether any clip at this level may move its camera."""
+        return self.camera_share > 0.0
 
 
-#: ONE AXIS PER LEVEL, and each level is the one below it plus exactly one
-#: thing. That is the whole value of a ladder: when a model's score drops
-#: between two levels, the drop names its own cause. A level that changed the
-#: background AND the objects AND the clutter at once -- which the old L2 did --
-#: tells you only that something got harder.
+#: THE LADDER IS SCENE REALISM. Four rungs, each the one below it plus one step
+#: of how hard the scene is to look at:
 #:
-#: DISTRACTORS COME BEFORE THE REALISTIC ENVIRONMENT, deliberately. The point
-#: of a level is to isolate one effect, and clutter is most legible against a
-#: plain background: at L3 the only thing that changed is that there are now
-#: other objects in shot, so a drop there is about distraction and not about
-#: lighting or unfamiliar geometry. Introducing distractors alongside an HDRI
-#: environment would confound the two.
+#:   L0  primitives, flat colours, a solid background   -- the baseline
+#:   L1  + materials: wood, steel, rubber, whose appearance and density agree
+#:   L2  + a real environment, lit by an HDRI
+#:   L3  + GSO objects in that environment              -- the hardest
 #:
-#: The cost of that ordering is that the built levels are no longer a
-#: contiguous prefix -- the HDRI path works today and distractor placement does
-#: not, so L4 is blocked behind L3 even though its own machinery is ready.
-#: Worth it: the ladder is a measuring instrument, and its order should serve
-#: the measurement rather than the build queue.
+#: **Camera motion and distractors are NOT rungs.** They used to be, and it was
+#: wrong twice over. A level whose axis fires on only some of its clips is not a
+#: stratum at all: with camera motion on 1 variant in 5, "L2 minus L1" was not
+#: measuring materials, it was measuring materials plus whichever variants
+#: happened to draw a camera move. And making them rungs forced a choice nobody
+#: wants -- either every realistic clip moves its camera, or none does.
 #:
-#: How many distractors is a knob on the level, not a level of its own. "More
-#: of the same thing" is a quantity; a benchmark axis should be a kind.
+#: They are ORTHOGONAL AXES with declared ratios, applied inside every level:
+#: `camera_share` of a level's clips move, `distractor_share` carry clutter, and
+#: the two are independent. So the dataset answers "how much does clutter cost
+#: at each realism level" as well as "how much does realism cost", and the
+#: overall share of moving-camera clips is one number you set rather than an
+#: artefact of how the ladder was climbed.
+#:
+#: SHARES FALL AS REALISM RISES, for two reasons. The baseline is what everything
+#: else is compared against, so it should be the largest stratum; and an HDRI
+#: clip costs 44 s against a solid background's 8 s at the debug tier, so the
+#: expensive levels are also the ones a fixed budget can afford least of.
+#: Normalised, the four come to 50% / 25% / 15% / 10% of a full generation.
 COMPLEXITY: Dict[str, Complexity] = {
-    #                 bg       actors       n  cam    mat   blur  built
-    "L0": Complexity("L0", "solid", "primitive", 0, False, False, 0.0, True),
-    "L1": Complexity("L1", "solid", "primitive", 0, True,  False, 0.0, True),
-    "L2": Complexity("L2", "solid", "primitive", 0, True,  True,  0.0, True),
-    "L3": Complexity("L3", "solid", "primitive", 6, True,  True,  0.0, True),
-    "L4": Complexity("L4", "hdri",  "primitive", 6, True,  True,  0.0, False),
-    "L5": Complexity("L5", "hdri",  "gso",      12, True,  True,  0.0, False),
+    #                  bg      actors      mat   blur  share  cam  dist  n  built
+    "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, 0.20, 0.30, 6, True),
+    "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, 0.20, 0.30, 6, True),
+    "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, 0.20, 0.30, 6, False),
+    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, 0.20, 0.30, 12, False),
 }
 DEFAULT_COMPLEXITY = "L0"
 
@@ -583,21 +605,30 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
 def _add_distractors(spec: SceneSpec, seed: int) -> None:
     """Populate the scene with bodies that take no part in the violation.
 
-    From L3 up. Added here rather than in each scenario because the placement
-    rule is a property of the LEVEL, and because it needs the finished scene --
-    where the actor is, where it is heading, and what the camera can see -- all
-    of which exist only once `_sample` has run.
+    On `distractor_share` of every level's clips -- an orthogonal axis, not a
+    rung, so "what does clutter cost" is answerable at each realism level
+    rather than only at the top of the ladder. See `COMPLEXITY`.
+
+    Added here rather than in each scenario because the placement rule is a
+    property of the LEVEL, and because it needs the finished scene -- where the
+    actor is, where it is heading, and what the camera can see -- all of which
+    exist only once `_sample` has run.
 
     Drawn off its own salted stream so that adding distractors cannot shift a
-    single physics or appearance draw that a scenario already made: an L3 scene
-    is an L2 scene with more bodies in it, and nothing else different.
+    single physics or appearance draw that a scenario already made: a cluttered
+    scene is a clean scene with more bodies in it, and nothing else different.
     """
     import zlib
 
     from . import _common as C
 
-    n = COMPLEXITY[spec.complexity].n_distractors
-    if not n:
+    cx = COMPLEXITY[spec.complexity]
+    n = cx.n_distractors
+    if not n or not stratify(spec.variant, cx.distractor_share):
+        # Recorded as zero rather than left absent: a clip with no distractors
+        # is a fact about that clip, and a reader filtering on the axis needs
+        # both sides of it.
+        spec.notes["n_distractors_placed"] = 0
         return
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xD157 + zlib.crc32(spec.scenario.encode()))
@@ -649,22 +680,52 @@ def _flatten_materials(spec: SceneSpec) -> None:
         b.material = None
 
 
-#: One variant in every `CAMERA_MOTION_PERIOD` moves its camera -- so 2 of 10,
-#: 1 of 5, PER SCENARIO.
-#:
-#: Spread across a scenario's variants rather than drawn independently per
-#: scene. An independent coin flip gives the right share overall and an uneven
-#: one per scenario: measured across thirteen scenarios it ranged from 13% to
-#: 31%, so some scenarios had moving cameras and others effectively did not,
-#: and any per-scenario comparison inherited that as a confound.
-#:
-#: The variant INDEX decides, not the seed, and the moving one is the LAST of
-#: each block. That is what makes a short run entirely static: four variants
-#: are 0-3 and none of them is index 4. A run only starts spending clips on
-#: camera motion once it is long enough to afford them, and `--camera-motion`
-#: overrides this for anyone who wants one on purpose.
-CAMERA_MOTION_PERIOD = 5
-MOVING_CAMERA_SHARE = 1.0 / CAMERA_MOTION_PERIOD
+def stratify(variant: int, share: float) -> bool:
+    """Does variant `variant` carry an axis that should be on for `share` of them?
+
+    The rule for every orthogonal axis -- camera motion, distractors -- and the
+    reason there is one rule rather than a period per axis.
+
+    `floor((v+1)*share) > floor(v*share)` fires `floor(V*share)` times over
+    variants 0..V-1 -- it telescopes -- and spreads them evenly, for any share,
+    without a random draw. Floor rather than round, so an axis is never
+    over-represented in a run too short to afford it. Three properties follow,
+    and all three were asked for:
+
+    * **Even per scenario.** Drawn independently per scene, a 20% axis measured
+      13% to 31% across thirteen scenarios -- some scenarios effectively had
+      moving cameras and others did not, and any per-scenario comparison
+      inherited that as a confound. Spread across a scenario's variant indices
+      instead, every scenario gets the same share.
+    * **A short run is the easy case.** At V=4 a 20% axis fires zero times,
+      because index 4 is never reached. A run only starts spending clips on
+      camera motion once it is long enough to afford them, which is what you
+      asked for -- and `--camera-motion` overrides it for anyone who wants one
+      on purpose.
+    * **Independent axes stay independent.** Two shares of 0.20 and 0.30 fire on
+      {4, 9} and {3, 6, 9} of ten, so they neither lock together nor avoid each
+      other. Clips with both are exactly as common as chance says they should
+      be, which is what makes "clutter at each realism level" answerable.
+    """
+    if share <= 0.0:
+        return False
+    if share >= 1.0:
+        return True
+    v = int(variant)
+    return math.floor((v + 1) * share) > math.floor(v * share)
+
+
+def variants_at(level: str, variants: int) -> int:
+    """How many of a run's `variants` per cell this level gets.
+
+    Rounds, and rounds DOWN TO ZERO: a level whose share does not buy a whole
+    variant is skipped rather than promoted to one, so the declared ratios hold
+    instead of the tail levels being over-represented in every small run.
+    Naming a level explicitly is the override.
+    """
+    cx = COMPLEXITY.get(level)
+    return int(variants) if cx is None else int(round(int(variants) * cx.share))
+
 
 #: The motions, and how often each is chosen among the clips that move.
 #:
@@ -699,12 +760,12 @@ DOLLY_RANGE = (0.06, 0.12)
 
 
 def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
-    """One clip in five gets a moving camera, of one of three kinds.
+    """`camera_share` of each level's clips get a moving camera, of one of three
+    kinds.
 
-    Deliberately NOT on the complexity ladder. L3 and L4 declare
-    `camera_motion="linear"` and neither is built, so tying motion to them
-    would mean no moving-camera clips until GSO assets and distractors arrive
-    as well -- and the axis being exercised here is viewpoint, not realism.
+    Deliberately NOT a rung on the ladder. Viewpoint is not realism, and a rung
+    that fired on only some of its clips would stop the level above it from
+    isolating its own axis. See `COMPLEXITY` and `stratify`.
 
     The aim point never moves; see `camera_end_position`.
     """
@@ -725,9 +786,8 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
         return
     if not spec.camera_motion:
         return
-    # The LEVEL decides whether motion is available at all; L0 is the plain
-    # baseline and never moves.
-    if not COMPLEXITY[spec.complexity].camera_moves:
+    share = COMPLEXITY[spec.complexity].camera_share
+    if share <= 0.0:
         return
     # Its own stream, salted by scenario. Sharing `_vary`'s would do two bad
     # things: appending a draw there shifts every camera angle already
@@ -739,8 +799,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xCA31 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
-    if not forced and (int(spec.variant) % CAMERA_MOTION_PERIOD
-                       != CAMERA_MOTION_PERIOD - 1):
+    if not forced and not stratify(spec.variant, share):
         return
 
     eye = np.asarray(spec.camera_position, np.float64)

@@ -11,18 +11,20 @@ import pytest
 
 from physloc import scenarios
 from physloc.scenarios import TIERS
-from physloc.scenarios.base import (CAMERA_MOTION_KINDS, CAMERA_MOTION_PERIOD,
-                                    DOLLY_RANGE)
+from physloc.scenarios.base import (CAMERA_MOTION_KINDS, COMPLEXITY,
+                                    DOLLY_RANGE, stratify)
 
 NAMES = sorted(scenarios.available())
 BASE = 777
 N_VARIANTS = 20
 
 
-#: The level camera motion first exists at. L0 is the plain baseline and never
-#: moves -- that is what L0 is for -- so testing the camera there would be
-#: testing that a deliberately still level is still.
-CAMERA_LEVEL = "L1"
+#: Camera motion is an ORTHOGONAL AXIS, not a rung: every level moves
+#: `camera_share` of its clips, L0 included. Tested at L0 because that is where
+#: the rest of the scene is held stillest, so anything the camera does is the
+#: only thing that changed.
+CAMERA_LEVEL = "L0"
+CAMERA_SHARE = COMPLEXITY[CAMERA_LEVEL].camera_share
 
 
 def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
@@ -33,14 +35,16 @@ def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
 
 
 def test_every_scenario_moves_the_camera_on_the_same_share_of_variants():
-    """One variant in five, PER SCENARIO -- not a coin flip per scene.
+    """`camera_share` of them, PER SCENARIO -- not a coin flip per scene.
 
     An independent flip gives the right share overall and an uneven one per
     scenario: measured across thirteen scenarios it ranged from 13% to 31%, so
     some scenarios had moving cameras and others effectively did not, and any
     per-scenario comparison inherited that as a confound.
     """
-    expected = N_VARIANTS // CAMERA_MOTION_PERIOD
+    expected = sum(stratify(v, CAMERA_SHARE) for v in range(N_VARIANTS))
+    assert expected == round(N_VARIANTS * CAMERA_SHARE), (
+        "the stratifier must deliver the declared share exactly")
     for name in NAMES:
         if name == "occluder_pass":
             continue                       # opts out entirely; see below
@@ -66,11 +70,11 @@ def test_a_short_run_is_entirely_static():
     """Fewer variants than the period means no camera motion at all.
 
     Asked for explicitly: a short run should be the easy case unless motion is
-    requested. The moving variant is the LAST of each block, so a run of four
-    never reaches it -- a run only spends clips on camera motion once it is
-    long enough to afford them.
+    requested. `stratify` fires on the LAST variant of each block, so a run of
+    four never reaches it -- a run only spends clips on camera motion once it
+    is long enough to afford them.
     """
-    for n in range(1, CAMERA_MOTION_PERIOD):
+    for n in range(1, int(1.0 / CAMERA_SHARE)):
         for name in NAMES:
             assert not any(sp.camera_moves for sp in _specs(name, n=n)), (
                 "%s moved the camera in a %d-variant run" % (name, n))
@@ -89,15 +93,18 @@ def test_occluder_pass_never_moves_the_camera():
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_camera_track_is_identical_across_complexity(name):
-    """L0 and L1 must film the same clip from the same place.
+    """Two rungs must film the same clip from the same place.
 
-    v1 exists to ask whether a model's grasp of the physics survives realism,
-    which only means anything if the two renders are otherwise the same shot.
+    The ladder exists to ask whether a model's grasp of the physics survives
+    realism, which only means anything if the two renders are otherwise the
+    same shot. Camera motion is an orthogonal axis with the same share at every
+    level, so the answer must not depend on the rung -- and comparing the two
+    BUILT rungs is what pins that.
     """
     sc = scenarios.get(name)
     for seed in (0, 7, 4242):
-        a = sc.sample(seed, TIERS["release"], "L1")
-        b = sc.sample(seed, TIERS["release"], "L2")
+        a = sc.sample(seed, TIERS["release"], "L0")
+        b = sc.sample(seed, TIERS["release"], "L1")
         assert a.camera_motion_kind == b.camera_motion_kind, (name, seed)
         assert a.camera_end_position == b.camera_end_position, (name, seed)
 

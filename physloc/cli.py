@@ -66,7 +66,7 @@ def cmd_taxonomy(a) -> int:
 SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
 
 #: Keyed by (tier, background). The HDRI environment is the expensive dial --
-#: about 4.6x a solid background -- and it arrives at L4, so levels are mapped
+#: about 5.5x a solid background -- and it arrives at L2, so levels are mapped
 #: onto their background rather than listed one by one.
 SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
                     ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
@@ -95,24 +95,40 @@ def _print_release_size(cells, a) -> None:
     variants = max(1, a.variants)
     scenarios = {s for s, _ in cells}
 
-    invalid = len(cells) * n_bins * variants
-    valid = len(scenarios) * variants          # one per scenario+seed, shared
-    renders = invalid + valid
+    # ONE ROW PER RUNG, because a ladder run is several different prices. The
+    # rungs differ in background -- an HDRI clip costs ~44 s against a solid
+    # background's ~8 s at the debug tier -- and in how many variants they get,
+    # so quoting the whole run at L0's rate understated a ladder by more than
+    # a factor of two.
     from .scenarios.base import COMPLEXITY
-    cx = COMPLEXITY.get(a.complexity)
-    bg = cx.background if cx else "solid"
-    rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
-    # Every extra body in the scene is more geometry to shade, every frame.
-    rate *= 1.0 + DISTRACTOR_COST * (cx.n_distractors if cx else 0)
-    serial = renders * rate
 
+    levels = _levels_for(a.complexity, variants)
+    invalid = valid = renders = 0
+    serial = 0.0
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
           % (a.tier, a.complexity, a.severity, variants))
-    print("   %d cells x %d bin(s) x %d variant(s) = %d invalid clips"
-          % (len(cells), n_bins, variants, invalid))
-    print("   + %d valid twins (one per scenario+seed, shared across families"
-          "\n     and bins because the prefix is bit-identical) = %d renders"
-          % (valid, renders))
+    for level, n_v in levels:
+        cx = COMPLEXITY.get(level)
+        bg = cx.background if cx else "solid"
+        rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
+        # Every extra body is more geometry to shade, every frame -- but only
+        # `distractor_share` of a level's clips carry any, so the level's
+        # average pays that fraction of the cost.
+        if cx is not None:
+            rate *= 1.0 + DISTRACTOR_COST * cx.n_distractors * cx.distractor_share
+        inv = len(cells) * n_bins * n_v
+        val = len(scenarios) * n_v      # one per scenario+seed, shared
+        invalid += inv
+        valid += val
+        renders += inv + val
+        serial += (inv + val) * rate
+        print("   %-3s x%-3d %5d invalid + %4d valid = %5d renders "
+              "@ %6.1f s = %5.1f h" % (level, n_v, inv, val, inv + val, rate,
+                                       (inv + val) * rate / 3600.0))
+    print("   %d cells x %d bin(s), %d renders total"
+          "\n   (valid twins are one per scenario+seed, shared across families"
+          "\n    and bins because the prefix is bit-identical)"
+          % (len(cells), n_bins, renders))
     workers = max(1, int(getattr(a, "workers", 0) or 4))
     speedup = SPEEDUP.get(workers, SPEEDUP[max(SPEEDUP)])
     print("   ~%.1f h serial, ~%.1f h at the measured %.2fx on %d worker(s)"
@@ -165,7 +181,8 @@ def cmd_randomisation(a) -> int:
             return v
 
     axes = ("camera_pos", "camera_kind", "shape", "material", "mass",
-            "size", "aspect", "colour", "floor", "backdrop", "start", "speed")
+            "size", "aspect", "colour", "floor", "backdrop", "start", "speed",
+            "clutter")
     print("distinct values over %d seeds, tier %s / %s" % (n, a.tier, a.complexity))
     print("%-16s %s" % ("scenario", " ".join("%-9s" % x for x in axes)))
     totals = {x: set() for x in axes}
@@ -173,12 +190,18 @@ def cmd_randomisation(a) -> int:
         sc = scen_mod.get(name)
         seen = {x: set() for x in axes}
         for seed in range(n):
-            sp = sc.sample(seed, tier, a.complexity)
+            # THE VARIANT INDEX MOVES WITH THE SEED. Camera motion and
+            # distractors are stratified by variant, not drawn per scene, so
+            # sampling every seed at variant 0 reported `camera_kind` as a
+            # single value on every scenario -- a report saying the camera
+            # never varies, from a sweep that never asked it to.
+            sp = sc.sample(seed, tier, a.complexity, variant=seed)
             act = next((b for b in sp.bodies
                         if b.role == "actor" and not b.dormant), None)
             fl = next((b for b in sp.bodies if b.role == "floor"), None)
             seen["camera_pos"].add(key(sp.camera_position))
             seen["camera_kind"].add(sp.camera_motion_kind)
+            seen["clutter"].add(int(sp.notes.get("n_distractors_placed") or 0))
             seen["backdrop"].add(key(sp.background_color))
             if fl is not None:
                 seen["floor"].add(key(fl.color))
@@ -202,6 +225,11 @@ def cmd_randomisation(a) -> int:
     print("  speed     scenarios that start their actor at rest")
     print("  material  one material per scene is deliberate on collision, pour")
     print("            and stack_topple -- their families need matched bodies")
+    print("")
+    print("`camera_kind` and `clutter` are ORTHOGONAL AXES, stratified by")
+    print("variant index, so 2 is the healthy value -- on and off. A 1 here")
+    print("means the sweep was too short to reach the axis: they fire at 20%")
+    print("and 30%, so below 5 and 4 seeds respectively nothing turns on.")
     return 0
 
 
@@ -280,26 +308,43 @@ def cmd_generate(a) -> int:
     # scenario's variants rather than drawn per scene -- camera motion is one,
     # so that every scenario gets the same share rather than each flipping its
     # own coin -- and the sampler cannot work the index out from the seed.
-    jobs = [(a.seed + v, scenario, families, v)
-            for v in range(a.variants)
+    levels = _levels_for(a.complexity, a.variants)
+    if not levels:
+        print("no complexity level selected", file=sys.stderr)
+        return 2
+    # THE SAME SEED AND VARIANT INDEX ACROSS LEVELS, on purpose. A level's
+    # allocation is a prefix of the variants below it, so every L1 clip has an
+    # L0 counterpart built from the same draw with one axis changed -- which is
+    # what makes "what did materials cost" answerable by pairing clips rather
+    # than by comparing two population averages.
+    jobs = [(a.seed + v, scenario, families, v, level)
+            for level, n_v in levels
+            for v in range(n_v)
             for scenario, families in sorted(by_scenario.items())]
+    if len(levels) > 1:
+        print("-- ladder: " + ", ".join("%s x%d" % lv for lv in levels))
 
     def run_one(job):
-        seed, scenario, families, variant = job
+        seed, scenario, families, variant, level = job
+        # A LEVEL OF ITS OWN in the work tree when the ladder is walked: the
+        # worker keys its scratch on (scenario, seed), and the same seed serves
+        # every level by design, so without this L1 would render straight over
+        # L0's passes.
+        here = work if len(levels) == 1 else os.path.join(work, level)
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
-                               a.severity, work, complexity=a.complexity,
+                               a.severity, here, complexity=level,
                                window=a.window, variant=variant,
                                dials={"resolution": a.resolution, "fps": a.fps,
                                       "frames": a.frames, "spp": a.spp})
         if rc != 0:
-            return {"scenario": scenario, "seed": seed, "rc": rc, "info": info,
-                    "results": [], "bad": []}
+            return {"scenario": scenario, "seed": seed, "level": level,
+                    "rc": rc, "info": info, "results": [], "bad": []}
         bad = [x for x in info.get("variants", []) if not x.get("ok")]
         produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
         results = list(_annotate(info["outdir"], rel,
                                  overlay=not a.no_overlay, only=produced))
-        return {"scenario": scenario, "seed": seed, "rc": 0, "info": info,
-                "results": results, "bad": bad}
+        return {"scenario": scenario, "seed": seed, "level": level, "rc": 0,
+                "info": info, "results": results, "bad": bad}
 
     done_count = {"n": 0}
 
@@ -310,9 +355,10 @@ def cmd_generate(a) -> int:
         # every outcome before printing anything, so a twenty-minute run showed
         # nothing at all until it finished. The ordered results still print
         # afterwards, so the transcript stays identical at any worker count.
-        print("  [%d/%d] %-16s seed=%-6d %s"
+        print("  [%d/%d] %-16s seed=%-6d %-3s %s"
               % (done_count["n"], total or len(jobs), out["scenario"],
-                 out["seed"], "ok" if out["rc"] == 0 else "FAILED"), flush=True)
+                 out["seed"], out.get("level", ""),
+                 "ok" if out["rc"] == 0 else "FAILED"), flush=True)
         return out
 
     workers = max(1, int(getattr(a, "workers", 1) or 1))
@@ -406,7 +452,7 @@ def cmd_generate(a) -> int:
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
-    expected = len(cells) * a.variants * len(
+    expected = len(cells) * sum(n for _, n in levels) * len(
         ["weak", "medium", "strong"] if a.severity == "all"
         else [x for x in a.severity.split(",") if x.strip()])
     if len(done) < expected:
@@ -417,6 +463,37 @@ def cmd_generate(a) -> int:
         for row in failed:
             print("   %s" % (row,), file=sys.stderr)
     return 0
+
+
+def _levels_for(spec: str, variants: int):
+    """[(level, variants at that level)] for a `--complexity` value.
+
+    `all` walks the whole built ladder at the shares declared on `COMPLEXITY`,
+    so one run produces a dataset with L0, L1, ... in their intended
+    proportions rather than needing a separate run per level and a decision
+    about how big each should be.
+
+    A level whose share does not buy a whole variant is DROPPED, which is what
+    keeps a short run all-baseline. Naming levels explicitly overrides that:
+    `--complexity L2 --variants 1` gives one L2 clip per cell, because asking
+    for a level by name is asking for it.
+    """
+    from .scenarios.base import COMPLEXITY, implemented_complexities, variants_at
+
+    text = str(spec or "").strip()
+    if text.lower() in ("all", "ladder"):
+        out = [(lv, variants_at(lv, variants))
+               for lv in implemented_complexities()]
+        return [(lv, n) for lv, n in out if n > 0]
+    names = [x.strip() for x in text.split(",") if x.strip()]
+    unknown = [x for x in names if x not in COMPLEXITY]
+    if unknown:
+        raise SystemExit("unknown complexity level(s): %s -- known: %s"
+                         % (", ".join(unknown), ", ".join(COMPLEXITY)))
+    if len(names) == 1:
+        return [(names[0], max(1, int(variants)))]
+    out = [(lv, variants_at(lv, variants)) for lv in names]
+    return [(lv, n) for lv, n in out if n > 0]
 
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
@@ -601,7 +678,7 @@ def _build(suppress: bool = False):
                    help="list every (scenario, family) cell")
     p.add_argument("--tier", default="release", help="debug | release")
     p.add_argument("--complexity", default="L0",
-                   help="L0..L5 -- see README section 8. L0-L3 are built.")
+                   help="L0..L3 -- see README section 8. L0-L1 are built.")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
     p.add_argument("--workers", type=int, default=4,
@@ -644,8 +721,10 @@ def _build(suppress: bool = False):
     p.add_argument("--spp", type=int,
                    help="override the tier's samples per pixel (render noise "
                         "vs time; frame time is ~1.29 + 0.0074*spp at 256sq)")
-    p.add_argument("--complexity", default="L1",
-                   help="L0 solid bg .. L4 MOVi-F (see `taxonomy`)")
+    p.add_argument("--complexity", default="L0",
+                   help="L0..L3, a comma list, or `all` to walk the whole "
+                        "ladder in one run at the declared shares "
+                        "(see README section 8)")
     p.add_argument("--workdir")
     p.add_argument("--outdir")
     p.add_argument("--no-overlay", action="store_true")
@@ -724,7 +803,7 @@ def _build(suppress: bool = False):
                    help="how many instances of each scenario to sample")
     p.add_argument("--tier", default="debug")
     p.add_argument("--complexity", default="L0",
-                   help="L0..L5 -- see README section 8. L0-L3 are built.")
+                   help="L0..L3 -- see README section 8. L0-L1 are built.")
     p.add_argument("--scenario", help="restrict to one scenario")
     p.set_defaults(fn=cmd_randomisation)
 

@@ -7,20 +7,49 @@ assert and expensive to notice.
 import numpy as np
 import pytest
 
+import dataclasses
+
 from physloc import scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios._common import (DISTRACTOR_SIZE, KEEP_CLEAR_RADII,
                                        MAX_ASPECT, SIGHTLINE_RADII)
-from physloc.scenarios.base import COMPLEXITY
+from physloc.scenarios.base import COMPLEXITY, stratify
 
 NAMES = sorted(scenarios.available())
-LEVEL = "L3"
+
+#: Distractors are an ORTHOGONAL AXIS, not a rung: every level places them on
+#: `distractor_share` of its clips. Tested at L0, where the rest of the scene is
+#: held plainest, so anything the clutter does is the only thing that changed.
+LEVEL = "L0"
 SEEDS = range(6)
 
 
-def _specs(name, level=LEVEL):
+def _forced(level=LEVEL, share=1.0):
+    """`COMPLEXITY` with one level's distractor share overridden.
+
+    The axis is stratified by variant index, so at its declared 30% only some
+    variants carry clutter -- and a test that wants to check placement on every
+    seed would otherwise be checking empty scenes most of the time. Forcing the
+    share to 1.0 asks the same placement code the same question on every seed;
+    `test_distractors_land_only_on_their_declared_share` is what pins the ratio
+    itself.
+    """
+    return dict(COMPLEXITY,
+                **{level: dataclasses.replace(COMPLEXITY[level],
+                                              distractor_share=share)})
+
+
+def _specs(name, level=LEVEL, share=1.0, seeds=SEEDS, monkeypatch=None):
+    import physloc.scenarios.base as B
+
     sc = scenarios.get(name)
-    return [sc.sample(777 + v, TIERS["debug"], level, variant=v) for v in SEEDS]
+    saved = B.COMPLEXITY
+    B.COMPLEXITY = _forced(level, share) if share is not None else saved
+    try:
+        return [sc.sample(777 + v, TIERS["debug"], level, variant=v)
+                for v in seeds]
+    finally:
+        B.COMPLEXITY = saved
 
 
 def _split(spec):
@@ -28,13 +57,38 @@ def _split(spec):
     return actors, [b for b in spec.bodies if b.role == "distractor"]
 
 
-def test_no_distractors_below_their_level():
-    """They arrive at L3 and not before -- that is what the level means."""
-    for level in ("L0", "L1", "L2"):
-        assert COMPLEXITY[level].n_distractors == 0
+def test_distractors_land_only_on_their_declared_share():
+    """The ratio, at the declared value, on every scenario.
+
+    Clutter is an axis rather than a rung, so what pins it is not "which level"
+    but "which fraction, spread how". `stratify` decides, by variant INDEX, so
+    every scenario gets the same share instead of each flipping its own coin --
+    measured with independent draws, a nominal 20% axis ranged from 13% to 31%
+    across thirteen scenarios, and any per-scenario comparison inherited that
+    as a confound.
+    """
+    share = COMPLEXITY[LEVEL].distractor_share
+    n = 20
+    want = [v for v in range(n) if stratify(v, share)]
+    assert len(want) == int(n * share), "the stratifier owes the declared share"
+    for name in NAMES:
+        got = [sp.variant for sp in _specs(name, share=None, seeds=range(n))
+               if any(b.role == "distractor" for b in sp.bodies)]
+        assert got == want, "%s cluttered variants %s, expected %s" % (
+            name, got, want)
+
+
+def test_a_short_run_is_entirely_uncluttered():
+    """Asked for explicitly: below the threshold a run is the easy case. The
+    axis fires on the LAST variant of each block, so a run of three never
+    reaches it."""
+    share = COMPLEXITY[LEVEL].distractor_share
+    for n in range(1, int(1.0 / share)):
         for name in NAMES:
-            assert not any(b.role == "distractor"
-                           for sp in _specs(name, level) for b in sp.bodies)
+            assert not any(
+                b.role == "distractor"
+                for sp in _specs(name, share=None, seeds=range(n))
+                for b in sp.bodies), "%s cluttered a %d-variant run" % (name, n)
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -144,18 +198,21 @@ def test_no_family_can_target_a_distractor(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_adding_distractors_changes_nothing_else(name):
-    """An L3 scene is an L2 scene with more bodies in it.
+    """A cluttered scene is a clean scene with more bodies in it.
 
     Distractors draw from their own salted stream, so they cannot shift a
     physics or appearance value the scenario already sampled. Without that,
-    turning the level up would silently resample every clip.
+    the clip that happened to draw clutter would also be a different clip in
+    every other respect, and the axis would stop being an axis.
+
+    Compared at the SAME seed and variant with the share forced off and on,
+    which is the only way to hold everything else fixed now that clutter is a
+    ratio rather than a level.
     """
-    sc = scenarios.get(name)
-    for v in SEEDS:
-        a = sc.sample(777 + v, TIERS["debug"], "L2", variant=v)
-        b = sc.sample(777 + v, TIERS["debug"], "L3", variant=v)
+    for a, b in zip(_specs(name, share=0.0), _specs(name, share=1.0)):
         common = [x for x in b.bodies if x.role != "distractor"]
         assert len(common) == len(a.bodies), name
+        assert len(b.bodies) > len(a.bodies), "%s placed nothing" % name
         for x, y in zip(a.bodies, common):
             for f in ("kind", "position", "scale", "mass", "material",
                       "velocity", "color", "friction", "restitution"):

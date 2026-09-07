@@ -1,65 +1,79 @@
 # ============================================================================
-# review -- every cell once, at debug size. The sweep to WATCH before
-# generating anything real.
+# review -- every cell once, at debug size, on the plain baseline.
 #
+# The sweep to WATCH before generating anything real, and the file every other
+# config points at for what a key means.
+#
+#   python -m physloc.cli taxonomy --config review    # price it first
 #   python -m physloc.cli generate --config review
-#   python -m physloc.cli validate out/release
-#   python -m physloc.cli coverage out/release     # all cells in one video
+#   python -m physloc.cli validate out/review         # must exit 0
+#   python -m physloc.cli audit    out/review         # cells depicting nothing
+#   python -m physloc.cli coverage out/review         # every cell, one video
 #
-# Any flag you type on the command line overrides what is written here, so
+# Anything typed on the command line overrides what is written here, so
 # `--config review --tier release` is this sweep at release size.
+#
+# To isolate ONE rung of the ladder, use its own file -- review_L0 .. review_L3.
+# To produce a whole ladder in one run, use review_ladder.
 # ============================================================================
 
 # --------------------------------------------------------------------------
 # defaults: applied to EVERY subcommand that understands the key, and silently
-# skipped by those that do not (`taxonomy` has no --seed, so it ignores it).
-# This is where a setting goes when `generate` and `taxonomy` should agree on
-# it -- which is the point of `taxonomy`, since it prices exactly the run that
+# skipped by those that do not (`taxonomy` has no --workdir, so it ignores it).
+# This is where a setting goes when `generate` and `taxonomy` must agree on it
+# -- which is the point of `taxonomy`, since it prices exactly the run that
 # `generate` would perform.
 # --------------------------------------------------------------------------
 defaults:
 
   # seed: base random seed. Drives EVERY free parameter a scenario has --
-  #   sizes, speeds, drop heights, restitution, colours, the HDRI at L1, the
-  #   camera, the lamp direction, and whether the actor is a sphere or a cube
-  #   where that is physically neutral. Variant N uses seed+N.
+  #   sizes, speeds, drop heights, restitution, colours, materials, the
+  #   camera, the lamp direction, and which shape the actor is where that is
+  #   physically neutral. Variant N uses seed+N.
   seed: 777
 
-  # complexity: how photographic the scene is. THE EXPENSIVE DIAL -- far more
-  #   than the severity ladder. L1 costs about 5.5x an L0 render, which turns
-  #   an overnight job into a week.
-  #     L0  solid background + one sun lamp. No network. (built)
-  #     L1  HDRI environment + dome backdrop, MOVi-style.  (built)
-  #     L2..L4  scaffolded, not built -- see `physloc taxonomy`
-  complexity: L2
+  # complexity: HOW HARD THE SCENE IS TO LOOK AT. Four rungs of scene realism;
+  #   `physloc taxonomy` prints them.
+  #     L0  primitives, flat colours, solid background     (built)
+  #     L1  + materials: wood, steel, rubber -- appearance
+  #         and density agree                              (built)
+  #     L2  + an HDRI environment                          (not built)
+  #     L3  + GSO objects in that environment              (not built)
+  #   `all` walks the built ladder in one run, at the shares declared on
+  #   `COMPLEXITY` -- see configs/review_ladder.yaml.
+  #
+  #   CAMERA MOTION AND DISTRACTORS ARE NOT RUNGS. They are orthogonal axes
+  #   applied inside every level at declared ratios (20% and 30%), stratified
+  #   by variant index. So a run of one variant is entirely static and
+  #   uncluttered, and only a longer run starts spending clips on them.
+  complexity: L0
 
-  # tier: the resolution/length ladder. `physloc taxonomy` prints the table.
-  #     debug  128x128, 12 fps, 25 frames, 16 spp -- NEVER published
-  #     v0     256x256, 12 fps, 49 frames, 64 spp
-  #     v1     512x512, 24 fps, 97 frames, 64 spp
-  #   Individual dials below can override any of these without inventing a
-  #   new tier.
+  # tier: the resolution/length ladder, and the ONLY thing a tier says.
+  #     debug    128x128, 12 fps, 25 frames, 16 spp -- ~8 s a clip, never published
+  #     release  512x512, 30 fps, 89 frames, 64 spp -- ~637 s a clip
+  #   Individual dials under `generate` override one field of a tier without
+  #   inventing a new one.
   tier: debug
 
-  # variants: randomisations per cell. Each is a fresh seed, so six variants
-  #   of `drop x solidity` are six visibly different clips of the same
+  # variants: independent randomisations per cell. Each is a fresh seed, so six
+  #   variants of `drop x solidity` are six visibly different clips of the same
   #   violation -- not one clip with a different number in the filename.
   #
-  #   In `defaults`, not `generate`, so that `taxonomy --config review` prices
-  #   the run `generate --config review` actually performs. Under `generate` it
-  #   was invisible to `taxonomy`, which fell back to its own default of 5 and
-  #   quoted five times the real cost.
+  #   It also decides how much of the orthogonal axes a run can afford: at 1
+  #   variant nothing moves and nothing is cluttered; at 5 one clip in five
+  #   moves its camera; at 10, two do and three carry distractors.
+  #
+  #   In `defaults` rather than `generate` so `taxonomy --config review` prices
+  #   the run `generate --config review` actually performs.
   variants: 1
 
   # severity: which magnitude bins to generate.
   #     weak | medium | strong   one bin
-  #     all                      the whole ladder (3x the invalid clips, but
-  #                              the valid twin and the scene build are shared,
-  #                              so it costs far less than 3x)
+  #     all                      the whole ladder
   #     a comma list, e.g. "weak,strong"
-  #   `strong` alone is right while checking coverage: breadth first, then
-  #   three strengths of one cell.
-  severity: strong
+  #   Three bins cost 3x the invalid clips, but the valid twin and the scene
+  #   build are shared across them, so it is far less than 3x the wall clock.
+  severity: all
 
 # --------------------------------------------------------------------------
 # generate: only settings `taxonomy` has no use for.
@@ -70,50 +84,50 @@ generate:
   #   end. What you want for a sweep; turn it off to stop at the first error.
   keep_going: true
 
-  # workers: container jobs run at once. A job is one (variant, scenario), so
-  #   this only helps when a run spans several scenarios or several variants --
-  #   `--scenario drop` alone is a single job however high you set it.
-  #   Output is byte-identical at any worker count: each job writes its own
-  #   directory and the per-clip rng is keyed by (seed, family, severity), never
-  #   by position in a queue. Blender already uses every core per render, so
-  #   N workers oversubscribe rather than scale linearly.
+  # workers: container jobs at once. A job is one (variant, scenario, level),
+  #   so this only helps when a run spans several of those -- `--scenario drop
+  #   --variants 1` is a single job however high you set it. Output is
+  #   byte-identical at any worker count: each job writes its own directory and
+  #   the per-clip rng is keyed by (seed, family, severity), never by position
+  #   in a queue. Measured on this box: 2.50x at four workers, and eight buys
+  #   7% more, because Blender already uses every core per render.
   workers: 4
 
-  workdir: out/work        # raw passes + trajectories (large, gitignored)
-  outdir: out/release      # the release: clips, masks, meta.json, overlays
+  workdir: out/work_review   # raw passes + trajectories (large, gitignored)
+  outdir: out/review         # clips, masks, meta.json, overlays
 
-  # ---- optional dials. Each overrides ONE field of the chosen tier; the
-  #      rest of the tier is unchanged, and the name records what changed
-  #      (e.g. `debug+f49`) so two overrides are never confused in meta.json.
+  # ---- optional dials. Each overrides ONE field of the chosen tier; the rest
+  #      is unchanged, and the name records what changed (e.g. `debug+f49`) so
+  #      two overrides are never confused in meta.json.
   #
-  # frames: clip length. MUST be 4k+1 -- 13, 17, 21, 25, 29, 33, ... -- so the
-  #   frame count maps exactly onto a video VAE's temporal stride. A bad value
-  #   is refused with the nearest two legal ones.
+  # frames: clip length. MUST be 4k+1 -- 13, 17, 21, 25, 29, ... -- so it maps
+  #   exactly onto a video VAE's temporal stride. A bad value is refused with
+  #   the nearest two legal ones.
   # frames: 25
   #
-  # fps: playback and simulation rate. Changing it changes how much real time a
-  #   clip covers, and every violation window is a FRACTION of the clip, so
-  #   they scale with it rather than staying a fixed number of frames.
+  # fps: playback and simulation rate. Every violation window is a FRACTION of
+  #   the clip, so windows scale with this rather than staying a fixed number
+  #   of frames.
   # fps: 12
   #
-  # resolution: square render size in pixels. Render time is roughly linear in
-  #   pixel count, so 256 -> 512 is about 4x.
+  # resolution: square render size. Render time is roughly linear in pixel
+  #   count, so 256 -> 512 is about 4x.
   # resolution: 128
   #
-  # spp: Cycles samples per pixel -- render noise against time. Measured at
-  #   256sq: frame time ~= 1.29 + 0.0074*spp seconds, so only about a quarter
-  #   of a frame is sampling and halving spp does not halve the cost.
+  # spp: Cycles samples per pixel -- noise against time. Measured at 256sq,
+  #   frame time ~= 1.29 + 0.0074*spp, so only about a quarter of a frame is
+  #   sampling and halving spp does not halve the cost.
   # spp: 16
   #
   # window: force EVERY sustained family to the same violation duration in
   #   frames. Left unset on purpose: unset means each family sizes its own
   #   window as a fraction of the clip, which is what makes a longer tier
-  #   produce longer violations instead of the same brief event in a longer
-  #   static shot. Setting it also overrides `permanence`'s strong bin, which
-  #   is supposed to mean gone for good.
+  #   produce longer violations rather than the same brief event in a longer
+  #   shot. Setting it also overrides `permanence`'s strong bin, which is
+  #   supposed to mean gone for good.
   # window: 4
   #
-  # scenario / family: restrict the sweep to one of each, for a debug loop.
+  # scenario / family: restrict the sweep, for a debug loop.
   # scenario: drop
   # family: solidity
   #

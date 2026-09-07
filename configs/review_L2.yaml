@@ -1,0 +1,34 @@
+# ============================================================================
+# review_L2 -- every cell at ONE rung of the ladder, at debug size.
+#
+#   python -m physloc.cli generate --config review_L2
+#   python -m physloc.cli validate out/review_L2
+#   python -m physloc.cli coverage out/review_L2
+#
+# L2 is + an HDRI environment, lit from a real capture.
+# STATUS: NOT BUILT.
+#
+# Blocked on the dome-vs-cube collision geometry: the ground is a cube at
+# L0/L1 and a dome here, which is a real change of shape, so the same seed
+# does not yet roll identically at both. This file will raise until that
+# lands. An HDRI clip also costs ~44 s against a solid background's ~8 s.
+#
+# Naming a level explicitly is what overrides the ladder's share rule: a
+# one-variant run of `--complexity all` produces L0 only, whereas this file
+# asks for L2 and gets it.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 777
+  tier: debug
+  complexity: L2
+  severity: all
+  variants: 1
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_L2
+  outdir: out/review_L2

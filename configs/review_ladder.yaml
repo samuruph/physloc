@@ -1,0 +1,68 @@
+# ============================================================================
+# review_ladder -- the WHOLE ladder in one run, at debug size.
+#
+# `review` answers "does every cell build". `review_L0`..`review_L3` answer
+# "does one rung build". This answers the question a release actually asks:
+# does the ladder come out in the proportions it declares, with every cell
+# built several visibly different ways.
+#
+#   python -m physloc.cli taxonomy --config review_ladder   # price it first
+#   python -m physloc.cli generate --config review_ladder
+#   python -m physloc.cli validate out/review_ladder        # must exit 0
+#   python -m physloc.cli audit    out/review_ladder        # cells depicting nothing
+#   python -m physloc.cli coverage out/review_ladder        # every cell, one video
+#
+# `complexity: all` walks the built rungs at the shares declared on
+# `COMPLEXITY`, so 10 variants comes out as:
+#
+#     L0  10 variants per cell      the baseline, half the clips
+#     L1   5                        materials
+#     L2   3                        HDRI            (once built)
+#     L3   2                        HDRI + GSO      (once built)
+#
+# and the two ORTHOGONAL axes ride inside every rung at their own ratios:
+# 20% of each level's clips move the camera, 30% carry distractors, spread
+# evenly across the variant indices rather than drawn per scene. At 10
+# variants that is variants 4 and 9 moving, and 3, 6 and 9 cluttered.
+#
+# The same seed and variant index serve every rung, so each L1 clip has an L0
+# counterpart built from the same draw with one axis changed. That is what
+# makes "what did materials cost" a paired comparison rather than two
+# population averages.
+#
+# To look at ONE thing instead, do not run this file -- render a single cell:
+#
+#   python -m physloc.cli generate --debug --scenario drop --family continuity
+#   PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --debug \
+#       --scenario collision --family solidity
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+
+  # seed: variant N uses seed+N. Deliberately NOT `review`'s 777: that seed has
+  #   been looked at enough that it is no longer a fair sample of what the
+  #   sampler does.
+  seed: 20260907
+
+  complexity: all
+  tier: debug
+
+  # severity: the strongest bin only. Breadth first -- what this sweep is for
+  #   is seeing every cell several ways at several rungs, and three bins on top
+  #   of that is a night's render for a question about magnitude that
+  #   `--severity all` on a single cell answers better.
+  severity: strong
+
+  # variants: the L0 allocation; every other rung is a share of it. Ten is the
+  #   smallest number that exercises both orthogonal axes at their declared
+  #   ratios -- below five nothing moves and nothing is cluttered, which is the
+  #   intended behaviour for a short run but not what this sweep is for.
+  variants: 10
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_ladder
+  outdir: out/review_ladder

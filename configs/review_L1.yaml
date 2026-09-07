@@ -1,0 +1,34 @@
+# ============================================================================
+# review_L1 -- every cell at ONE rung of the ladder, at debug size.
+#
+#   python -m physloc.cli generate --config review_L1
+#   python -m physloc.cli validate out/review_L1
+#   python -m physloc.cli coverage out/review_L1
+#
+# L1 is + materials: wood, steel, rubber, whose appearance and density agree.
+# STATUS: BUILT.
+#
+# A heavy-looking object is heavy. Compare against L0 at the same seed and
+# variant: the geometry is identical and only the surfaces and the masses
+# that follow from them differ, so any change in a residual is the
+# materials and nothing else.
+#
+# Naming a level explicitly is what overrides the ladder's share rule: a
+# one-variant run of `--complexity all` produces L0 only, whereas this file
+# asks for L1 and gets it.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 777
+  tier: debug
+  complexity: L1
+  severity: all
+  variants: 1
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_L1
+  outdir: out/review_L1

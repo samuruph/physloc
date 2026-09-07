@@ -1,36 +1,42 @@
 # ============================================================================
 # v0_release -- the published dataset.
 #
-#   python -m physloc.cli taxonomy --config v0_release   # price it FIRST
+#   python -m physloc.cli taxonomy --config v0_release    # PRICE IT FIRST
 #   python -m physloc.cli generate --config v0_release
+#   python -m physloc.cli validate out/physloc_v0
+#   python -m physloc.cli export   out/physloc_v0 --push-to samueleruf/physloc
 #
-# See configs/review.yaml for what every key means; only the values that
-# differ from a review sweep are commented here.
+# `v0` is what this RELEASE is called -- it is the outdir, and the `release`
+# field stamped into every meta.json. It is NOT a tier and NOT a difficulty.
+# A tier is a geometry (512x512, 30 fps, 89 frames); difficulty is the
+# complexity ladder, and this release contains the WHOLE ladder rather than
+# picking one rung.
+#
+# That is the answer to "how do I get examples of L0, L1, ... in one dataset":
+# `complexity: all` partitions inside the release, in the shares declared on
+# `COMPLEXITY`, and every clip carries its own `complexity` in the index, so a
+# consumer filters rather than downloading four datasets.
+#
+# See configs/review.yaml for what every key means.
 # ============================================================================
 
-# Shared by `generate` and `taxonomy`, so the sizing estimate is of exactly the
-# run that would happen. This is why the two commands are not repeated blocks:
-# anything both understand belongs here once.
-# Sizing at 512x512 (`physloc taxonomy --config v0_release`). Complexity and
-# variants are the dials; the severity ladder costs 3x the clips but the valid
-# twin and the scene build are shared, so it is the cheapest breadth you can
-# buy:
+# Sizing at 512x512. The severity ladder costs 3x the invalid clips, but the
+# valid twin and the scene build are shared across bins, so it is the cheapest
+# breadth available. Price the exact run before starting it -- these are the
+# numbers `taxonomy --config v0_release` prints, not a promise:
 #
-#     bins   variants   renders   parallel (4 workers)
-#      1        1          194        6.0 h
-#      3        1          554       51.1 h
-#      3        2         1108      102.2 h
-#      3        3         1662      153.2 h   <- as written below, 6.4 days
+#     bins   variants   ladder gives          parallel (4 workers)
+#      1        1       L0 x1                  ~6 h
+#      3        1       L0 x1                 ~51 h
+#      3        3       L0 x3, L1 x2          see `taxonomy`
+#      3       10       L0 x10, L1 x5         a week+ -- measure, don't guess
 #
 defaults:
   seed: 20260824
-  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s
-                       # `v0` is what this RELEASE is called -- see outdir --
-                       # not a tier. A tier is a geometry.
-  complexity: L2       # the top BUILT rung: camera motion + materials on a
-                       # plain background. L3+ need distractors and GSO.
+  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s, ~637 s a clip
+  complexity: all      # the whole BUILT ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
-  variants: 3          # randomisations per cell
+  variants: 3          # the L0 allocation; other rungs are a share of it
 
 generate:
   keep_going: true

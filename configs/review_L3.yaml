@@ -1,0 +1,32 @@
+# ============================================================================
+# review_L3 -- every cell at ONE rung of the ladder, at debug size.
+#
+#   python -m physloc.cli generate --config review_L3
+#   python -m physloc.cli validate out/review_L3
+#   python -m physloc.cli coverage out/review_L3
+#
+# L3 is + GSO objects in that environment.
+# STATUS: NOT BUILT.
+#
+# The hardest rung: unfamiliar geometry under real lighting. Sits behind
+# L2, and carries twice the distractors when a clip draws them.
+#
+# Naming a level explicitly is what overrides the ladder's share rule: a
+# one-variant run of `--complexity all` produces L0 only, whereas this file
+# asks for L3 and gets it.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 777
+  tier: debug
+  complexity: L3
+  severity: all
+  variants: 1
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_L3
+  outdir: out/review_L3

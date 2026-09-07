@@ -106,13 +106,21 @@ class Tier:
 # no C at all -- so the ordering implied by the alphabet was backwards from the
 # ordering that matters, and every reader had to memorise a lookup. These are
 # the release names already used for the output directories.
+#: TWO GEOMETRIES, because there are only two. `v0` and `v1` used to sit here
+#: as separate tiers and differed in NOTHING but their name -- both 512 x 512,
+#: 30 fps, 89 frames -- because what actually separated them was complexity,
+#: which is its own axis and now its own ladder. A tier that encodes a release
+#: number is a tier that has to be renamed every release.
+#:
+#: So the tier says how big and how long, the complexity ladder says how hard,
+#: and `v0`/`v1` are what a published DATASET is called -- set by the outdir,
+#: recorded as `release` in every `meta.json`.
 TIERS: Dict[str, Tier] = {
-    #                             res  fps  frames  spp  F_lat  HW_lat  publish
-    "debug": Tier("debug", 128, 12, 25, 16, 7, 8, False),
-    "v0":    Tier("v0",    512, 30, 89, 64, 23, 16, True),
-    "v1":    Tier("v1",    512, 30, 89, 64, 23, 16, True),
+    #                              res  fps  frames  spp  F_lat  HW_lat  publish
+    "debug":   Tier("debug",   128, 12, 25, 16, 7, 8, False),
+    "release": Tier("release", 512, 30, 89, 64, 23, 16, True),
 }
-# v0 is 512x512 / 30 fps / 89 frames = 2.97 s.
+# `release` is 512x512 / 30 fps / 89 frames = 2.97 s.
 #
 # 30 fps so the release downsamples cleanly to 15 and 10 without resampling,
 # which a 12 fps master cannot do. 89 frames rather than 90 because every tier's
@@ -123,19 +131,19 @@ TIERS: Dict[str, Tier] = {
 # uses: the token grid is a fixed 16x16 for both published tiers so a model
 # trained on one transfers to the other without reshaping.
 #
-# **v0 and v1 are the same tier geometry on purpose.** v1 is not a bigger
-# render, it is the same physics under harder conditions -- photographic
-# backgrounds and objects (complexity L1) and crowded scenes (population
-# multi). Making it a resolution step as well would confound the two: a model
-# that scored worse on v1 could be failing at realism, at clutter, or merely at
-# a resolution it had not been trained on, and the release could not say which.
-# Keeping the geometry fixed makes v0 and v1 *paired*, which is the comparison
-# the axis exists for. See docs/roadmap.md.
+# ONE publishable geometry, on purpose. A harder release is not a bigger
+# render -- it is the same physics under harder conditions, which is what the
+# complexity ladder is for. Making difficulty a resolution step as well would
+# confound the two: a model scoring worse could be failing at realism, at
+# clutter, or merely at a resolution it had not been trained on, and the
+# release could not say which. Fixing the geometry is what makes two releases
+# comparable at all.
 
 #: The letters this project used until 2026-08-24. Accepted with a pointer to
 #: the new name rather than silently, so an old script or a stale note fails
 #: loudly and readably instead of building the wrong size.
-LEGACY_TIER_NAMES = {"D": "debug", "A": "v0", "B": "v1"}
+LEGACY_TIER_NAMES = {"D": "debug", "A": "release", "B": "release",
+                     "v0": "release", "v1": "release"}
 
 
 def tier(name: str) -> Tier:
@@ -143,9 +151,12 @@ def tier(name: str) -> Tier:
     if name in TIERS:
         return TIERS[name]
     if name in LEGACY_TIER_NAMES:
-        raise KeyError("tier %r was renamed to %r (the letters had no C and "
-                       "ran backwards); valid tiers: %s"
-                       % (name, LEGACY_TIER_NAMES[name], ", ".join(TIERS)))
+        why = ("the letters had no C and ran backwards"
+               if name in ("A", "B", "D") else
+               "a tier is a geometry, not a release number -- `v0` is what a "
+               "published dataset is CALLED, set by --outdir")
+        raise KeyError("tier %r was renamed to %r (%s); valid tiers: %s"
+                       % (name, LEGACY_TIER_NAMES[name], why, ", ".join(TIERS)))
     raise KeyError("unknown tier %r; valid tiers: %s" % (name, ", ".join(TIERS)))
 # Frame counts went up across the board (13/25/97 -> 25/49/97). At thirteen
 # frames a violation that fires a third of the way in has eight frames to play
@@ -183,25 +194,50 @@ class Complexity:
     background: str        # "solid" | "hdri"
     actor_assets: str      # "primitive" | "gso"
     n_distractors: int
-    camera_motion: str     # "static" | "orbit" | "linear"
+    camera_moves: bool     # may a clip at this level move the camera?
+    materials: bool        # do bodies have a material, or a flat colour?
     motion_blur: float
-    movi_analogue: str
     implemented: bool
+
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "background": self.background,
                 "actor_assets": self.actor_assets,
                 "n_distractors": self.n_distractors,
-                "camera_motion": self.camera_motion,
+                "camera_moves": self.camera_moves,
+                "materials": self.materials,
                 "motion_blur": self.motion_blur}
 
 
+#: ONE AXIS PER LEVEL, and each level is the one below it plus exactly one
+#: thing. That is the whole value of a ladder: when a model's score drops
+#: between two levels, the drop names its own cause. A level that changed the
+#: background AND the objects AND the clutter at once -- which the old L2 did --
+#: tells you only that something got harder.
+#:
+#: DISTRACTORS COME BEFORE THE REALISTIC ENVIRONMENT, deliberately. The point
+#: of a level is to isolate one effect, and clutter is most legible against a
+#: plain background: at L3 the only thing that changed is that there are now
+#: other objects in shot, so a drop there is about distraction and not about
+#: lighting or unfamiliar geometry. Introducing distractors alongside an HDRI
+#: environment would confound the two.
+#:
+#: The cost of that ordering is that the built levels are no longer a
+#: contiguous prefix -- the HDRI path works today and distractor placement does
+#: not, so L4 is blocked behind L3 even though its own machinery is ready.
+#: Worth it: the ladder is a measuring instrument, and its order should serve
+#: the measurement rather than the build queue.
+#:
+#: How many distractors is a knob on the level, not a level of its own. "More
+#: of the same thing" is a quantity; a benchmark axis should be a kind.
 COMPLEXITY: Dict[str, Complexity] = {
-    "L0": Complexity("L0", "solid", "primitive", 0, "static", 0.0, "MOVi-A", True),
-    "L1": Complexity("L1", "hdri", "primitive", 0, "static", 0.0, "MOVi-B", True),
-    "L2": Complexity("L2", "hdri", "gso", 6, "static", 0.0, "MOVi-C", False),
-    "L3": Complexity("L3", "hdri", "gso", 12, "linear", 0.0, "MOVi-D/E", False),
-    "L4": Complexity("L4", "hdri", "gso", 20, "linear", 0.5, "MOVi-F", False),
+    #                 bg       actors       n  cam    mat   blur  built
+    "L0": Complexity("L0", "solid", "primitive", 0, False, False, 0.0, True),
+    "L1": Complexity("L1", "solid", "primitive", 0, True,  False, 0.0, True),
+    "L2": Complexity("L2", "solid", "primitive", 0, True,  True,  0.0, True),
+    "L3": Complexity("L3", "solid", "primitive", 6, True,  True,  0.0, False),
+    "L4": Complexity("L4", "hdri",  "primitive", 6, True,  True,  0.0, False),
+    "L5": Complexity("L5", "hdri",  "gso",      12, True,  True,  0.0, False),
 }
 DEFAULT_COMPLEXITY = "L0"
 
@@ -490,9 +526,45 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
         light.position = tuple(float(a + b) for a, b in
                                zip(light.position,
                                    rng.uniform(-1.0, 1.0, size=3) * 0.9))
+    _flatten_materials(spec)
     _recolour_scenery(spec, seed)
     _maybe_move_camera(spec, seed)
     return spec
+
+
+def _flatten_materials(spec: SceneSpec) -> None:
+    """Below L2, bodies have a flat colour and ONE shared density.
+
+    Applied here rather than in each scenario for the same reason the scenery
+    recolouring is: it is a property of the level, and thirteen files should
+    not each have to know about it.
+
+    THE SHARED DENSITY IS THE POINT, not a simplification. Mass is derived from
+    the material, so stripping materials without also fixing the density would
+    leave mass varying invisibly -- and an invisible mass difference is exactly
+    the confound materials were introduced to remove: the heavy ball barely
+    moves, nothing in the picture says why, and lawful physics reads as a
+    violation. With one density, mass still varies -- with SIZE, which a viewer
+    can see.
+
+    Hue is preserved so the objects stay tellable apart; only saturation and
+    value are pinned, which is what makes them read as plain colours rather
+    than as steel or rubber.
+    """
+    import colorsys
+
+    from . import materials as M
+
+    if COMPLEXITY[spec.complexity].materials:
+        return
+    for b in spec.bodies:
+        if b.material is None:
+            continue
+        h, _, _ = colorsys.rgb_to_hsv(*b.color)
+        b.color = tuple(float(c) for c in colorsys.hsv_to_rgb(h, 0.62, 0.88))
+        b.roughness, b.metallic = 0.55, 0.0
+        b.mass = M.mass_for(M.REFERENCE_MATERIAL, b.scale, b.kind)
+        b.material = None
 
 
 #: One variant in every `CAMERA_MOTION_PERIOD` moves its camera -- so 2 of 10,
@@ -570,6 +642,10 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     if forced in ("off", "static", "none"):
         return
     if not spec.camera_motion:
+        return
+    # The LEVEL decides whether motion is available at all; L0 is the plain
+    # baseline and never moves.
+    if not COMPLEXITY[spec.complexity].camera_moves:
         return
     # Its own stream, salted by scenario. Sharing `_vary`'s would do two bad
     # things: appending a draw there shifts every camera angle already

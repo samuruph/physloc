@@ -17,8 +17,10 @@
 
 defaults:
   seed: 20260824
-  tier: v1             # 512x512, 30 fps, 89 frames -- identical to v0
-  complexity: L1       # HDRI environment + photographic objects, ~4.6x an L0 render
+  tier: release        # the same geometry as every release: difficulty is
+                       # the COMPLEXITY ladder, never the render size.
+  complexity: L4       # HDRI environment. NOT BUILT YET -- L4 sits behind L3's
+                       # distractors, so this config will raise until those land.
   severity: all
   variants: 3
 

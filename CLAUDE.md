@@ -22,16 +22,18 @@ publication. Nothing has been published yet.
 
 - **Kubric** (Blender + PyBullet in docker) for v0. MuJoCo replaces PyBullet later, behind
   the trajectory seam.
-- **Three tiers.** **the debug tier (debug, default)**: 128×128, 12 fps, 25 frames, 16 spp — **~8 s per
-  clip**, never published; this is what you iterate on. tier v0
-  (`physloc_v0`, build now): **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip.
-  30 fps so the release downsamples cleanly to 15 and 10; 89 rather than 90 because every
-  frame count must be `4k+1` for VAE latent alignment.
-  tier v1 (`physloc_v1`, later): **the same geometry as v0**; it differs by
-  complexity (L1, photographic) and population (multi), not by resolution — so a
-  model scoring worse on v1 is failing at realism or clutter, not at an unfamiliar
-  render size. See docs/roadmap.md §3. Same generators, one config
-  block apart. **Debug at the debug tier; a bug found there is fixed for all three.**
+- **Two tiers, because there are only two geometries.** `debug`: 128×128, 12 fps, 25
+  frames, 16 spp — **~8 s per clip**, never published; this is what you iterate on.
+  `release`: **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip. 30 fps so a release
+  downsamples cleanly to 15 and 10; 89 rather than 90 because every frame count must be
+  `4k+1` for VAE latent alignment.
+
+  **`v0` and `v1` are NOT tiers.** They used to be, and differed in nothing but their name —
+  what actually separated them was complexity, which is its own axis and its own ladder. A
+  tier that encodes a release number has to be renamed every release. So: the tier says how
+  big and how long, the **complexity ladder (L0–L5)** says how hard, and `v0`/`v1` are what
+  a published dataset is CALLED — set by `--outdir`, recorded as `release` in every
+  `meta.json`. **Debug at the debug tier; a bug found there is fixed for both.**
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 13 scenarios x 23 families needs 13 + 8 files,
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.

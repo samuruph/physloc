@@ -80,16 +80,16 @@ def frame_flight(flight_seconds: float, angular_radius: float = 0.11,
     **The apex of a ballistic arc is not ours to choose.** A body airborne for
     T seconds rises `g*T^2/8` and no camera, mass or launch angle changes that.
     So when the clip length doubled (13 -> 25 frames at the debug tier, 25 -> 49 at
-    tier v0) the arcs got *four* times taller while the cameras stayed where they
+    the release tier) the arcs got *four* times taller while the cameras stayed where they
     had been hand-tuned for the short clips, and `toss` and `tumble` threw their
     actor clean out of shot -- measured at 42% and 16% of frames still in view
-    at the debug tier, and 1% and 0% at tier v0. Every violation staged mid-flight was
+    at the debug tier, and 1% and 0% at the release tier. Every violation staged mid-flight was
     being injected off-screen.
 
     The fix is to stop hand-tuning the camera and derive it, which also makes
     the two scenarios scale-invariant: a longer clip is the *same shot* of a
     bigger scene from further away, so the actor covers the same pixels at
-    every tier and a bug found at the debug tier looks the same at tier v0.
+    every tier and a bug found at the debug tier looks the same at the release tier.
 
     `angular_radius` is the actor's radius as a fraction of the frustum
     half-extent -- the one number that fixes its on-screen size. `fill` is how

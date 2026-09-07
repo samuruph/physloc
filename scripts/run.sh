@@ -2,9 +2,14 @@
 # Generate a release from a config, validate it, and build everything worth
 # looking at.
 #
-#   bash scripts/run.sh                # the review sweep (configs/review.yaml)
-#   bash scripts/run.sh v0_release
-#   bash scripts/run.sh review --tier v0     # extra flags pass straight through
+#   bash scripts/run.sh                       # the review sweep (configs/review.yaml)
+#   bash scripts/run.sh review_random         # every cell FOUR times -- does it vary?
+#   bash scripts/run.sh v0_release            # the published dataset
+#   bash scripts/run.sh review --tier release # extra flags pass straight through
+#
+# Tiers are `debug` and `release` -- two geometries, nothing more. Difficulty is
+# the complexity ladder (L0..L5, README section 8), and `v0`/`v1` are what a
+# published dataset is CALLED, set by the config's outdir.
 #
 # The config decides tier, complexity, severity, seed and variants; see
 # configs/*.yaml, which document every key. Anything after the config name is
@@ -50,8 +55,15 @@ for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
   done
 done
 
+echo "== randomisation: is the sampler actually varying? (renders nothing) =="
+$PV randomisation --seeds 24 || true
+
+echo "== export: package it as a dataset -- shards, index, card, splits =="
+$PV export "$REL" --outdir "out/hf/$(basename "$REL")" || true
+
 echo
 echo "done -> $REL"
 echo "  coverage_strong.mp4            scenario x family lattice -- open this first"
+echo "  out/hf/$(basename "$REL")/       packaged dataset: index.parquet plays the videos"
 echo "  clips/*/*/*/sheet_strong.mp4   one scenario: every family x every annotation"
 echo "  clips/*/*/*/grid_<family>.mp4  one family: every severity x every annotation"

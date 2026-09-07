@@ -143,7 +143,7 @@ def roll(spec, scenario=None) -> Trajectory:
                 # Coulomb friction while in contact with the surface below.
                 # The mock ran frictionless until a framing audit used it to ask
                 # "does the actor stay in shot?", and got 0% for `rolling_ramp`
-                # at tier v0 because nothing here ever slowed a sliding body
+                # at the release tier because nothing here ever slowed a sliding body
                 # down. Physical fidelity is still the container's job; this is
                 # only enough that a body which should coast to a halt does.
                 if p[i, 2] - r[i] <= top + 1e-4:

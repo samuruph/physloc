@@ -385,7 +385,7 @@ that is not about violations at all.
 ### 3.6 Token grids
 
 `grids.npz` pre-reduces masks and severity to the latent token grid so a consumer never
-re-derives a VAE's binning. tier v0: `7×16×16`. tier v1: `21×16×16` on the 81-frame derivative.
+re-derives a VAE's binning. the release tier: `7×16×16`. (the 81-frame derivative was never built) `21×16×16` on the 81-frame derivative.
 
 - `mask_<F>x16x16` — bool, reduced by **max** (a violation in any contributing source frame
   marks the latent frame)

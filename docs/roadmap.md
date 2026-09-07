@@ -238,7 +238,8 @@ whether consumers can use it, and whether it is distinct enough from `violation_
 abstract.
 
 **Release configuration.** Which severity bins and how many variants per cell the published
-run uses. `configs/v0_release.yaml` proposes tier v0 / L0 / all three bins / 3 variants;
+run uses. `configs/v0_release.yaml` proposes tier `release` / L2 / all three bins /
+3 variants;
 `physloc taxonomy --config v0_release` prices it exactly. **Settle this with the user before
 starting** — it is the difference between an overnight job and a week.
 

@@ -19,7 +19,13 @@ BASE = 777
 N_VARIANTS = 20
 
 
-def _specs(name, complexity="L0", n=N_VARIANTS):
+#: The level camera motion first exists at. L0 is the plain baseline and never
+#: moves -- that is what L0 is for -- so testing the camera there would be
+#: testing that a deliberately still level is still.
+CAMERA_LEVEL = "L1"
+
+
+def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
     """One spec per VARIANT, which is what the camera rule is defined over."""
     sc = scenarios.get(name)
     return [sc.sample(BASE + v, TIERS["debug"], complexity, variant=v)
@@ -90,8 +96,8 @@ def test_the_camera_track_is_identical_across_complexity(name):
     """
     sc = scenarios.get(name)
     for seed in (0, 7, 4242):
-        a = sc.sample(seed, TIERS["v0"], "L0")
-        b = sc.sample(seed, TIERS["v0"], "L1")
+        a = sc.sample(seed, TIERS["release"], "L1")
+        b = sc.sample(seed, TIERS["release"], "L2")
         assert a.camera_motion_kind == b.camera_motion_kind, (name, seed)
         assert a.camera_end_position == b.camera_end_position, (name, seed)
 
@@ -146,11 +152,13 @@ def test_the_debug_override_forces_a_kind():
     try:
         for kind in CAMERA_MOTION_KINDS:
             os.environ["PHYSLOC_CAMERA_MOTION"] = kind
-            kinds = {scenarios.get("drop").sample(s, TIERS["debug"], "L0")
+            kinds = {scenarios.get("drop")
+                     .sample(s, TIERS["debug"], CAMERA_LEVEL, variant=s)
                      .camera_motion_kind for s in range(8)}
             assert kinds == {kind}, (kind, kinds)
         os.environ["PHYSLOC_CAMERA_MOTION"] = "off"
-        assert not any(scenarios.get("drop").sample(s, TIERS["debug"], "L0")
+        assert not any(scenarios.get("drop")
+                       .sample(s, TIERS["debug"], CAMERA_LEVEL, variant=s)
                        .camera_moves for s in range(30))
     finally:
         os.environ.pop("PHYSLOC_CAMERA_MOTION", None)

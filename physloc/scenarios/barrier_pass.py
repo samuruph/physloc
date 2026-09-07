@@ -68,7 +68,7 @@ class BarrierPass(Scenario):
         # to `speed * 0.45 * flight` -- constant-velocity arithmetic on a ball
         # that is being slowed by friction the whole way. The error grows with
         # the clip: at the debug tier's 25 frames the ball reached the wall at
-        # 0.93 m/s, at tier v0's 89 it arrived at 0.26 and hit on frame 61 of
+        # 0.93 m/s, at the release tier's 89 it arrived at 0.26 and hit on frame 61 of
         # 89 rather than "just under halfway". Below 0.3 m/s `_geom.first_impact`
         # stops calling it an impact at all, so `superelastic x barrier_pass`
         # planned nothing on any seed at v0 -- a cell the matrix claims and the

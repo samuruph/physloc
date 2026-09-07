@@ -41,9 +41,15 @@ Three configs, one command each. `conda activate physloc` first.
 
 | | config | what it is | cost |
 |---|---|---|---|
-| **review** | `configs/review.yaml` | every cell once, `strong`, 128², 25 f | **~25 min** |
-| **v0** | `configs/v0_release.yaml` | 512², 30 fps, 89 f (2.97 s), all three bins, 3 variants | ~6.4 days |
-| **v1** | `configs/v1_release.yaml` | **same geometry as v0**, photographic (L1) + multi-object | weeks |
+| **review** | `configs/review.yaml` | every cell once, `strong`, tier `debug`, L2 | **~12 min** |
+| **review_random** | `configs/review_random.yaml` | every cell **four** times — does it *vary*? | ~35 min |
+| **v0** | `configs/v0_release.yaml` | tier `release`, L2, all three bins, 3 variants | ~108 h at 4 workers |
+| **v1** | `configs/v1_release.yaml` | tier `release`, **L4** — raises until L3/L4 are built | — |
+
+**`v0` and `v1` are release names, not tiers.** There are two tiers, because there are two
+geometries: `debug` (128², 25 f) and `release` (512², 89 f). Difficulty is the
+[complexity ladder](#8-the-complexity-ladder), and what a published dataset is *called* comes
+from `--outdir`, recorded as `release` in every `meta.json`.
 
 ### The review sweep — run this before anything else
 
@@ -51,7 +57,21 @@ Every scenario × family cell once, at debug size, `strong` only. This is the ru
 when you want to know whether the dataset is right.
 
 ```bash
-bash scripts/run.sh
+bash scripts/run.sh                      # generate + validate + every video
+```
+
+Once it finishes, two cheap follow-ups worth making a habit:
+
+```bash
+python -m physloc.cli randomisation --seeds 24    # is it actually varied? renders nothing
+python -m physloc.cli export out/release --outdir out/hf/preview
+```
+
+To see whether instances actually *differ* — which one render per cell cannot show — use the
+four-variant sweep instead:
+
+```bash
+bash scripts/run.sh review_random
 ```
 
 That generates, validates, and builds every video: `coverage.mp4`, a `sheet` per scenario and
@@ -82,10 +102,10 @@ python -m physloc.cli taxonomy --config v1_release
 bash scripts/run.sh v1_release
 ```
 
-**Complexity is the expensive dial, not the severity ladder.** L1's photographic environment
-costs roughly 5.5× an L0 render, which is the whole difference between v0 and v1's wall
-clock. The ladder is nearly free, because the valid twin and the scene build are shared
-across bins.
+**The HDRI environment is the expensive dial, not the severity ladder.** It costs roughly
+4.6× a plain background and arrives at L4, which is the whole difference between a v0 and a
+v1 wall clock. The severity ladder is nearly free, because the valid twin and the scene build
+are shared across bins.
 
 ---
 
@@ -108,7 +128,7 @@ python -m physloc.cli generate --config review --family solidity
 python -m physloc.cli generate --config review -n 6
 
 # the review matrix at release resolution
-python -m physloc.cli generate --config review --tier v0
+python -m physloc.cli generate --config review --tier release
 ```
 
 `--keep-going` carries on past a cell that fails and lists the failures at the end; the
@@ -152,7 +172,7 @@ filename.
 | mass | `density × volume`, so a heavy object *looks* heavy; ~30× spread |
 | size | drawn per instance; boxes also get independent half-extents |
 | colour | actor hue within its material's band, plus **floor and backdrop** |
-| camera | position and aim; and on ~20% of clips it **moves** (`track`, `orbit`, `dolly`) |
+| camera | position and aim always; **1 variant in 5 also moves** — see below |
 | timing | when the violation fires, and when the physical event it hangs on happens |
 | violation | direction, magnitude and the body it acts on |
 
@@ -160,6 +180,37 @@ filename.
 ball barely moves reads as a violation while being lawful physics, so the label would say
 valid and the picture would say otherwise. Deriving it from a *visible* material keeps the
 number and the picture in agreement.
+
+**Camera motion is stratified across a scenario's variants, not drawn per scene.** Exactly
+one variant in five moves — 2 of 10, 1 of 5 — and it is the *same* variant indices in every
+scenario. An independent coin flip per scene gives the right share overall and an uneven one
+per scenario: measured across thirteen it ran from 13% to 31%, so some scenarios effectively
+had moving cameras and others did not, and any per-scenario comparison inherited that as a
+confound.
+
+The moving variant is the **last** of each block (index 4, 9, 14…), which is what makes a
+short run entirely static: a four-variant run never reaches index 4. A run only spends clips
+on camera motion once it is long enough to afford them. Three motions are drawn:
+
+| motion | what changes | apparent size |
+|---|---|---|
+| `track` | slides across the view, aim held | unchanged |
+| `orbit` | swings around the subject at fixed radius | unchanged |
+| `dolly` | approaches or retreats, 6–12% | changes, deliberately capped |
+
+`dolly` is capped because apparent size is the exact cue `immutability` and `deformation`
+make their claim about. At 12% it is about a third of `deformation`'s weakest bin, and unlike
+a deformation it scales the floor and every other body equally — so the scene still reads
+"the camera moved" rather than "that object changed". There is no panning variant on purpose:
+with the aim moving too, *"did the object move or did the camera?"* stops being answerable
+from the clip.
+
+`occluder_pass` never moves its camera. It precomputes its occlusion interval by intersecting
+a camera→ball ray with the screen plane once, and that frame list is where every observability
+label in the dataset comes from.
+
+**Camera motion needs L1 or above** — see [§8](#8-the-complexity-ladder). L0 is the plain
+baseline and never moves.
 
 **Aspect ratio varies on boxes only**, and that is PyBullet, not a choice.
 `kubric/simulator/pybullet.py` builds a `kb.Cube` from `halfExtents` (three independent
@@ -278,8 +329,8 @@ python -m pytest tests/test_all_cells.py -q   # plans and applies all 166 cells
 
 | flag | |
 |---|---|
-| `--tier debug\|v0\|v1` | the resolution/length ladder — section 8 |
-| `--complexity L0\|L1` | L0 solid background, L1 photographic HDRI (~5.5× the cost) |
+| `--tier debug\|release` | the resolution/length ladder — section 9 |
+| `--complexity L0..L5` | how hard the scene is to parse — section 8. L0–L2 built |
 | `--severity weak\|medium\|strong\|all` | which magnitude bins |
 | `--variants N` | randomisations per cell |
 | `--scenario X` / `--family Y` | restrict the matrix |
@@ -288,7 +339,7 @@ python -m pytest tests/test_all_cells.py -q   # plans and applies all 166 cells
 | `--window N` | force one violation duration; **leave unset** so each family scales with the clip |
 | `--no-overlay` | skip the per-clip videos |
 | `--outdir` / `--workdir` | where the release and the raw passes go |
-| `--frames N` `--fps N` `--resolution N` `--spp N` | override one field of a tier — section 8 |
+| `--frames N` `--fps N` `--resolution N` `--spp N` | override one field of a tier — section 9 |
 
 ### The three videos
 
@@ -461,11 +512,40 @@ out/hf/physloc_v0/
   README.md                    dataset card, YAML front-matter first
   LICENSE
   taxonomy.json                what every scenario and family MEANS
-  index.parquet                one row per clip (JSONL if pyarrow is absent)
+  index.parquet                one row per clip, INCLUDING the video
   splits/{main,held_out,debug}.txt
   shards/<split>-*.tar         rgb + every annotation      <- the default download
   shards/<split>-passes-*.tar  depth/flow/normals/coords   <- only with --with-passes
 ```
+
+### `index.parquet` — the table the hub renders
+
+One row per clip, 26 metadata columns plus the video itself:
+
+| group | columns |
+|---|---|
+| identity | `clip_uid`, `pair_uid`, `twin_uid`, `label`, `split` |
+| taxonomy | `scenario`, `family`, `domain`, `medium` |
+| violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
+| scene | `seed`, `tier`, `complexity`, `num_frames`, `fps`, `camera_motion`, `actor_shape`, `actor_material`, `actor_mass` |
+| text | `prompt` |
+| **video** | **`rgb`** everywhere, **`overlay`** in the `debug` split |
+
+The videos are **embedded bytes** typed as a HuggingFace `Video` feature, so the hub plays
+them inline. A path would not work: it resolves on the machine that built the release and
+nowhere else.
+
+`overlay` is restricted to `debug` because it is nine panels wide and 24× the size of `rgb`
+— 261 KB against 11 KB at debug geometry, about 5.3 MB against 0.2 MB at v0. Embedding it
+everywhere would be 8.5 GB on a full v0 release against 0.3 GB for the RGB alone, and
+`debug` is the calibration slice, which is exactly where "show me everything at once" earns
+its bytes.
+
+> `magnitude` and `peak_severity` are **not** the same quantity and are never comparable.
+> `magnitude` is the knob turned, in per-family units — a volume ratio for `immutability`, an
+> aspect ratio for `deformation` — and is known before simulating. `peak_severity` is the
+> measured residual, z-scored against a noise floor from valid clips and bounded to `[0,1]`,
+> which is what makes `friction 0.29` and `solidity 0.89` mean something side by side.
 
 **Why the passes ship separately.** Measured on a debug sweep: `flow_fwd`, `depth` and
 `object_coords` are **86% of the bytes** (~3.2 MB/clip against ~1 KB per annotation), and at
@@ -493,7 +573,11 @@ training data contamination") — counted in *scenes*, not videos.
 |---|---|---|
 | `main` | 75% | video + every annotation |
 | `held_out` | 20% | video + every annotation |
-| `debug` | 5% | video + every annotation |
+| `debug` | 5% | video + every annotation, **plus the overlay video** |
+
+**A release too small to split goes entirely to `debug`.** With fewer pairs than splits there
+is nothing to hold out, and `debug` is the one that carries the overlay — so a release too
+small to be a benchmark becomes the thing it can actually be: something to look at.
 
 **Every split ships everything.** The split is a *label*, not a filter — so you can re-cut
 the boundary later and you can score any clip in the release. IntPhys 2 withholds its
@@ -565,11 +649,9 @@ Two orthogonal augmentation axes:
 - **severity** — `weak` / `medium` / `strong`, set by the *intervention magnitude*, which is
   exact by construction. Named for how hard the law is bent, not for how hard the clip is to
   classify — those are different things, and conflating them is how difficulty splits go bad.
-- **complexity** — `L0`..`L4`, mirroring the MOVi ladder. **L0 (solid background + sun) and
-  L1 (photographic HDRI environment + dome ground) are built; L1 is the default.** L2–L4 add
-  GSO objects, distractors and camera motion, and **raise if requested** rather than silently
-  degrading. GSO (1033 objects) and HDRI Haven (509 environments) are verified reachable from
-  the pinned container, so those levels need scenario code only.
+- **complexity** — `L0`..`L5`, **one axis per level**. See
+  [§8](#8-the-complexity-ladder). L0–L2 are built; L3–L5 **raise if requested** rather
+  than silently degrading.
 
 **Why 22 files and not 345.** Scenarios and injectors are orthogonal and compose through the
 trajectory seam — an injector edits `traj.npz`, per-body poses and velocities, which knows
@@ -621,7 +703,54 @@ and pretending otherwise would be the wrong fix. What separates them is the situ
 model has to read from the image. The dataset card written by `physloc export` says which is
 which, and what that means for a confusion matrix.
 
-## 8. Tiers
+## 8. The complexity ladder
+
+**Severity asks how badly the law is broken. Complexity asks how hard the scene is to
+parse.** They are orthogonal, and reporting accuracy across both is what separates "the model
+understands physics" from "the model copes with clutter".
+
+Each level is the one below it **plus exactly one thing**. That is the whole value of a
+ladder: when a score drops between two levels, the drop names its own cause. A level that
+changed the background *and* the objects *and* the clutter at once would tell you only that
+something got harder.
+
+| level | adds | background | actors | distractors | camera | materials | built |
+|---|---|---|---|---|---|---|---|
+| **L0** | *the baseline* | solid | primitives | 0 | static | flat colour | ✅ |
+| **L1** | **camera motion** | solid | primitives | 0 | **1 in 5 moves** | flat colour | ✅ |
+| **L2** | **materials** | solid | primitives | 0 | 1 in 5 | **wood/steel/…** | ✅ |
+| **L3** | **distractors** | solid | primitives | **6** | 1 in 5 | materials | ✗ |
+| **L4** | **HDRI environment** | **hdri** | primitives | 6 | 1 in 5 | materials | ✗ |
+| **L5** | **GSO objects** | hdri | **gso** | 12 | 1 in 5 | materials | ✗ |
+
+**Why distractors come before the realistic environment.** Clutter is only legible *as*
+clutter against a plain background: at L3 the only thing that changed is that there are now
+other objects in shot, so a drop there is about distraction and not about lighting or
+unfamiliar geometry. Introducing distractors alongside an HDRI would confound the two. The
+cost is that the built levels are no longer a contiguous prefix — the HDRI path works today
+but now sits behind distractors — and that is the right trade: the ladder is a measuring
+instrument, and its order should serve the measurement rather than the build queue.
+
+**How many distractors is a knob, not a level.** "More of the same thing" is a quantity; a
+benchmark axis should be a kind. `n_distractors` lives on the level.
+
+### Below L2 every object shares one density
+
+Mass is derived from the material (`density × volume`), so a level without materials would
+otherwise have mass varying **invisibly** — and that is exactly the confound materials were
+introduced to remove: the heavy ball barely moves, nothing in the picture says why, and
+lawful physics reads as a violation.
+
+So at L0 and L1 every body takes a single reference density. Mass still varies, with **size**,
+which a viewer can see. Hue is preserved so objects stay tellable apart; only saturation and
+value are pinned, which is what makes them read as plain colours rather than as steel or
+rubber.
+
+**A consequence worth stating plainly: L1 and L2 are not the same physics.** Materials change
+mass. Any "same physics, harder scene" pairing — which is what the v0/v1 twin is for — has to
+be two levels on the same side of L2.
+
+## 9. Tiers
 
 | | `debug` | `v0` (`physloc_v0`) | `v1` (`physloc_v1`) |
 |---|---|---|---|
@@ -651,10 +780,10 @@ the alphabet implies ran backwards from the one that matters. `scenarios.base.ti
 `generate` both recognise the old letters and say what each was renamed to.
 
 **Any single dial can be overridden without inventing a tier.** The name records what
-changed, so `v0+res128f25` never gets confused with `v0` in `meta.json`:
+changed, so `release+res128f25` never gets confused with `release` in `meta.json`:
 
 ```bash
-python -m physloc.cli generate --tier v0 --frames 25 --resolution 128
+python -m physloc.cli generate --tier release --frames 25 --resolution 128
 ```
 
 | flag | overrides | note |
@@ -671,7 +800,7 @@ by Amdahl. Clip-level parallelism measures **1.92×** at width 4, for free. Deta
 
 ---
 
-## 9. Repo layout
+## 10. Repo layout
 
 ```
 docs/PLAN.md          the design document -- start here
@@ -699,13 +828,13 @@ tests/                prefix identity, mask union, windows, grids, taxonomy,
 out/                  all generated output (gitignored)
 ```
 
-## 10. Where it is going
+## 11. Where it is going
 
 [docs/roadmap.md](docs/roadmap.md) — the medium axis that maps onto LikePhys, the perceptual
 families still missing from v0 (`illumination_shift`), and what v1 is:
 population, a realistic twin of every clip, and deeper randomisation.
 
-## 11. Evaluating on it
+## 12. Evaluating on it
 
 Report **per family (23)**, aggregate to **domain (8)**, and cross with **severity** and
 **camera motion**. `index.parquet` from `physloc export` carries every one of those fields
@@ -723,7 +852,7 @@ Three things that will bite otherwise:
   and is empty while the culprit is hidden; `active` is the unhedged truth about when the law
   is broken. Use `active` for temporal metrics, the mask for spatial ones.
 
-## 12. Papers
+## 13. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). PDFs of the first two live in

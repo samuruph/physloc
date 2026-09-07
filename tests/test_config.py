@@ -38,8 +38,8 @@ def test_config_fills_in_and_flags_override():
     a = _resolve(["generate", "--config", "review"])
     assert (a.tier, a.severity, a.seed, a.keep_going) == ("debug", "strong", 777, True)
 
-    b = _resolve(["generate", "--config", "review", "--seed", "42", "--tier", "v0"])
-    assert (b.seed, b.tier) == (42, "v0")
+    b = _resolve(["generate", "--config", "review", "--seed", "42", "--tier", "release"])
+    assert (b.seed, b.tier) == (42, "release")
     assert b.severity == "strong"        # still from the file
 
 

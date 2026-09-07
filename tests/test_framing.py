@@ -1,11 +1,11 @@
 """Every culprit stays in shot, at every tier.
 
 The regression this exists for: when the tiers were lengthened (13 -> 25 frames
-at the debug tier, 25 -> 49 at tier v0) every camera in the project stayed where it had
+at the debug tier, 25 -> 49 at the release tier) every camera in the project stayed where it had
 been hand-tuned for the short clips, while the distance a body covers grew with
 the clip. `toss` and `tumble` were the worst -- a ballistic arc's apex goes as
 `g*T^2/8`, so quadrupling -- and ended up with 1% and 0% of their frames still
-in view at tier v0. `collision`, `barrier_pass`, `occluder_pass`, `rolling_ramp`
+in view at the release tier. `collision`, `barrier_pass`, `occluder_pass`, `rolling_ramp`
 and `shadow_track` all leaked out sideways for the linear version of the same
 reason.
 
@@ -45,7 +45,7 @@ def _visible_fraction(spec, traj, body, lo, hi) -> float:
     return float(ok[lo:hi].mean())
 
 
-@pytest.mark.parametrize("tier_name", ["debug", "v0", "v1"])
+@pytest.mark.parametrize("tier_name", ["debug", "release"])
 @pytest.mark.parametrize("scenario", sorted(B.available()))
 def test_culprits_stay_in_frame(scenario, tier_name):
     sc, tier = B.get(scenario), B.TIERS[tier_name]
@@ -69,12 +69,12 @@ def test_free_flight_is_scale_invariant(scenario):
 
     `camera.frame_flight` derives the whole shot from the clip length, so the
     actor should cover the same fraction of the frame whatever the tier. If it
-    does not, a bug found at the debug tier is not the same bug at tier v0 -- which is
+    does not, a bug found at the debug tier is not the same bug at the release tier -- which is
     the entire premise of debugging at the debug tier.
     """
     sc = B.get(scenario)
     sizes = []
-    for tier_name in ("debug", "v0", "v1"):
+    for tier_name in ("debug", "release"):
         spec = sc.sample(3, B.TIERS[tier_name], "L0")
         body = next(b for b in spec.bodies if b.role == "actor" and not b.dormant)
         eye = np.asarray(spec.camera_position, np.float64)

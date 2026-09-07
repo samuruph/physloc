@@ -28,8 +28,8 @@ def test_appearance_draws_do_not_shift_the_physics_stream(name):
     consulting the floor is the same at both levels.
     """
     sc = scenarios.get(name)
-    a = sc.sample(SEED, TIERS["v0"], "L0")
-    b = sc.sample(SEED, TIERS["v0"], "L1")
+    a = sc.sample(SEED, TIERS["release"], "L0")
+    b = sc.sample(SEED, TIERS["release"], "L1")
     for x, y in zip(a.bodies, b.bodies):
         if x.role == "floor":
             continue                      # the known gap, covered below
@@ -41,17 +41,23 @@ def test_appearance_draws_do_not_shift_the_physics_stream(name):
     assert a.camera_look_at == b.camera_look_at
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "C.ground returns a cube at L0 and a KuBasic dome at L1 -- a genuine "
-    "collision-geometry change, so the same seed does not roll identically. "
-    "docs/roadmap.md section 3a: the fix is to make the collision geometry "
-    "identical at both levels and let complexity vary only the material, the "
-    "lighting and the backdrop. Until then v1 is an independent release, not "
-    "v0's twin."))
 @pytest.mark.parametrize("name", ["drop"])
 def test_complexity_twin_rolls_identically(name):
+    """L0 and L1 roll identically -- the ladder reordering is what fixed this.
+
+    It used to be an expected failure: `C.ground` returns a cube at L0 and a
+    KuBasic dome from the HDRI level up, which is a genuine collision-geometry
+    change, so the same seed did not roll the same way and the two levels were
+    independent releases rather than twins.
+
+    L0 and L1 now share a background -- they differ only in whether the camera
+    may move -- so the geometry is identical and the physics is too. The gap
+    moves up the ladder to L3 -> L4, where the HDRI dome arrives, and it is the
+    same gap: making the collision geometry identical across that step is what
+    would let a release and its harder twin be compared clip for clip.
+    """
     sc = scenarios.get(name)
-    a, b = sc.sample(SEED, TIERS["v0"], "L0"), sc.sample(SEED, TIERS["v0"], "L1")
+    a, b = sc.sample(SEED, TIERS["release"], "L0"), sc.sample(SEED, TIERS["release"], "L1")
     ta, tb = mockroll.roll(a, sc), mockroll.roll(b, sc)
     assert ta.pos.shape == tb.pos.shape
     assert np.allclose(ta.pos, tb.pos, atol=1e-9)

@@ -32,7 +32,7 @@ defaults:
   #   it is no longer a fair sample of what the sampler does.
   seed: 20260907
 
-  complexity: L0
+  complexity: L2
   tier: debug
 
   # severity: the strongest bin only. Breadth first -- what this sweep is for

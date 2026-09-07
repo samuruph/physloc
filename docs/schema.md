@@ -58,7 +58,7 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 | `twin_uid` | str | the counterpart clip. **Never split a pair across train/val/test.** Several invalid variants may share one valid twin (same scenario+seed → bit-identical valid render), so `pair_uid` groups one valid with N invalids. |
 | `label` | `"valid"` \| `"invalid"` | clip-level ground truth |
 | `tier` | `"v0"` \| `"v1"` | `v0` = 256²/12 fps/49 f; `v1` = 512²/24 fps/97 f. `debug` (128²/25 f) is the iteration loop and is **never published**. Renamed from the old A/B/D letters, which had no C and ran backwards. |
-| `release` | str | `physloc_v0` (tier v0) or `physloc_v1` (tier v1) |
+| `release` | str | what the published dataset is CALLED, e.g. `physloc_v0`. Set by `--outdir`. **Not a tier** -- the tier is the geometry (`debug` or `release`) and difficulty is the complexity ladder |
 | `seed` | int | the seed for the whole sampling + render path |
 
 ### Taxonomy (PLAN Part 2)

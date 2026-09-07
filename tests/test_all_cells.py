@@ -230,7 +230,7 @@ def test_every_cell_is_reachable_at_release_geometry():
     dead = []
     for scenario in sorted({s for s, _ in CELLS}):
         sc = scenarios.get(scenario)
-        rolls = [(seed, sc.sample(seed, TIERS["v0"], "L0")) for seed in seeds]
+        rolls = [(seed, sc.sample(seed, TIERS["release"], "L0")) for seed in seeds]
         rolls = [(seed, spec, mockroll.roll(spec, sc)) for seed, spec in rolls]
         for fam in sorted({f for s, f in CELLS if s == scenario}):
             inj = injectors.get(fam)
@@ -281,7 +281,7 @@ def test_every_cell_survives_a_change_of_clip_length():
     for scenario in sorted({s for s, _ in CELLS}):
         sc = scenarios.get(scenario)
         for frames in FRAME_SWEEP:
-            tier = TIERS["v0"].override(num_frames=frames)
+            tier = TIERS["release"].override(num_frames=frames)
             spec = sc.sample(SEED, tier, "L0")
             traj = mockroll.roll(spec, sc)
             T = traj.num_frames

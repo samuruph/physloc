@@ -53,7 +53,7 @@ def cmd_taxonomy(a) -> int:
 
 
 #: Measured wall-clock per rendered clip, including annotation and the overlay
-#: video. tier v0 is 4x the pixels and ~2x the frames of the debug tier; L1's HDRI
+#: video. the release tier is 4x the pixels and ~2x the frames of the debug tier; L1's HDRI
 #: environment costs about 5.5x an L0 render.
 #: Wall clock per clip, from the per-frame renders measured in CLAUDE.md --
 #: 1.75 s at 256sq and 7.16 s at 512sq, all seven passes -- times the tier's
@@ -65,9 +65,11 @@ def cmd_taxonomy(a) -> int:
 #: after four -- doubling to eight buys 7%.
 SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
 
-SECONDS_PER_CLIP = {("debug", "L0"): 8.0, ("debug", "L1"): 44.0,
-                    ("v0", "L0"): 637.0, ("v0", "L1"): 2930.0,
-                    ("v1", "L0"): 695.0, ("v1", "L1"): 3195.0}
+#: Keyed by (tier, background). The HDRI environment is the expensive dial --
+#: about 4.6x a solid background -- and it arrives at L4, so levels are mapped
+#: onto their background rather than listed one by one.
+SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
+                    ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
 
 
 def _print_release_size(cells, a) -> None:
@@ -86,7 +88,9 @@ def _print_release_size(cells, a) -> None:
     invalid = len(cells) * n_bins * variants
     valid = len(scenarios) * variants          # one per scenario+seed, shared
     renders = invalid + valid
-    rate = SECONDS_PER_CLIP.get((a.tier, a.complexity), 60.0)
+    from .scenarios.base import COMPLEXITY
+    bg = COMPLEXITY[a.complexity].background if a.complexity in COMPLEXITY else "solid"
+    rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
     serial = renders * rate
 
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
@@ -582,7 +586,7 @@ def _build(suppress: bool = False):
                        help="print the taxonomy, and size a release")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="list every (scenario, family) cell")
-    p.add_argument("--tier", default="v0", help="debug | v0 | v1")
+    p.add_argument("--tier", default="release", help="debug | release")
     p.add_argument("--complexity", default="L0")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
@@ -593,7 +597,7 @@ def _build(suppress: bool = False):
     p = add_parser("generate", help="simulate+render+annotate end to end")
     p.add_argument("--debug", action="store_true", help="the debug tier (fast, unpublished)")
     p.add_argument("--tier", default="debug",
-                   help="debug | v0 | v1 -- see `physloc taxonomy`")
+                   help="debug | release -- see `physloc taxonomy`")
     p.add_argument("--variants", type=int, default=1,
                    help="randomisations per cell: each is a fresh seed, so "
                         "sizes, speeds, colours, camera, HDRI and (where "

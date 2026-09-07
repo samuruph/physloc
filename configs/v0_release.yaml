@@ -24,8 +24,11 @@
 #
 defaults:
   seed: 20260824
-  tier: v0             # 512x512, 30 fps, 89 frames = 2.97 s
-  complexity: L0       # L1 is ~5.5x the render cost; a later pass, not this one
+  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s
+                       # `v0` is what this RELEASE is called -- see outdir --
+                       # not a tier. A tier is a geometry.
+  complexity: L2       # the top BUILT rung: camera motion + materials on a
+                       # plain background. L3+ need distractors and GSO.
   severity: all        # the full weak/medium/strong ladder
   variants: 3          # randomisations per cell
 

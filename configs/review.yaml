@@ -7,7 +7,7 @@
 #   python -m physloc.cli coverage out/release     # all cells in one video
 #
 # Any flag you type on the command line overrides what is written here, so
-# `--config review --tier v0` is this sweep at release size.
+# `--config review --tier release` is this sweep at release size.
 # ============================================================================
 
 # --------------------------------------------------------------------------
@@ -31,7 +31,7 @@ defaults:
   #     L0  solid background + one sun lamp. No network. (built)
   #     L1  HDRI environment + dome backdrop, MOVi-style.  (built)
   #     L2..L4  scaffolded, not built -- see `physloc taxonomy`
-  complexity: L0
+  complexity: L2
 
   # tier: the resolution/length ladder. `physloc taxonomy` prints the table.
   #     debug  128x128, 12 fps, 25 frames, 16 spp -- NEVER published

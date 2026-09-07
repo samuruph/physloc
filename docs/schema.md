@@ -68,7 +68,7 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 | `domain` | str | one of 7: `identity`, `kinematics`, `contact`, `dynamics`, `equilibrium`, `optical`, `global` |
 | `family` | str | one of 16, e.g. `solidity`, `non_parabolic`, `newton3_reaction` |
 | `scenario` | str | one of 13, e.g. `collision`, `occluder_pass`, `pour` |
-| `complexity` | object | `{name, background, actor_assets, n_distractors, camera_motion, motion_blur}` -- the MOVi-style realism level (L0 solid .. L4 MOVi-F). Orthogonal to severity. |
+| `complexity` | object | `{name, background, actor_assets, materials, motion_blur, share, camera_share, distractor_share, n_distractors}` -- the scene-realism rung (L0 baseline .. L3 HDRI+GSO). Orthogonal to severity. Camera motion and distractors are ratios INSIDE each rung, not rungs; what this clip actually got is the top-level `camera_motion` and `n_distractors`. |
 | `hdri_id` | str \| null | HDRI Haven environment id, from complexity L1 up |
 | `physics_medium` | `rigid` \| `granular` | `granular` for `pour`. **Never `fluid` in v0** — see PLAN Part 2. Prevents a granular scenario being mistaken for an SPH benchmark. |
 | `intphys2_category` | str \| null | cross-reference; null is a claim of novelty |

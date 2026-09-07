@@ -78,7 +78,7 @@ moving the light moves the shadow, so the two must not be built on the same scen
 
 | | why |
 |---|---|
-| `texture_swap` | needs GSO assets, which arrive with the complexity ladder in v1 |
+| `texture_swap` | needs GSO assets, which arrive at L3 |
 | `reflection` | no scenario has a reflective surface, and adding one is a lighting project |
 | `transparency` | **built** as the `dissolve` family, though it took three attempts. The first two probes concluded it was impossible; both were measuring the *floor*, because they never called `kb.adjust_segmentation_idxs`. Mixing a Transparent BSDF into the shader works cleanly — see `render/probe_opacity.py`, which keeps the mistake on record |
 
@@ -92,7 +92,7 @@ moving the light moves the shadow, so the two must not be built on the same scen
 | axis | v0 | v1 |
 |---|---|---|
 | tier | 512², 30 fps, 89 f | **the same** |
-| complexity | `L0` — solid background, one sun lamp | `L1` — HDRI environment, photographic objects |
+| complexity | `L0`/`L1` — solid background, one sun lamp | `L2`/`L3` — HDRI environment, GSO objects |
 | population | `single` | `single` **and** `multi` |
 
 Making v1 a resolution step *as well* would confound the axes. A model that scored worse on
@@ -108,23 +108,26 @@ grasp of the physics survive the realism, or was it reading the plain background
 
 That requires the rollout to be **bit-identical across complexity**, and today it is not.
 
-- **Fixed.** `pick_hdri(rng)` drew from the physics stream, and because it only fires at L1
-  the extra draw shifted every physics value after it. Appearance now has its own salted
-  stream (`_common.appearance_rng`), so the draw order no longer depends on complexity.
-- **Still open.** `C.ground` returns a **cube** at L0 and a KuBasic **dome** at L1. That is a
+- **Fixed.** `pick_hdri(rng)` drew from the physics stream, and because it only fires at the
+  HDRI level the extra draw shifted every physics value after it. Appearance now has its own
+  salted stream (`_common.appearance_rng`), so the draw order no longer depends on complexity.
+- **Fixed for L0 → L1.** They share a background and differ only in materials, so the
+  geometry is identical and `tests/test_complexity_twin.py` pins that a `drop` rolls the same
+  at both. Mass differs by design at that rung — materials *are* densities — which is why the
+  scenario that pins it is one whose rollout is mass-independent.
+- **Still open at L1 → L2.** `C.ground` returns a **cube** below the HDRI level and a KuBasic
+  **dome** at it. That is a
   genuine geometry change — different collision surface, different support height — so the
   same seed still produces a different rollout.
 
   The fix is to make the collision geometry identical at both levels and let complexity vary
   only the *material*, the lighting and the backdrop. Two candidates, neither yet chosen:
-  use the dome at L0 too, shaded flat instead of with an HDRI; or keep the cube at L1 and add
-  the dome as a non-colliding backdrop body. The second changes body counts and segmentation
+  use the dome at every level, shaded flat below L2 instead of with an HDRI; or keep the cube
+  at L2 and add the dome as a non-colliding backdrop body. The second changes body counts and segmentation
   ids across complexity, which the first does not, so the first is probably right.
 
-  **Until this is fixed there is no complexity twin**, only two independent releases that
-  happen to share a seed. `tests/` should grow a check that
-  `sample(seed, tier, "L0")` and `sample(seed, tier, "L1")` roll identically, so the property
-  cannot regress once it holds.
+  **Until this is fixed the twin stops at L1**: L0 and L1 pair clip for clip, L2 and above do
+  not. `tests/test_complexity_twin.py` holds the property where it holds, so it cannot regress.
 
 ### 3b. Population — single vs multi
 
@@ -220,7 +223,7 @@ because every prose copy of them in this repository drifted.
    a `LightSpec` animation channel. Completes the appearance domain. Note it necessarily
    co-moves with `shadow`, so the two must not share a scenario.
 2. **Population + multi-culprit** — the big structural piece (§3a).
-3. **Complexity ladder L2–L4** — the realistic twin (§3b).
+3. **Complexity ladder L2–L3** — HDRI, then GSO (§3b).
 4. **Randomisation depth** — mostly falls out of 3 (§3c).
 
 1 is the last of v0. 2–4 are v1.
@@ -238,8 +241,8 @@ whether consumers can use it, and whether it is distinct enough from `violation_
 abstract.
 
 **Release configuration.** Which severity bins and how many variants per cell the published
-run uses. `configs/v0_release.yaml` proposes tier `release` / L2 / all three bins /
-3 variants;
+run uses. `configs/v0_release.yaml` proposes tier `release` / the whole ladder / all three bins /
+3 variants — which `taxonomy` prices at ~232 h on four workers;
 `physloc taxonomy --config v0_release` prices it exactly. **Settle this with the user before
 starting** — it is the difference between an overnight job and a week.
 

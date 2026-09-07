@@ -35,12 +35,26 @@ def test_shipped_configs_load_for_every_command():
 
 
 def test_config_fills_in_and_flags_override():
+    """The MECHANISM, read against the file rather than against a copy of it.
+
+    This used to hardcode `severity == "strong"`, so editing `review.yaml` --
+    a policy choice, made twice since -- broke a test about whether config
+    loading works at all. Reading the expected value out of the same file keeps
+    it a test of the mechanism.
+    """
+    import yaml
+
+    want = yaml.safe_load(
+        open(os.path.join(cli.REPO, "configs", "review.yaml")))["defaults"]
+
     a = _resolve(["generate", "--config", "review"])
-    assert (a.tier, a.severity, a.seed, a.keep_going) == ("debug", "strong", 777, True)
+    assert (a.tier, a.severity, a.seed) == (
+        want["tier"], want["severity"], want["seed"])
+    assert a.keep_going is True          # from the file's `generate:` block
 
     b = _resolve(["generate", "--config", "review", "--seed", "42", "--tier", "release"])
     assert (b.seed, b.tier) == (42, "release")
-    assert b.severity == "strong"        # still from the file
+    assert b.severity == want["severity"]        # still from the file
 
 
 def test_a_typed_flag_that_equals_the_default_still_wins():

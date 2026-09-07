@@ -41,10 +41,9 @@ Three configs, one command each. `conda activate physloc` first.
 
 | | config | what it is | cost |
 |---|---|---|---|
-| **review** | `configs/review.yaml` | every cell once, `strong`, tier `debug`, L2 | **~12 min** |
-| **review_random** | `configs/review_random.yaml` | every cell **four** times — does it *vary*? | ~35 min |
-| **v0** | `configs/v0_release.yaml` | tier `release`, L2, all three bins, 3 variants | ~108 h at 4 workers |
-| **v1** | `configs/v1_release.yaml` | tier `release`, **L4** — raises until L3/L4 are built | — |
+| **review** | `configs/review.yaml` | every cell once, all bins, tier `debug`, L0 | **~35 min** |
+| **ladder** | `configs/review_ladder.yaml` | the whole ladder, tier `debug`, 10 variants | ~3.1 h at 4 workers |
+| **v0** | `configs/v0_release.yaml` | tier `release`, **whole ladder**, all bins, 3 variants | price with `taxonomy` |
 
 **`v0` and `v1` are release names, not tiers.** There are two tiers, because there are two
 geometries: `debug` (128², 25 f) and `release` (512², 89 f). Difficulty is the
@@ -71,7 +70,7 @@ To see whether instances actually *differ* — which one render per cell cannot 
 four-variant sweep instead:
 
 ```bash
-bash scripts/run.sh review_random
+bash scripts/run.sh review_ladder
 ```
 
 That generates, validates, and builds every video: `coverage.mp4`, a `sheet` per scenario and
@@ -98,13 +97,13 @@ bash scripts/run.sh v0_release
 ### The v1 release
 
 ```bash
-python -m physloc.cli taxonomy --config v1_release
-bash scripts/run.sh v1_release
+python -m physloc.cli taxonomy --config review_ladder
+bash scripts/run.sh review_ladder
 ```
 
 **The HDRI environment is the expensive dial, not the severity ladder.** It costs roughly
-4.6× a plain background and arrives at L4, which is the whole difference between a v0 and a
-v1 wall clock. The severity ladder is nearly free, because the valid twin and the scene build
+5.5× a plain background and arrives at L2, which is why the ladder's shares fall as realism
+rises. The severity ladder is nearly free, because the valid twin and the scene build
 are shared across bins.
 
 ---
@@ -209,7 +208,7 @@ from the clip.
 a camera→ball ray with the screen plane once, and that frame list is where every observability
 label in the dataset comes from.
 
-**Camera motion needs L1 or above** — see [§8](#8-the-complexity-ladder). L0 is the plain
+**Camera motion is an orthogonal axis, on 20% of every level's clips** — see [§8](#8-the-complexity-ladder). It is stratified by variant index, so a short run is the plain
 baseline and never moves.
 
 **Aspect ratio varies on boxes only**, and that is PyBullet, not a choice.
@@ -330,7 +329,7 @@ python -m pytest tests/test_all_cells.py -q   # plans and applies all 166 cells
 | flag | |
 |---|---|
 | `--tier debug\|release` | the resolution/length ladder — section 9 |
-| `--complexity L0..L5` | how hard the scene is to parse — section 8. L0–L2 built |
+| `--complexity L0..L3\|all` | how hard the scene is to parse — section 8. L0–L1 built |
 | `--severity weak\|medium\|strong\|all` | which magnitude bins |
 | `--variants N` | randomisations per cell |
 | `--scenario X` / `--family Y` | restrict the matrix |
@@ -393,33 +392,43 @@ root-owned, and prefers the pinned digest over `:latest`.
 
 ### The directory tree
 
-Output lands under `<outdir>/clips/<release>/<scenario>/<seed>/`, gitignored so it never
-enters version control. Concretely, after `--variants 2 --severity all`:
+Output lands under `<outdir>/clips/<release>/<level>/<scenario>/<seed>/`, gitignored so it
+never enters version control. Concretely, after `--complexity all --variants 2 --severity all`:
 
 ```
 out/release/
   coverage_strong.mp4                       every cell in the release, one video
   clips/
     physloc_v0/
-      drop/                                 <- SCENARIO
-        0777/                               <- SEED = base seed + variant index
-          valid/                            <- ONE valid twin, shared by every
-          invalid_solidity_weak/               family and bin on this scene
-          invalid_solidity_medium/          <- FAMILY _ SEVERITY BIN
-          invalid_solidity_strong/
-          invalid_continuity_weak/
-          ...                                  14 families x 3 bins on `drop`
-          sheet_strong.mp4                  every family of this scene, one frame
-          grid_solidity.mp4                 every severity of one family
-        0778/                               <- variant 2: a different scene
-          valid/
-          invalid_solidity_weak/
+      L0/                                   <- COMPLEXITY RUNG
+        drop/                               <- SCENARIO
+          0777/                             <- SEED = base seed + variant index
+            valid/                          <- ONE valid twin, shared by every
+            invalid_solidity_weak/             family and bin on this scene
+            invalid_solidity_medium/        <- FAMILY _ SEVERITY BIN
+            invalid_solidity_strong/
+            invalid_continuity_weak/
+            ...                                14 families x 3 bins on `drop`
+            sheet_strong.mp4                every family of this scene, one frame
+            grid_solidity.mp4               every severity of one family
+          0778/                             <- variant 2: a different scene
+            valid/
+            invalid_solidity_weak/
+            ...
+        collision/
+          0777/
+          0778/
+        ...                                    13 scenarios
+      L1/                                   <- the same seeds, one axis changed
+        drop/
+          0777/                             <- pairs with L0/drop/0777
           ...
-      collision/
-        0777/
-        0778/
-      ...                                      13 scenarios
 ```
+
+**The rung is part of a clip's identity.** The same seed and variant serve every rung on
+purpose — that pairing is what makes "what did materials cost" a paired comparison rather
+than two population averages — so the level has to be in the key, or L1 writes over L0 and
+the index carries duplicate `clip_uid`s.
 
 **How the four axes multiply.** A *cell* is one (scenario, family) pair — 166 of them, chosen
 by `taxonomy.COMPATIBILITY`, which is why `drop` has 14 families and `pendulum_swing` has 8.
@@ -527,7 +536,7 @@ One row per clip, 26 metadata columns plus the video itself:
 | identity | `clip_uid`, `pair_uid`, `twin_uid`, `label`, `split` |
 | taxonomy | `scenario`, `family`, `domain`, `medium` |
 | violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
-| scene | `seed`, `tier`, `complexity`, `num_frames`, `fps`, `camera_motion`, `actor_shape`, `actor_material`, `actor_mass` |
+| scene | `seed`, `variant`, `tier`, `complexity`, `n_distractors`, `num_frames`, `fps`, `camera_motion`, `actor_shape`, `actor_material`, `actor_mass` |
 | text | `prompt` |
 | **video** | **`rgb`** everywhere, **`overlay`** in the `debug` split |
 
@@ -649,8 +658,9 @@ Two orthogonal augmentation axes:
 - **severity** — `weak` / `medium` / `strong`, set by the *intervention magnitude*, which is
   exact by construction. Named for how hard the law is bent, not for how hard the clip is to
   classify — those are different things, and conflating them is how difficulty splits go bad.
-- **complexity** — `L0`..`L5`, **one axis per level**. See
-  [§8](#8-the-complexity-ladder). L0–L2 are built; L3–L5 **raise if requested** rather
+- **complexity** — `L0`..`L3`, **one axis per rung**, with camera motion and distractors as
+  orthogonal ratios inside each. See
+  [§8](#8-the-complexity-ladder). L0–L1 are built; L2–L3 **raise if requested** rather
   than silently degrading.
 
 **Why 22 files and not 345.** Scenarios and injectors are orthogonal and compose through the
@@ -709,70 +719,129 @@ which, and what that means for a confusion matrix.
 parse.** Two independent axes; reporting across both is what separates "understands physics"
 from "copes with clutter".
 
-**Each level is the one below it plus exactly one thing**, so a score drop between two levels
-names its own cause.
+**The ladder is SCENE REALISM — four rungs, each the one below it plus one step.**
 
-| level | adds | background | actors | distractors | camera | surface | built |
-|---|---|---|---|---|---|---|---|
-| **L0** | *baseline* | solid | primitives | 0 | static | flat colour | ✅ |
-| **L1** | camera motion | solid | primitives | 0 | **1 in 5 moves** | flat colour | ✅ |
-| **L2** | materials | solid | primitives | 0 | 1 in 5 | **wood/steel/…** | ✅ |
-| **L3** | distractors | solid | primitives | **6** | 1 in 5 | materials | ✅ |
-| **L4** | HDRI environment | **hdri** | primitives | 6 | 1 in 5 | materials | ✗ |
-| **L5** | GSO objects | hdri | **gso** | 12 | 1 in 5 | materials | ✗ |
+| level | adds | background | actors | surface | share | built |
+|---|---|---|---|---|---|---|
+| **L0** | *baseline* | solid | primitives | flat colour | **1.00** (50%) | ✅ |
+| **L1** | materials | solid | primitives | **wood/steel/…** | 0.50 (25%) | ✅ |
+| **L2** | HDRI environment | **hdri** | primitives | materials | 0.30 (15%) | ✗ |
+| **L3** | GSO objects | hdri | **gso** | materials | 0.20 (10%) | ✗ |
 
-Three things worth knowing:
+### Camera motion and distractors are NOT rungs
 
-- **Distractors come before the environment** so clutter is measured against a plain
-  background — otherwise a drop at that level could be lighting instead.
+They are **orthogonal axes applied inside every level** at declared ratios:
+
+| axis | share of each level's clips | fires on variants (of 10) |
+|---|---|---|
+| moving camera | **20%** | 4, 9 |
+| distractors (6, or 12 at L3) | **30%** | 3, 6, 9 |
+
+They used to be rungs, and that was wrong twice over. A rung whose axis fires on only *some*
+of its clips is not a stratum at all: with camera motion on 1 variant in 5, "L2 minus L1" was
+not measuring materials, it was measuring materials plus whichever variants happened to draw
+a camera move. And making them rungs forced a choice nobody wants — either every realistic
+clip moves its camera, or none does.
+
+As ratios, the dataset answers *"what does clutter cost at each realism level"* as well as
+*"what does realism cost"*, and the overall share of moving-camera clips is a number you set
+rather than an artefact of how the ladder was climbed.
+
+### How the shares work
+
+- **A run of `--complexity all` walks the built ladder**, giving each level
+  `round(variants × share)` variants per cell. `--variants 10` → L0 ×10, L1 ×5.
+- **A level that does not buy a whole variant is skipped.** `--variants 1` is L0 only. That
+  is deliberate: a short run should be the easy case. **Naming a level explicitly overrides
+  it** — `--complexity L2 --variants 1` gives you L2.
+- **The orthogonal axes work the same way.** `floor(V × share)` clips get the axis, spread
+  evenly across the variant *indices* rather than drawn per scene — so every scenario gets
+  the same share instead of each flipping its own coin (measured across thirteen scenarios,
+  independent draws ranged from 13% to 31%). Below 5 variants nothing moves; below 4 nothing
+  is cluttered. `PHYSLOC_CAMERA_MOTION=orbit` forces one on demand.
+- **The same seed and variant index serve every rung**, so each L1 clip has an L0 counterpart
+  built from the same draw with one axis changed — a paired comparison, not two population
+  averages.
+- **Shares fall as realism rises** for two reasons: the baseline is what everything else is
+  compared against so it should be the largest stratum, and an HDRI clip costs ~44 s against
+  a solid background's ~8 s at the debug tier.
+
+Everything above lives in `COMPLEXITY` in `physloc/scenarios/base.py` and nowhere else;
+`python -m physloc.cli taxonomy --complexity all --variants 10` prices it per rung.
+
+Three more things worth knowing:
+
 - **A distractor never joins the physics.** It is placed clear of the actor's whole predicted
   path, never between the actor and the camera, and always inside the frame; it carries
-  `role="distractor"`, which every injector query excludes. `meta.json` records
-  `n_distractors_placed` — what actually went in, since the constraints can leave no room and
-  a clip claiming six while containing four is a clip whose metadata lies.
-- **Below L2 every object shares one density.** Mass is `density × volume`, so a level
+  `role="distractor"`, which every injector query excludes, and `_geom.support_under` refuses
+  it as a resting surface. `meta.json` records `n_distractors` — what actually went in, since
+  the constraints can leave no room and a clip claiming six while containing four is a clip
+  whose metadata lies.
+- **Below L1 every object shares one density.** Mass is `density × volume`, so a level
   without materials would have mass varying *invisibly* — the confound materials exist to
   remove. With one density mass varies with **size**, which a viewer can see.
-- **L1 and L2 are therefore not the same physics.** Materials change mass, so any "same
-  physics, harder scene" pairing needs two levels on the same side of L2.
-
-`n_distractors` is a knob on the level, not a level of its own.
+- **L0 and L1 are therefore not the same physics.** Materials change mass, so any "same
+  physics, harder scene" pairing needs two levels on the same side of L1.
 
 ### Testing one level at a time
 
-Each level adds exactly one thing, so rendering them separately is how you find out *which*
-thing broke. One scenario at five variants is ~4 minutes a level (L3 is about twice L0 — six
-extra bodies is more geometry to shade).
+Each rung adds exactly one thing, so rendering them separately is how you find out *which*
+thing broke. There is a config per rung, so the short form is:
 
 ```bash
 for L in L0 L1 L2 L3; do
-  bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+  python -m physloc.cli generate --config review_$L --scenario drop
+done
+```
+
+or, through `run.sh` (which also packages the result for the hub):
+
+```bash
+for L in L0 L1 L2 L3; do
+  bash scripts/run.sh review --complexity $L --scenario drop --variants 10 \
        --outdir out/$L --workdir out/work_$L
 done
 ```
 
-Five variants is the minimum that shows camera motion — the moving variant is index 4 of each
-block — and the minimum that fills all three splits.
+**Use ten variants when you want to see the orthogonal axes.** They are stratified by variant
+index, so a run of one is entirely static and uncluttered — correct behaviour, but it means a
+short run tells you nothing about the camera or the distractors. Ten gives two moving and
+three cluttered clips per cell.
 
 | level | what to look for | what would be wrong |
 |---|---|---|
-| **L0** | flat colours, camera dead still, nothing but the actor and the floor | anything moving that should not be |
-| **L1** | variant 4 orbits, tracks or dollies; variants 0–3 identical to L0 | the camera moving on the wrong variant, or the actor drifting out of shot |
-| **L2** | wood looks like wood, steel like steel; heavy things behave heavy | a material whose mass does not match its look |
-| **L3** | six distractors, in shot, clear of the action | one touching the actor, hiding it, or off-frame |
+| **L0** | flat colours, one shared density, primitives on a solid ground | a material appearing; mass varying without size varying |
+| **L1** | wood looks like wood, steel like steel; heavy things behave heavy | a material whose mass does not match its look |
+| **L2** | a real environment, lit from an HDRI | *not built* — the config raises |
+| **L3** | GSO objects in that environment | *not built* |
+| *variants 4, 9* | the camera orbits, tracks or dollies; the actor stays in shot | motion on the wrong variant, or the actor drifting out of frame |
+| *variants 3, 6, 9* | six distractors, in shot, clear of the action | one touching the actor, hiding it, or off-frame |
 
-The severity of a given cell should be **identical at L2 and L3** — distractors are
-decoration, and if a number moves, one of them is taking part in the physics:
+The severity of a given cell should be **identical with and without distractors** — they are
+decoration, and if a number moves, one of them is taking part in the physics. Variants 2 and
+3 of the same cell differ by exactly that:
 
 ```bash
-python -m physloc.cli generate --config review --scenario drop --family solidity \
-    --complexity L2 --outdir out/cmpL2 --workdir out/work_cmpL2
-python -m physloc.cli generate --config review --scenario drop --family solidity \
-    --complexity L3 --outdir out/cmpL3 --workdir out/work_cmpL3
+python -m physloc.cli generate --config review_L0 --scenario drop --family solidity \
+    --variants 4 --outdir out/cmp --workdir out/work_cmp
 ```
 
-Compare the `sev=` in the two summary lines. That comparison is what caught a distractor
-redefining `support`'s reference surface, which moved the score from 0.91 to 0.46.
+Compare the `sev=` on the variant-2 and variant-3 lines. That comparison is what caught a
+distractor redefining `support`'s reference surface, which moved the score from 0.91 to 0.46.
+
+### Generating the whole ladder in one run
+
+`--complexity all` produces every rung in its declared proportion, which is what a release
+is:
+
+```bash
+python -m physloc.cli taxonomy --config review_ladder    # price it, per rung
+python -m physloc.cli generate --config review_ladder    # L0 x10, L1 x5
+```
+
+Each rung renders into its own subdirectory of the work tree, because the same seed serves
+every rung by design — that pairing is the point, and without separate scratch L1 would
+render over L0's passes.
 
 ### Publishing a level, or a whole run
 
@@ -781,19 +850,19 @@ uploads too:
 
 ```bash
 # one level, to its own dataset
-PHYSLOC_PUSH_TO=<user>/physloc-l3 \
-  bash scripts/run.sh review --complexity L3 --scenario drop --variants 5 \
-       --outdir out/L3 --workdir out/work_L3
+PHYSLOC_PUSH_TO=<user>/physloc-l1 \
+  bash scripts/run.sh review --complexity L1 --scenario drop --variants 10 \
+       --outdir out/L1 --workdir out/work_L1
 
 # a mini sample, private
 PHYSLOC_PUSH_TO=<user>/physloc-mini PHYSLOC_PUSH_PRIVATE=1 \
-  bash scripts/run.sh review -n 45 --variants 5 \
+  bash scripts/run.sh review -n 45 --variants 10 \
        --outdir out/physloc_mini --workdir out/work_mini
 
 # every level as its own dataset
-for L in L0 L1 L2 L3; do
+for L in L0 L1; do
   PHYSLOC_PUSH_TO=<user>/physloc-${L,,} \
-    bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+    bash scripts/run.sh review --complexity $L --scenario drop --variants 10 \
          --outdir out/$L --workdir out/work_$L
 done
 ```
@@ -810,7 +879,7 @@ somewhere other people can fetch, index and cache them.
 Without the variable, or to publish a run you already have:
 
 ```bash
-python -m physloc.cli export out/L3 --outdir out/hf/L3 --push-to <user>/physloc-l3
+python -m physloc.cli export out/L1 --outdir out/hf/L1 --push-to <user>/physloc-l1
 ```
 
 **A push replaces the card and index at that repo id**, so use a distinct name per artefact
@@ -882,7 +951,7 @@ environment.yml       host conda env
 docker/               kubric.sh wrapper + pinned image digest
 scripts/run.sh        generate + validate + every video, from a config
 scripts/fetch_refs.sh pinned read-only Kubric checkout -> refs/
-configs/*.yaml        run settings: review, v0_release, v1_release
+configs/*.yaml        run settings: review, review_L0..L3, review_ladder, v0_release
 physloc/
   taxonomy.py         Part 2 as data: domains, families, scenarios, compatibility
   scenarios/          seeded scene samplers (declarative SceneSpec, no Kubric import)

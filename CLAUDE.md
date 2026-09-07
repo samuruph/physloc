@@ -31,9 +31,20 @@ publication. Nothing has been published yet.
   **`v0` and `v1` are NOT tiers.** They used to be, and differed in nothing but their name —
   what actually separated them was complexity, which is its own axis and its own ladder. A
   tier that encodes a release number has to be renamed every release. So: the tier says how
-  big and how long, the **complexity ladder (L0–L5)** says how hard, and `v0`/`v1` are what
+  big and how long, the **complexity ladder (L0–L3)** says how hard, and `v0`/`v1` are what
   a published dataset is CALLED — set by `--outdir`, recorded as `release` in every
   `meta.json`. **Debug at the debug tier; a bug found there is fixed for both.**
+- **The complexity ladder is SCENE REALISM, and nothing else.** Four rungs -- L0 baseline,
+  L1 materials, L2 HDRI, L3 GSO -- each with a declared `share` of a full generation
+  (1.00/0.50/0.30/0.20). **Camera motion (20%) and distractors (30%) are ORTHOGONAL AXES
+  applied inside every rung**, stratified by variant index through `stratify()`, never rungs
+  of their own. They used to be rungs, firing on 1 variant in 5 *within* a level, which meant
+  "L2 minus L1" measured materials plus whichever variants happened to draw a camera move --
+  a rung whose axis fires on only some of its clips is not a stratum. A level that does not
+  buy a whole variant is SKIPPED, so a short run is all baseline; naming a level explicitly
+  is the override. `--complexity all` walks the ladder in one run, and the rung is part of a
+  clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`) because the same seed serves
+  every rung on purpose. All of it lives in `COMPLEXITY` in `physloc/scenarios/base.py`.
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 13 scenarios x 23 families needs 13 + 8 files,
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.

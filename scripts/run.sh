@@ -3,54 +3,58 @@
 # looking at.
 #
 #   bash scripts/run.sh                       # the review sweep (configs/review.yaml)
-#   bash scripts/run.sh review_random         # every cell FOUR times -- does it vary?
+#   bash scripts/run.sh review_ladder         # the WHOLE ladder in its declared shares
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
 #   # generate, package AND publish in one go:
 #   PHYSLOC_PUSH_TO=samueleruf/physloc bash scripts/run.sh review ...
 #
-#   # a small run that still shows everything -- ~13 min:
-#   bash scripts/run.sh review -n 45 --variants 5 \
+#   # a small run that still shows everything:
+#   bash scripts/run.sh review -n 45 --variants 10 \
 #        --outdir out/physloc_mini --workdir out/work_mini
 #
-# ONE LEVEL AT A TIME. Each adds exactly one thing to the level below, so
-# rendering them separately is how you find out WHICH thing broke. ~4 min each
-# for one scenario at five variants; L3 is about twice L0 because six extra
-# bodies is more geometry to shade.
+# ONE RUNG AT A TIME. The ladder is scene realism -- L0 baseline, L1 materials,
+# L2 HDRI, L3 GSO -- and each rung adds exactly one thing, so rendering them
+# separately is how you find out WHICH thing broke. There is a config per rung:
 #
-#   bash scripts/run.sh review --complexity L0 --variants 5 --outdir out/L0 --workdir out/work_L0     # baseline: flat, static
-#   bash scripts/run.sh review --complexity L1 ... # + camera moves on variant 4
-#   bash scripts/run.sh review --complexity L2 ... # + materials, varied mass
-#   bash scripts/run.sh review --complexity L3 ... # + 6 distractors
+#   bash scripts/run.sh review_L0 --scenario drop   # baseline: flat colours, one density
+#   bash scripts/run.sh review_L1 --scenario drop   # + materials, so mass is visible
+#   bash scripts/run.sh review_L2 --scenario drop   # + HDRI environment   (NOT BUILT)
+#   bash scripts/run.sh review_L3 --scenario drop   # + GSO objects        (NOT BUILT)
 #
 # Or all of them in one go:
 #
 #   for L in L0 L1 L2 L3; do
-#     bash scripts/run.sh review --complexity $L --scenario drop --variants 5 \
+#     bash scripts/run.sh review --complexity $L --scenario drop --variants 10 \
 #          --outdir out/$L --workdir out/work_$L
 #   done
+#
+# THE OTHER TWO AXES ARE NOT RUNGS. Camera motion (20%) and distractors (30%)
+# apply inside EVERY level, stratified by variant index -- so use ten variants
+# when you want to see them. At 10, variants 4 and 9 move the camera and 3, 6
+# and 9 carry distractors; below 5 nothing moves and below 4 nothing is
+# cluttered, which is the intended behaviour for a short run.
+#
+#   PHYSLOC_CAMERA_MOTION=orbit bash scripts/run.sh review --scenario drop
 #
 # PUBLISHING. Packaging always happens; uploading only when PHYSLOC_PUSH_TO is
 # set, because packaging is local and repeatable and uploading is neither.
 #
-#   PHYSLOC_PUSH_TO=<user>/physloc-l3 \
-#     bash scripts/run.sh review --complexity L3 --scenario drop --variants 5 \
-#          --outdir out/L3 --workdir out/work_L3
+#   PHYSLOC_PUSH_TO=<user>/physloc-l1 \
+#     bash scripts/run.sh review --complexity L1 --scenario drop --variants 10 \
+#          --outdir out/L1 --workdir out/work_L1
 #
 #   PHYSLOC_PUSH_TO=<user>/physloc-mini PHYSLOC_PUSH_PRIVATE=1 \
-#     bash scripts/run.sh review -n 45 --variants 5 \
+#     bash scripts/run.sh review -n 45 --variants 10 \
 #          --outdir out/physloc_mini --workdir out/work_mini
 #
 # A push REPLACES the card and index at that repo id, so give each artefact its
 # own name rather than overwriting a release with a sample.
 #
-# 5 variants is the MINIMUM that shows camera motion (the moving variant is
-# index 4 of each block) and the minimum that fills all three splits.
-#
 # Tiers are `debug` and `release` -- two geometries, nothing more. Difficulty is
-# the complexity ladder (L0..L5, README section 8), and `v0`/`v1` are what a
-# published dataset is CALLED, set by the config's outdir.
+# the complexity ladder (README section 8), and `v0`/`v1` are what a published
+# dataset is CALLED, set by the config's outdir.
 #
 # The config decides tier, complexity, severity, seed and variants; see
 # configs/*.yaml, which document every key. Anything after the config name is
@@ -83,7 +87,9 @@ echo "== validate =="
 $PV validate "$REL" || true
 
 # Which severity bins this release actually contains.
-BINS=$(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d -name 'invalid_*' \
+# clips/<release>/<level>/<scenario>/<seed>/<clip> -- the level joined the key
+# when one run started producing several rungs, so these depths went up by one.
+BINS=$(find "$REL/clips" -mindepth 5 -maxdepth 5 -type d -name 'invalid_*' \
        | sed -n 's/.*_\(weak\|medium\|strong\)$/\1/p' | sort -u)
 BINS=${BINS:-strong}
 
@@ -94,14 +100,14 @@ for BIN in $BINS; do
 done
 
 echo "== sheets: every family of a scenario, every annotation, in one frame =="
-for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
+for PAIR in $(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d | sort); do
   for BIN in $BINS; do
     $PV sheet "$PAIR" --severity "$BIN" || true
   done
 done
 
 echo "== grids: the valid clip beside every severity of each family =="
-for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
+for PAIR in $(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d | sort); do
   FAMS=$(ls "$PAIR" | sed -n 's/^invalid_\(.*\)_\(weak\|medium\|strong\)$/\1/p' | sort -u)
   for FAM in $FAMS; do
     $PV grid "$PAIR" --family "$FAM" || true

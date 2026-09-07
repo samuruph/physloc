@@ -14,6 +14,7 @@ table's height above the ground; `_geom.support_under` picks by height instead.
 from __future__ import annotations
 
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -28,6 +29,7 @@ class RestingTable(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -62,6 +64,14 @@ class RestingTable(Scenario):
                 color=C.hue_rgb((hue + 0.2 + 0.25 * i) % 1.0),
                 segmentation_id=self.SEG_PROPS[i], role="prop"))
 
+        # The actor and the props are separate objects on a table, so they are
+        # free to be made of different things -- unlike `collision`'s pair or
+        # `pour`'s medium, whose sameness is load-bearing.
+        actor = C.with_material(actor, M.pick(arng), arng)
+        actor = C.vary_dims(actor, arng)
+        props = [C.vary_dims(C.with_material(pr, M.pick(arng), arng), arng)
+                 for pr in props]
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=([C.ground(cx, self.SEG_FLOOR), post, table, actor]
@@ -69,7 +79,7 @@ class RestingTable(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.9)),
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"table_top": top_z, "actor_radius": r0,
                    "actor_kind": actor_kind})
 

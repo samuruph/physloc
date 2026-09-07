@@ -20,6 +20,7 @@ import numpy as np
 
 from .. import camera as cam
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, LightSpec,
                    SceneSpec, Scenario, Tier, register)
@@ -37,6 +38,7 @@ class ShadowTrack(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -67,6 +69,7 @@ class ShadowTrack(Scenario):
             segmentation_id=self.SEG_ACTOR, role="actor")
 
         psi = math.atan2(float(light_dir[1]), float(light_dir[0]))
+        actor = C.with_material(actor, M.pick(arng), arng)
         shade = BodySpec(
             # A flattened SPHERE, not a flattened cube. A round caster does not
             # throw a square shadow, and shipping one meant every `shadow` clip
@@ -98,7 +101,7 @@ class ShadowTrack(Scenario):
                               intensity=3.2)],
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             camera_jitter_deg=(15.0, 8.0),
             notes={"radius": r, "height": height, "speed": speed,
                    "light_dir": [float(x) for x in light_dir],

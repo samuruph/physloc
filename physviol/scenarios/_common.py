@@ -149,7 +149,8 @@ def understudy(actor: BodySpec, seg_id: int) -> BodySpec:
         scripted=True, dormant=True)
 
 
-def with_material(body: BodySpec, name: str, rng, look=None) -> BodySpec:
+def with_material(body: BodySpec, name: str, rng, look=None,
+                  mass_from: str = "volume") -> BodySpec:
     """Give a body a material, deriving its mass and look from it.
 
     The single place a scenario opts in. Returns a NEW spec rather than
@@ -168,9 +169,22 @@ def with_material(body: BodySpec, name: str, rng, look=None) -> BodySpec:
     # them the same material off the same stream is not enough -- the second
     # call advances the stream and comes back a different colour.
     rgb, roughness, metallic = M.appearance(name, rng) if look is None else look
+    # `mass_from`:
+    #   "volume" -- density x volume, the honest default.
+    #   "ratio"  -- scale the mass the scenario already chose by how much
+    #               denser this material is than wood. For the scenarios whose
+    #               mass is a TUNED quantity rather than an incidental one: a
+    #               pour's grains were picked at 0.12 kg so the pile settles
+    #               instead of jittering, and deriving 0.02 kg from a 6 cm
+    #               sphere's volume would quietly retune the medium. This keeps
+    #               the tuning and still varies the material.
+    if mass_from == "ratio":
+        mass = float(body.mass) * M.density_ratio(name)
+    else:
+        mass = M.mass_for(name, body.scale, body.kind)
     return dataclasses.replace(
         body, material=name, color=rgb, roughness=roughness, metallic=metallic,
-        mass=M.mass_for(name, body.scale, body.kind))
+        mass=mass)
 
 
 #: How far a body's proportions may stray from cubic, as a ratio between its
@@ -222,9 +236,14 @@ def vary_dims(body: BodySpec, rng, max_aspect: float = MAX_ASPECT) -> BodySpec:
     x, y, z = (float(v) for v in body.position)
     out = dataclasses.replace(body, scale=scale,
                               position=(x, y, z + scale[2] - sz))
-    # Mass follows the new volume when the body is made of something.
+    # Mass follows the new volume -- SCALED, not recomputed. Recomputing from
+    # `density x volume` silently discarded a `mass_from="ratio"` mass, which
+    # is how `pyramid_impact` ended up with a striker LIGHTER than the pile it
+    # exists to scatter. Scaling by the volume change is right whichever way
+    # the mass was arrived at.
     if body.material is not None:
-        from . import materials as M
-        out = dataclasses.replace(
-            out, mass=M.mass_for(body.material, scale, body.kind))
+        old_v = sx * sy * sz
+        if old_v > 1e-12:
+            out = dataclasses.replace(
+                out, mass=float(body.mass) * (scale[0] * scale[1] * scale[2]) / old_v)
     return out

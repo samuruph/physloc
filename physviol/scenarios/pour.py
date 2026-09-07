@@ -17,6 +17,7 @@ pour itself misbehaving, which is the point.
 from __future__ import annotations
 
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -33,6 +34,7 @@ class Pour(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -77,13 +79,25 @@ class Pour(Scenario):
                 segmentation_id=SEG_GRAIN_BASE + i, role="actor"))
             del ang
 
+        # ONE material for the whole medium. The grains are interchangeable by
+        # construction -- that is what makes `_group` able to act on all of
+        # them at once and what makes a pour read as a substance rather than as
+        # ninety-six separate objects -- so giving them different densities
+        # would be ninety-six little unlabelled mass violations. The colour
+        # still walks per grain, which is what keeps the pile legible.
+        grain_mat = M.pick(arng)
+        grain_look = M.appearance(grain_mat, arng)
+        grains = [C.with_material(g, grain_mat, arng, mass_from="ratio",
+                                  look=(g.color, grain_look[1], grain_look[2]))
+                  for g in grains]
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR)] + walls + grains,
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
             camera_position=(1.7, -3.2, 3.0), camera_look_at=(0.0, 0.0, 0.15),
             floor_level=0.0, complexity=complexity, physics_medium="granular",
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,
                    "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],

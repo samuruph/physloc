@@ -19,6 +19,7 @@ import math
 import numpy as np
 
 from . import _common as C
+from . import materials as M
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
@@ -35,6 +36,7 @@ class PendulumSwing(Scenario):
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
+        arng = C.appearance_rng(seed, self.name)
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
@@ -75,13 +77,15 @@ class PendulumSwing(Scenario):
                        color=C.hue_rgb(float(rng.uniform(0, 1))),
                        segmentation_id=self.SEG_BOB, role="actor")
 
+        bob = C.with_material(bob, M.pick(arng), arng)
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR), post, bob, rod],
             lights=C.lights(cx, look_at=(0, 0, 1.4)),
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             camera_jitter_deg=(15.0, 8.0),
             notes={"constraint": "pivot", "pivot": list(pivot), "arm": arm,
                    "theta0": theta0, "omega": omega,

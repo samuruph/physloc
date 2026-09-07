@@ -158,3 +158,14 @@ def appearance(name: str, rng) -> Tuple[Tuple[float, float, float], float, float
     val = float(rng.uniform(*m.value))
     rgb = tuple(float(c) for c in colorsys.hsv_to_rgb(hue, sat, val))
     return rgb, float(m.roughness), float(m.metallic)
+
+
+#: The material a hand-tuned mass is implicitly expressed in. `ratio` masses
+#: are scaled against this, so a scenario that was tuned at 0.12 kg per grain
+#: keeps 0.12 kg when it draws wood and moves proportionally either side.
+REFERENCE_MATERIAL = "wood"
+
+
+def density_ratio(name: str) -> float:
+    """How much denser than wood this material is."""
+    return float(MATERIALS[name].density / MATERIALS[REFERENCE_MATERIAL].density)

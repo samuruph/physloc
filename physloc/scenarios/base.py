@@ -665,14 +665,20 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     The hard version of the task. With one actor, "which object is wrong" has a
     trivial answer -- there is only one object it could be -- so a model can
     score by detecting that SOMETHING is off and pointing at the only candidate.
-    With `MULTI_ACTORS` bodies behaving lawfully except for `MULTI_CULPRITS` of
-    them, the clip asks *which*, and a spatial annotation finally has to be
-    earned rather than inferred.
+    With N bodies behaving lawfully except for M of them, the clip asks *which*,
+    and a spatial annotation finally has to be earned rather than inferred.
 
-    A LAWFUL MAJORITY, deliberately. A scene where most things misbehave
-    answers the question before it is asked, and it also stops looking like
-    physics: the eye reads "everything is broken" as a render fault rather than
-    as two objects doing something impossible among three that are fine.
+    BOTH COUNTS ARE DRAWN PER CLIP -- N over `MULTI_ACTORS`, M from two up to
+    N-1. Fixing either would make it a cue: a model that learns "five objects,
+    two wrong" is not reading physics, and the condition is about there being
+    SEVERAL, not about there being five.
+
+    At least two culprits, because one is what `standard` already is. At most
+    N-1, so there is always a lawful body to contrast against -- which is the
+    whole task. Note what the upper bound allows at N = 3: M = 2 is the only
+    legal draw, a violating majority. Deliberate: it makes the small scenes the
+    hardest, because "most things are wrong" is a different perceptual claim
+    from "one thing is wrong".
 
     Reuses the distractor placer with `role="actor"` -- see `_common.distractors`.
     The extras are then ordinary actors: `_geom.actors` returns them, every
@@ -694,17 +700,21 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     # A SCENARIO THAT IS ALREADY A CROWD NEEDS NOTHING. `pour` stages forty
     # grains and declares `group_fraction: 1.0` on purpose -- one grain of
     # forty hovering is perfectly annotated and impossible to see, so its
-    # families act on the whole medium. Adding five more bodies to that, and
-    # then overwriting its fraction with 2/40, would replace a deliberate
-    # choice with this condition's default and make the violation invisible.
+    # families act on the whole medium. Adding more bodies to that, and then
+    # overwriting its fraction, would replace a deliberate choice with this
+    # condition's default and make the violation invisible.
     spec.notes["n_peers_placed"] = 0
     if spec.notes.get("group_fraction"):
         spec.notes["n_actors"] = len(live)
         return
-    want = max(0, int(MULTI_ACTORS) - len(live))
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xBEEF + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
+    # HOW MANY, drawn per clip. A fixed count is a cue: five objects at every
+    # seed teaches the count rather than the physics, and the condition is
+    # about there being SEVERAL, not about there being five.
+    n_want = int(rng.randint(MULTI_ACTORS[0], MULTI_ACTORS[1] + 1))
+    want = max(0, n_want - len(live))
     floor = next((b for b in spec.bodies if b.role == "floor"), None)
     top = 0.0 if floor is None else (
         float(floor.position[2] + floor.scale[2]) if floor.kind == "cube"
@@ -712,13 +722,23 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     placed = C.distractors(spec, want, rng, floor_top=top, role="actor")
     spec.bodies.extend(placed)
     spec.notes["n_peers_placed"] = len(placed)
-    # WHAT ACTUALLY LANDED decides the fraction, not what was asked for. The
+    # WHAT ACTUALLY LANDED decides the count, not what was asked for. The
     # placement constraints can leave no room, and a scene that ended up with
-    # three actors must not claim two-of-five.
+    # three actors must not claim eight.
     total = len(live) + len(placed)
-    if total >= 4:
-        spec.notes["group_fraction"] = float(MULTI_CULPRITS) / float(total)
     spec.notes["n_actors"] = total
+    if total < 3:
+        return                       # too few to pose the question at all
+    # HOW MANY VIOLATE, also drawn per clip: at least two, and never all of
+    # them, so there is always a lawful body to contrast against.
+    lo = min(MULTI_CULPRIT_RANGE[0], total - MULTI_CULPRIT_RANGE[1])
+    hi = total - MULTI_CULPRIT_RANGE[1]
+    m = int(rng.randint(lo, hi + 1)) if hi > lo else hi
+    spec.notes["n_culprits_wanted"] = m
+    # `_group` takes a FRACTION and rounds, so the fraction is chosen to round
+    # back to exactly `m` -- storing the count directly would mean teaching
+    # every injector a second way to ask the same question.
+    spec.notes["group_fraction"] = float(m) / float(total)
 
 
 def _add_distractors(spec: SceneSpec, seed: int) -> None:
@@ -830,16 +850,36 @@ def _flatten_materials(spec: SceneSpec) -> None:
 #: at all. A run spends clips on difficulty only once it is long enough to
 #: afford them.
 #:
-#: Marginals over the cycle: camera 20%, distractors 10%, multi 20%.
+#: `multi` GETS TWO SLOTS, and the reason is variance rather than importance.
+#: The other conditions are deterministic -- a camera move is a camera move,
+#: six distractors are six distractors -- while `multi` redraws both its object
+#: count and its culprit count on every clip, so one sample in ten covers a far
+#: smaller share of what it can produce. Five plain clips still leave the
+#: baseline the largest stratum by a wide margin.
+#:
+#: Marginals over the cycle: camera 20%, distractors 10%, multi 30%.
+#:
+#: This tuple IS the policy -- change it and everything follows, including the
+#: metadata, the card and the cost estimate. Nothing reads the shares from
+#: anywhere else.
 CONDITION_CYCLE = ("standard", "standard", "standard", "standard", "standard",
-                   "standard", "camera", "distractors", "multi",
+                   "camera", "distractors", "multi", "multi",
                    "camera+multi")
 
-#: How many actors a `multi` scene has, and how many of them violate. A lawful
-#: MAJORITY on purpose: the task is "which of these objects is wrong", and a
-#: scene where most things misbehave answers it before it is asked.
-MULTI_ACTORS = 5
-MULTI_CULPRITS = 2
+#: How many actors a `multi` scene holds, drawn per clip. Randomised rather
+#: than fixed, so the condition varies in the thing it is about: a five-object
+#: scene at every seed teaches a model the count.
+MULTI_ACTORS = (3, 10)
+
+#: How many of them violate: at least two -- one culprit is what `standard`
+#: already is -- and at most all but one, so there is always a lawful object to
+#: contrast against.
+#:
+#: Note what the upper bound allows: at N = 3 the only legal draw is M = 2, a
+#: violating MAJORITY. That is deliberate and it is your call; it makes the
+#: small scenes the hardest ones, because "most things are wrong" is a
+#: different perceptual claim from "one thing is wrong".
+MULTI_CULPRIT_RANGE = (2, 1)   # (minimum, how many lawful bodies to keep)
 
 
 def condition_for(variant: int) -> str:

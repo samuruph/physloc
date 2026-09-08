@@ -558,7 +558,14 @@ class Injector:
             if chosen:
                 return chosen
         frac = float(spec.notes.get("group_fraction") or 0.0)
-        if frac <= 0.0 or len(live) < 4:
+        # TWO, not four. The threshold used to be four live actors, from when
+        # the only caller was `pour` asking for a share of forty grains -- but
+        # the `multi` condition draws its object count from three upward, and
+        # at N = 3 the guard silently handed back ONE culprit on a clip whose
+        # metadata said two. A fraction is only ever set deliberately (by a
+        # scenario, or by the condition), so where one exists it should be
+        # honoured rather than second-guessed.
+        if frac <= 0.0 or len(live) < 2:
             return live[:1]
         k = int(np.clip(round(frac * len(live)), 2, len(live)))
         picks = self._instance_rng(spec).choice(len(live), size=k, replace=False)

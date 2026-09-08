@@ -16,7 +16,7 @@ import pytest
 from physloc import injectors, scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios.base import (CONDITION_CYCLE, MULTI_ACTORS,
-                                    MULTI_CULPRITS, condition_for,
+                                    MULTI_CULPRIT_RANGE, condition_for,
                                     condition_share, has_distractors,
                                     has_moving_camera, has_multi)
 
@@ -36,18 +36,21 @@ def _actors(spec):
 
 
 def test_the_cycle_is_the_agreed_shape():
-    """Six plain clips, then one of each condition, then the one combination
-    worth having. Marginals: camera 20%, distractors 10%, multi 20%."""
+    """Marginals: camera 20%, distractors 10%, multi 30%.
+
+    `multi` carries two slots because it is the only RANDOMISED condition --
+    it redraws both its object count and its culprit count per clip, so one
+    sample in ten covers a far smaller share of what it can produce.
+    """
     assert PERIOD == 10
-    assert condition_share("standard") == pytest.approx(0.6)
-    assert condition_share("camera") == pytest.approx(0.1)
-    assert condition_share("distractors") == pytest.approx(0.1)
-    assert condition_share("multi") == pytest.approx(0.1)
-    assert condition_share("camera+multi") == pytest.approx(0.1)
+    assert condition_share("standard") == pytest.approx(0.5)
     moving = sum(1 for c in CONDITION_CYCLE if "camera" in c)
     multi = sum(1 for c in CONDITION_CYCLE if "multi" in c)
     assert moving / PERIOD == pytest.approx(0.2), "camera marginal"
-    assert multi / PERIOD == pytest.approx(0.2), "multi marginal"
+    assert multi / PERIOD == pytest.approx(0.3), "multi marginal"
+    assert condition_share("standard") > max(
+        condition_share(c) for c in set(CONDITION_CYCLE) if c != "standard"), (
+        "the baseline must stay the largest single stratum")
 
 
 def test_the_plain_clips_come_first():
@@ -57,7 +60,7 @@ def test_the_plain_clips_come_first():
     first_hard = min(v for v in range(PERIOD)
                      if condition_for(v) != "standard")
     assert all(condition_for(v) == "standard" for v in range(first_hard))
-    assert first_hard >= 5, "too few plain clips before the first hard one"
+    assert first_hard >= 4, "too few plain clips before the first hard one"
 
 
 def test_distractors_and_multi_are_never_combined():
@@ -94,7 +97,7 @@ def test_each_condition_builds_what_it_claims(name):
         # forty grains and declares its own `group_fraction`. What `multi`
         # promises is several actors with a minority violating, not that this
         # particular helper placed them.
-        crowd = len(_actors(spec)) >= MULTI_ACTORS
+        crowd = len(_actors(spec)) >= MULTI_ACTORS[0]
         if has_multi(v):
             assert crowd, (name, v, cond, "too few actors")
         else:
@@ -102,32 +105,46 @@ def test_each_condition_builds_what_it_claims(name):
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_multi_gives_a_lawful_majority(name):
-    """N actors, M of them violating, with M < N/2.
+def test_multi_draws_both_of_its_counts(name):
+    """N actors and M culprits, both randomised, both inside their bounds.
 
-    The point of the condition. With one actor, "which object is wrong" has a
-    trivial answer -- there is only one candidate -- so a model can score by
-    detecting that SOMETHING is off. A lawful majority makes the clip ask
-    *which*, and a scene where most things misbehave answers it before it is
-    asked.
+    The point of the condition, and of randomising it. A fixed count is a cue:
+    a model that learns "five objects, two wrong" is reading the layout rather
+    than the physics. At least two culprits, because one is what `standard`
+    already is, and at most N-1 so there is always a lawful body to contrast
+    against -- which is the whole task.
     """
-    v = next(x for x in range(PERIOD) if condition_for(x) == "multi")
-    spec = _spec(name, v)
-    n = len(_actors(spec))
-    assert n >= 4, "%s: %d actors is too few for _group to engage" % (name, n)
-    assert n == spec.notes.get("n_actors"), name
-    frac = spec.notes.get("group_fraction")
-    assert frac is not None, name
-    m = int(round(frac * n))
-    if frac >= 1.0:
-        # A scenario may declare the WHOLE medium on purpose: `pour`'s families
-        # act on all forty grains, because one hovering grain is perfectly
-        # annotated and impossible to see. That is a considered exception, not
-        # this condition's default.
-        assert m == n, name
-        return
-    assert m == MULTI_CULPRITS, "%s: %d culprits of %d" % (name, m, n)
-    assert m * 2 < n, "%s: %d of %d is not a lawful majority" % (name, m, n)
+    lo_n, hi_n = MULTI_ACTORS
+    seen_n, seen_m = set(), set()
+    for k in range(6):
+        for v in (x for x in range(PERIOD) if has_multi(x)):
+            spec = _spec(name, k * PERIOD + v)
+            n = len(_actors(spec))
+            frac = spec.notes.get("group_fraction")
+            assert n == spec.notes.get("n_actors"), name
+            assert frac is not None, (name, n)
+            m = int(round(frac * n))
+            if frac >= 1.0:
+                # A scenario may declare the WHOLE medium on purpose: `pour`'s
+                # families act on all forty grains, because one hovering grain
+                # is perfectly annotated and impossible to see. A considered
+                # exception, not this condition's default.
+                assert m == n, name
+                continue
+            assert lo_n <= n <= hi_n, "%s: %d actors outside %s" % (
+                name, n, MULTI_ACTORS)
+            assert m >= MULTI_CULPRIT_RANGE[0], (
+                "%s: %d culprit(s) is what `standard` already is" % (name, m))
+            assert m <= n - MULTI_CULPRIT_RANGE[1], (
+                "%s: %d of %d leaves nothing lawful to compare against"
+                % (name, m, n))
+            seen_n.add(n)
+            seen_m.add(m)
+    if seen_n:
+        assert len(seen_n) >= 3, "%s: object count barely varies: %s" % (
+            name, sorted(seen_n))
+        assert len(seen_m) >= 2, "%s: culprit count barely varies: %s" % (
+            name, sorted(seen_m))
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -142,7 +159,7 @@ def test_a_multi_clip_names_more_than_one_culprit(name):
     checked = 0
     for fam in ("support", "friction", "antigravity", "continuity"):
         inj = injectors.get(fam)
-        for variant, want in ((plain, 1), (multi, MULTI_CULPRITS)):
+        for variant in (plain, multi):
             spec = _spec(name, variant)
             traj = mockroll.roll(spec, scenarios.get(name))
             plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
@@ -171,7 +188,7 @@ def test_peers_are_actors_and_distractors_are_not(name):
     spec = _spec(name, multi)
     peers = [b for b in spec.bodies if b.name.startswith("peer_")]
     if not peers:
-        assert len(_actors(spec)) >= MULTI_ACTORS, name   # already a crowd
+        assert len(_actors(spec)) >= MULTI_ACTORS[0], name  # already a crowd
     eligible = {int(b.segmentation_id) for b in _geom.actors(spec)}
     for b in peers:
         assert b.role == "actor"

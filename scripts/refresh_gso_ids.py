@@ -29,11 +29,17 @@ GSO = "gs://kubric-public/assets/GSO/GSO.json"
 #: Squat, convex-ish, roughly isotropic assets. A physics-violation dataset
 #: needs bodies whose lawful motion a viewer can predict -- something that
 #: topples in a way nobody expects reads as the violation.
-MAX_ASPECT = 2.6
+#:
+#: Loosened from 2.6: at that bound only 440 of 1033 assets qualified and the
+#: kept set was dominated by pots and boxes. 3.2 admits shoes, tools and
+#: bottles -- still nothing pole-like -- and roughly doubles what is available.
+MAX_ASPECT = 3.2
 
-#: At most this many assets from any one group. Without a cap the selection
-#: collapses onto whichever family happens to be most isotropic.
-PER_GROUP = 2
+#: At most this many assets from any one group. Raised with the count: the cap
+#: exists to stop the selection collapsing onto whichever family is most
+#: isotropic (thirteen Ecoforms plant pots, on the first attempt), and at a
+#: larger target a cap of two starves the selection instead.
+PER_GROUP = 6
 
 
 def _pyliteral(obj) -> str:
@@ -49,7 +55,7 @@ def _pyliteral(obj) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--count", type=int, default=48)
+    ap.add_argument("--count", type=int, default=160)
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--write", action="store_true")
     a = ap.parse_args()

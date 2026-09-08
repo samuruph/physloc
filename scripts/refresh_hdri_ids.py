@@ -29,6 +29,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true",
                     help="rewrite _hdri.py, dropping ids the manifest lacks")
+    ap.add_argument("--all", action="store_true",
+                    help="take EVERY id the manifest has, not just the curated "
+                         "subset -- an environment map has no geometry to get "
+                         "wrong, so breadth costs nothing")
     a = ap.parse_args()
 
     import kubric as kb
@@ -46,7 +50,17 @@ def main() -> int:
 
     bad = [i for i in HDRI_IDS if i not in live]
     good = [i for i in HDRI_IDS if i in live]
-    if not bad:
+    if a.all:
+        # EVERY environment the manifest has. The curated list was an
+        # indoor/outdoor spread of 44, which is a reasonable shape and a poor
+        # size: a release of thousands of clips reusing 36 backdrops teaches
+        # the backdrops. There is no reason to curate at all here -- unlike a
+        # GSO object, an environment map has no geometry to go wrong, so the
+        # only question is whether it resolves.
+        good = sorted(live)
+        bad = []
+        print("\n--all: taking every id the manifest has (%d)" % len(good))
+    elif not bad:
         print("\nevery curated id resolves. Nothing to do.")
         return 0
 
@@ -56,7 +70,7 @@ def main() -> int:
         print("   %-32s nearest: %s" % (i, ", ".join(near) or "-"))
 
     if not a.write:
-        print("\nRe-run with --write to drop them.")
+        print("\nRe-run with --write to apply.")
         return 1
 
     body = ", ".join('"%s"' % i for i in good)

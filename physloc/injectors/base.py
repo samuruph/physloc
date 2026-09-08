@@ -586,6 +586,57 @@ class Injector:
         picks = self._instance_rng(spec).choice(len(live), size=k, replace=False)
         return [live[i] for i in sorted(int(x) for x in picks)]
 
+    def _medium_event_frame(self, spec, traj, bodies, fallback):
+        """Fire on a MEDIUM while it is still in the air, not once it has piled up.
+
+        A scene of many interchangeable falling bodies has a moment, and it is
+        not "a third of the way in". Measured on `pour` at the debug tier, the
+        grains reach the floor between frames 3 and 8 of 25 -- so every family
+        whose event frame came from a fraction of the clip was intervening on a
+        pile that had already settled. You reported the consequences one by
+        one: `continuity` teleporting grains that were lying on the floor,
+        `newton1_inertia` stopping bodies that had already stopped,
+        `global_gravity` bending gravity for a pile at rest, `newton2_mass`
+        exchanging momentum between two grains in a heap. A pour that
+        misbehaves in flight is visible; a pile that twitches is not.
+
+        Only for a genuine medium -- two bodies or fewer keep whatever moment
+        the family chose, so no single-actor scenario is affected.
+        """
+        if len(bodies) <= 2:
+            return fallback
+        t = _geom.before_medium_lands(spec, traj, bodies)
+        if t is None or not (1 <= t < traj.num_frames - 2):
+            return fallback
+        return int(t)
+
+    @staticmethod
+    def _medium_radius(traj, bodies, t0: int) -> float:
+        """The size of the THING, when the thing is made of many bodies.
+
+        A single actor's bounding radius is the right reference length for a
+        family that acts on a single actor. For a medium it is the wrong one by
+        an order of magnitude -- a pour is a decimetre-scale object made of
+        centimetre-scale grains -- so any displacement written in radii comes
+        out invisible. Returns the RMS spread of the group about its own
+        centroid, floored at the largest member so a two-body group is never
+        smaller than its parts.
+        """
+        idx = []
+        for b in bodies:
+            try:
+                idx.append(traj.index_of(int(b.segmentation_id)))
+            except Exception:                                 # noqa: BLE001
+                continue
+        biggest = max([float(b.bounding_radius) for b in bodies] or [0.1])
+        if len(idx) < 2:
+            return biggest
+        f = int(np.clip(t0, 0, traj.num_frames - 1))
+        p = np.asarray(traj.pos[f, idx, :], np.float64)
+        spread = float(np.sqrt(np.mean(np.sum(
+            (p - p.mean(axis=0)[None, :]) ** 2, axis=1))))
+        return max(biggest, spread)
+
     @staticmethod
     def _all_actors(spec):
         """Every actor, for the families that act on a whole medium rather than

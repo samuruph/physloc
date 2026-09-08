@@ -146,9 +146,21 @@ class _GravityScale(Injector):
         targets = self._choose(spec, traj)
         if len(targets) < self.MIN_BODIES:
             return None
-        t0 = _event_frame(spec, traj, targets[0], traj.num_frames)
+        t0 = self._medium_event_frame(
+            spec, traj, targets,
+            _event_frame(spec, traj, targets[0], traj.num_frames))
         if t0 is None:
             return None
+        # GRAVITY ACTS ON THE WHOLE FALL, so on a medium it fires as soon as
+        # there is a lawful prefix to contradict. `before_medium_lands` is the
+        # right moment for a family that acts at the arrival -- a bounce, a
+        # collision, a floor that stops being solid -- and too late for this
+        # one: measured on `pour`, the grains are already two thirds of the way
+        # down by frame 3, so a weak bin at 0.45 g landed the pile at z = 0.21
+        # against a lawful 0.19. Firing at frame 2 leaves the descent itself to
+        # happen at the wrong rate, which is the only thing there is to see.
+        if len(targets) > 2:
+            t0 = max(1, min(t0, 2))
 
         n_left = traj.num_frames - t0
         n_want = self._window_len(max(2, int(round(self.WINDOW_FRACTION * n_left))),
@@ -388,10 +400,18 @@ class Continuity(Injector):
         actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
-        t0 = _event_frame(spec, traj, actor, traj.num_frames)
+        t0 = self._medium_event_frame(
+            spec, traj, targets, _event_frame(spec, traj, actor,
+                                              traj.num_frames))
         if t0 is None:
             return None
-        radius = float(actor.bounding_radius)
+        # A JUMP THE MEDIUM CAN SHOW. The distance is in radii of the culprit,
+        # which is right for one ball and far too small for forty grains: at
+        # `pour`'s 0.078 m grain, weak came to 0.12 m -- less than the pile is
+        # wide, and it scored 0.000. What a viewer resolves on a medium is the
+        # medium's own size, so the reference length becomes the spread of the
+        # group about its centroid wherever there is a group to measure.
+        radius = self._medium_radius(traj, targets, t0)
         jump_r = self.JUMP_RADII[severity_bin]
         # A FULL HEADING, drawn once per SCENE. Two separate constraints meet
         # here and it is easy to satisfy one by breaking the other:
@@ -437,7 +457,8 @@ class Continuity(Injector):
             magnitude=float(np.linalg.norm(delta)),
             magnitude_unit="m_jump_distance",
             severity_bin=severity_bin,
-            notes={"radius": radius, "jump_radii": jump_r,
+            notes={"radius": float(actor.bounding_radius),
+                   "jump_radii": jump_r, "jump_reference_m": radius,
                    "surface_top": _geom.surface_top(spec, actor)})
 
     simulated = True
@@ -582,7 +603,14 @@ class NonParabolic(Injector):
             return None
 
         radius = float(actor.bounding_radius)
-        amp = self.AMPLITUDE_RADII[severity_bin] * radius
+        # THE SIZE OF THE THING THAT IS SNAKING. On one actor that is its own
+        # radius; on a medium it is the medium's, because a wobble a grain wide
+        # is a wobble nobody sees. Measured on `pour`, the amplitude came to
+        # 0.036--0.108 m against a 0.078 m grain, and the whole pour was
+        # displaced by that one offset in lockstep -- a pile sliding sideways,
+        # not a pile falling wrongly. You reported it as having no effect.
+        scale = self._medium_radius(traj, targets, t0)
+        amp = self.AMPLITUDE_RADII[severity_bin] * scale
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
@@ -592,6 +620,7 @@ class NonParabolic(Injector):
             magnitude=float(amp), magnitude_unit="m_rms_from_parabola",
             severity_bin=severity_bin,
             notes={"radius": radius, "surface_top": top,
+                   "amplitude_reference_m": float(scale),
                    "flight_frames": list(range(int(run[0]), int(run[1]) + 1))})
 
     #: STAGED. A path that is not a parabola requires a FORCE, and a force is
@@ -601,14 +630,29 @@ class NonParabolic(Injector):
     #: it meets, and still carries its neighbours with it if it strikes them.
     simulated = True
 
-    def _offsets(self, spec, plan, n: int):
-        """The lateral offset per frame, in the camera's image plane."""
+    def _offsets(self, spec, plan, n: int, k: int = 0, of: int = 1):
+        """The lateral offset per frame, in the camera's image plane.
+
+        `k` of `of` gives body number `k` its own phase and its own share of
+        the amplitude. Every body used to get the identical curve, which on a
+        medium is not a serpentine at all -- forty grains offset by the same
+        vector on every frame is the pile translating rigidly, and a rigid
+        translation of a falling pile still fits a parabola. You asked for it
+        applied to all the grains at different strengths; this is that.
+
+        Amplitudes run from half the nominal to the full value so the medium
+        spreads as it snakes, and the phases are spread over a full turn so
+        neighbouring grains weave past each other.
+        """
         amp = float(plan.params["amplitude_m"])
         cycles = float(plan.params["cycles"])
+        if of > 1:
+            amp *= 0.5 + 0.5 * ((k * 7 % of) / float(of - 1))
+        lead = 2.0 * np.pi * (k / float(max(of, 1)))
         _, _, right, up = _geom.camera_basis(spec)
         u = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)
         envelope = np.sin(np.pi * u) ** 2
-        phase = 2.0 * np.pi * cycles * u
+        phase = 2.0 * np.pi * cycles * u + lead
         return ((amp * envelope * np.sin(phase))[:, None] * up[None, :]
                 + (0.6 * amp * envelope * np.cos(phase))[:, None]
                 * right[None, :])
@@ -620,33 +664,37 @@ class NonParabolic(Injector):
 
         t0, t1 = plan.windows[0]
         n = t1 - t0 + 1
-        offset = self._offsets(spec, plan, n)
         dt = 1.0 / float(spec.tier.fps)
-        # The force that produces that offset: its second derivative, times the
-        # mass. Differenced twice rather than differentiated analytically so the
-        # staged path and `_apply` describe the same curve.
-        accel = np.zeros_like(offset)
-        accel[1:-1] = (offset[2:] - 2.0 * offset[1:-1] + offset[:-2]) / (dt * dt)
+        ids = [int(i) for i in plan.causal_body_ids]
         targets = []
-        for bid in plan.causal_body_ids:
+        for k, bid in enumerate(ids):
             body = next((b for b in spec.bodies
                          if int(b.segmentation_id) == int(bid)), None)
             if body is None or body.static:
                 continue
             idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
-            if idx is not None:
-                targets.append((idx, float(getattr(body, "mass", 1.0))))
+            if idx is None:
+                continue
+            offset = self._offsets(spec, plan, n, k, len(ids))
+            # The force that produces that offset: its second derivative, times
+            # the mass. Differenced twice rather than differentiated
+            # analytically so the staged path and `_apply` describe the same
+            # curve.
+            accel = np.zeros_like(offset)
+            accel[1:-1] = ((offset[2:] - 2.0 * offset[1:-1] + offset[:-2])
+                           / (dt * dt))
+            targets.append((idx, float(getattr(body, "mass", 1.0)), accel))
         if not targets:
             return ()
 
         def snake(_client, _step, frame):
             if not (t0 <= frame <= t1):
                 return
-            a = accel[min(frame - t0, n - 1)]
-            for idx, mass in targets:
+            f = min(frame - t0, n - 1)
+            for idx, mass, accel in targets:
                 at, _ = pb.getBasePositionAndOrientation(idx)
-                pb.applyExternalForce(idx, -1, (a * mass).tolist(), list(at),
-                                      pb.WORLD_FRAME)
+                pb.applyExternalForce(idx, -1, (accel[f] * mass).tolist(),
+                                      list(at), pb.WORLD_FRAME)
 
         return (snake,)
 
@@ -655,22 +703,18 @@ class NonParabolic(Injector):
         out = self._clone(traj)
         t0, t1 = plan.windows[0]
         n = t1 - t0 + 1
-        amp = float(plan.params["amplitude_m"])
-        cycles = float(plan.params["cycles"])
         top = float(plan.notes["surface_top"])
         radius = float(plan.notes["radius"])
 
-        _, _, right, up = _geom.camera_basis(spec)
         # A Hann envelope holds the offset and its slope at zero on both ends,
         # so the body joins and leaves its lawful arc without a corner and the
-        # frames outside the window stay untouched.
-        u = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)
-        envelope = np.sin(np.pi * u) ** 2
-        phase = 2.0 * np.pi * cycles * u
-        offset = (amp * envelope * np.sin(phase))[:, None] * up[None, :] \
-            + (0.6 * amp * envelope * np.cos(phase))[:, None] * right[None, :]
-
-        for bid in plan.causal_body_ids:
+        # frames outside the window stay untouched. Built per body by
+        # `_offsets`, which is also what the staged path integrates -- the two
+        # must describe the same curve or the mock rollout the tests run on is
+        # testing a different violation.
+        ids = [int(i) for i in plan.causal_body_ids]
+        for k, bid in enumerate(ids):
+            offset = self._offsets(spec, plan, n, k, len(ids))
             bi = traj.index_of(int(bid))
             pos = traj.pos[t0:t1 + 1, bi, :].astype(np.float64) + offset
             pos[:, 2] = np.maximum(pos[:, 2], top + radius)
@@ -731,6 +775,11 @@ class Newton1Inertia(Injector):
         if not moving.size:
             return None                 # nothing to halt: not a cell we can build
         t0 = int(max(moving[0], min(moving[-1], T // 3)))
+        # A pour that stops dead IN MID-AIR is Newton 1 at a volume a viewer
+        # can hear. `T // 3` put it at frame 8 on a `pour` whose grains have
+        # been lying on the floor since frame 7, so the family removed the
+        # velocity of bodies that had none.
+        t0 = self._medium_event_frame(spec, traj, targets, t0)
 
         fraction = float(self.HALT_BY_BIN[severity_bin])
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt

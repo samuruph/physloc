@@ -262,8 +262,16 @@ class Friction(Injector):
     #: one frame is a different family and stays one.
     TRAVEL_BY_BIN = {"weak": 0.70, "medium": 0.50, "strong": 0.32}
     #: Ceilings, so a solved coefficient stays inside what Bullet handles well.
-    MAX_LATERAL = 1.2
-    MAX_ROLLING = 0.40
+    #: Raised from 1.2 / 0.40, which was BINDING and collapsing the ladder: the
+    #: per-bin floor below is `MIN_RATIO_BY_BIN * mu`, so on a surface declared
+    #: at mu = 0.5 medium wanted 1.3 and strong 2.0 and the old ceiling handed
+    #: both of them 1.2 -- two bins, one coefficient, one clip. That is the
+    #: "strengths appear all the same" you saw on `pour`. A coefficient above 1
+    #: is unusual but perfectly ordinary for Bullet; it means the contact grips
+    #: harder than the normal force, which is exactly the claim the family
+    #: makes.
+    MAX_LATERAL = 2.50
+    MAX_ROLLING = 0.60
     #: Floor, as a multiple of the DECLARED coefficient. Whatever the solve
     #: returns, the surface must grip harder than it says it does -- otherwise
     #: the clip depicts the opposite violation from the one it is labelled
@@ -273,7 +281,14 @@ class Friction(Injector):
     #: Per bin, not one number, because on a slope the floor IS the knob: the
     #: stopping-distance solve is below it for every bin there, so a single
     #: floor made weak, medium and strong the same clip three times.
-    MIN_RATIO_BY_BIN = {"weak": 1.6, "medium": 2.6, "strong": 4.0}
+    #: `weak` lowered from 1.6, because on a MEDIUM the floor is what binds and
+    #: 1.6x of a declared 0.5 is already enough grip to lock a pile where it
+    #: lands. Measured on `pour`: the lawful pile spreads to 0.51 m and all
+    #: three bins came out between 0.216 and 0.232 -- the change against the
+    #: valid twin was large and the change *between bins* was not, which is the
+    #: "strengths appear all the same" you saw. At 1.15 the weak bin still
+    #: grips harder than the surface declares, and it still spreads.
+    MIN_RATIO_BY_BIN = {"weak": 1.15, "medium": 2.6, "strong": 4.0}
 
     def strong_residual_reference(self, spec) -> float:
         return 2.0
@@ -309,6 +324,15 @@ class Friction(Injector):
         # predicted and tested against the actual geometry, and if it is hidden
         # the violation fires earlier, until the body comes to rest in view.
         t0 = int(max(moving[0] + 1, min(moving[-1] - 1, T // 3)))
+        # A MEDIUM GRIPS AS IT LANDS. On `pour` the grains are at rest from
+        # frame 7, so a brake applied at frame 7 has nothing left to slow -- and
+        # the three bins picked frames 4, 6 and 6, which is three different
+        # violations wearing one ladder. Catching the pour on the way down means
+        # the grip decides how far the pile spreads when it hits, which is what
+        # friction looks like on a granular medium, and all three bins share the
+        # frame so their magnitudes stay comparable.
+        medium = len(targets) > 2
+        t0 = self._medium_event_frame(spec, traj, targets, t0)
         if not (1 <= t0 < T - 1):
             return None
         # Outward from the preferred moment in BOTH directions. Searching only
@@ -318,7 +342,11 @@ class Friction(Injector):
         # braking later, once the ball is past the screen -- and which of the
         # two a scene needs is not something to decide in advance.
         lo, hi = int(max(1, moving[0] + 1)), int(min(T - 2, moving[-1] - 1))
-        for delta in range(0, max(t0 - lo, hi - t0) + 1):
+        # A medium has already chosen its moment, and it is not a body that can
+        # be parked behind a screen: `pour` has no occluder and the search would
+        # only walk the frame back off the arrival it was picked for.
+        for delta in ([] if medium
+                      else range(0, max(t0 - lo, hi - t0) + 1)):
             for cand in (t0 - delta, t0 + delta):
                 if not (lo <= cand <= hi):
                     continue

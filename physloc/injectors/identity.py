@@ -420,7 +420,13 @@ class Fission(Injector):
     #: where the body was -- so no frustum fit is needed to keep them in shot,
     #: which removes the machinery that was clamping the violation to a
     #: quarter of its nominal strength.
-    SEPARATION_BY_BIN = {"weak": 2.6, "medium": 3.6, "strong": 5.0}
+    #: Widened from 2.6 / 3.6 / 5.0. Those are separations of 0.99 / 1.37 /
+    #: 1.90 m on a `drop` ball -- a factor of 1.9 across the whole ladder, when
+    #: what a viewer reads is roughly the log of the gap. You asked for higher
+    #: changes across the levels; this is a factor of 2.9, and it stays
+    #: self-limiting because each half travels only half the target from where
+    #: the body was.
+    SEPARATION_BY_BIN = {"weak": 2.4, "medium": 4.2, "strong": 7.0}
     #: Bounds on the DEPARTURE SPEED, m/s, so no scene can ask for either an
     #: explosion or a division nobody can see.
     MIN_SPLIT_SPEED = 0.12

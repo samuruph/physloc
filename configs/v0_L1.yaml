@@ -1,0 +1,48 @@
+# ============================================================================
+# v0_L1 -- the published dataset, at ONE rung of the ladder.
+#
+#   python -m physloc.cli taxonomy --config v0_L1    # PRICE IT FIRST
+#   python -m physloc.cli generate --config v0_L1
+#   python -m physloc.cli validate out/physloc_v0_L1
+#   python -m physloc.cli export   out/physloc_v0_L1 --push-to <user>/physloc-l1
+#
+# L1 adds materials.
+#
+# Wood, steel, rubber and four more, whose appearance and DENSITY agree,
+# so a heavy-looking object is heavy. Mass becomes `density x volume`, where
+# L0 gives everything one shared density and lets mass follow size alone.
+#
+# WHY A CONFIG PER RUNG. `v0_release` walks the whole ladder in one run and is
+# the thing to publish; these exist for when you want one rung on its own --
+# to spread a release across machines a rung at a time, to regenerate a single
+# rung after a fix, or to ship a smaller dataset that is only ever L0.
+#
+# Each writes to its OWN outdir, so rungs generated separately can simply be
+# merged: the clip tree is keyed by rung already
+# (`clips/<release>/L1/<scenario>/<seed>/`) and every rung draws from its own
+# seed block, so nothing collides.
+#
+# The five difficulty conditions apply here exactly as they do in a full run --
+# they are not rungs, and every rung carries all of them.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 20260824
+  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s
+  complexity: L1
+  severity: all        # the full weak/medium/strong ladder
+  # THE SHARE THIS RUNG WOULD GET IN A FULL RUN, so the four configs PARTITION
+  # `v0_release` rather than each being a release of their own: generating all
+  # four gives exactly what `--complexity all --variants 3` gives, and
+  # generating one gives exactly that rung's part of it.
+  #
+  # `variants_at("L1", 3)` = 2, from the rung's declared share.
+  variants: 2
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_v0_L1
+  outdir: out/physloc_v0_L1

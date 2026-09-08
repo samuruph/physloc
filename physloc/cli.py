@@ -137,14 +137,15 @@ def _print_release_size(cells, a) -> None:
         # the `distractors` and `multi` conditions carry any, so the average
         # clip pays their combined share of the cost.
         if cx is not None:
-            from .scenarios.base import (MULTI_ACTORS, condition_share)
+            from .scenarios.base import EXTRA_OBJECTS, condition_share
 
-            extra = (DISTRACTOR_COST * cx.n_distractors
-                     * condition_share("distractors")
-                     + DISTRACTOR_COST * max(0, MULTI_ACTORS - 1)
-                     * (condition_share("multi")
-                        + condition_share("camera+multi")))
-            rate *= 1.0 + extra
+            # Both crowd conditions draw their count from the same range, so
+            # the average clip pays the mean count times their combined share.
+            mean_extra = 0.5 * (EXTRA_OBJECTS[0] + EXTRA_OBJECTS[1])
+            crowded = (condition_share("distractors")
+                       + condition_share("multi")
+                       + condition_share("camera+multi"))
+            rate *= 1.0 + DISTRACTOR_COST * mean_extra * crowded
         inv = len(cells) * n_bins * n_v
         val = len(scenarios) * n_v      # one per scenario+seed, shared
         invalid += inv
@@ -625,6 +626,77 @@ def cmd_sheet(a) -> int:
     return 0
 
 
+def cmd_viz(a) -> int:
+    """Every grid and sheet for a finished release, in ONE flat directory.
+
+    `grid` and `sheet` each take one pair directory and write beside the clips,
+    which is right for a single look and wrong for reviewing a run: a
+    ten-variant sweep scatters its videos across twenty folders four levels
+    deep, so the files you want to compare are the ones furthest apart.
+
+    This walks the release and collects them under one directory, named so the
+    sort order is the reading order:
+
+        <level>_<scenario>_<seed>_<family>.mp4      one family, all severities
+        <level>_<scenario>_<seed>_sheet_<bin>.mp4   one scene, all families
+
+    Nothing is re-rendered -- it reads the clips already on disk, so it costs
+    seconds and can be run again after any change to the visualisers.
+    """
+    import glob
+
+    from .viz.grid import build, sheet
+
+    root = a.root
+    outdir = a.outdir or os.path.join(root, "viz")
+    os.makedirs(outdir, exist_ok=True)
+    pairs = sorted(
+        d for d in glob.glob(os.path.join(root, "clips", "*", "*", "*", "*"))
+        if os.path.isdir(d) and glob.glob(os.path.join(d, "invalid_*")))
+    if not pairs:
+        print("no clip pairs under %s" % root, file=sys.stderr)
+        return 2
+
+    want = {x.strip() for x in (a.severity or "").split(",") if x.strip()}
+    made, failed = [], []
+    for pair in pairs:
+        seed = os.path.basename(pair)
+        scenario = os.path.basename(os.path.dirname(pair))
+        level = os.path.basename(os.path.dirname(os.path.dirname(pair)))
+        stem = "%s_%s_%s" % (level, scenario, seed)
+        cells = sorted(os.path.basename(d)
+                       for d in glob.glob(os.path.join(pair, "invalid_*")))
+        fams, bins = set(), set()
+        for c in cells:
+            body = c[len("invalid_"):]
+            fam, _, sev = body.rpartition("_")
+            if fam:
+                fams.add(fam)
+                bins.add(sev)
+        for fam in sorted(fams):
+            out = os.path.join(outdir, "%s_%s.mp4" % (stem, fam))
+            try:
+                build(pair, fam, out)
+                made.append(out)
+            except Exception as exc:                           # noqa: BLE001
+                failed.append((out, repr(exc)))
+        for sev in sorted(bins & want if want else bins):
+            out = os.path.join(outdir, "%s_sheet_%s.mp4" % (stem, sev))
+            try:
+                sheet(pair, out, severity=sev)
+                made.append(out)
+            except Exception as exc:                           # noqa: BLE001
+                failed.append((out, repr(exc)))
+        print("  %-34s %d famil%s, %d bin(s)"
+              % (stem, len(fams), "y" if len(fams) == 1 else "ies", len(bins)),
+              flush=True)
+
+    print("\n%d video(s) -> %s" % (len(made), outdir))
+    for out, why in failed:
+        print("  !! %s: %s" % (os.path.basename(out), why), file=sys.stderr)
+    return 0
+
+
 def cmd_coverage(a) -> int:
     from .viz.grid import coverage
     print(json.dumps(coverage(a.root, a.out, severity=a.severity), default=str))
@@ -872,6 +944,16 @@ def _build(suppress: bool = False):
                    help="L0..L3 -- see README section 8. L0-L1 are built.")
     p.add_argument("--scenario", help="restrict to one scenario")
     p.set_defaults(fn=cmd_randomisation)
+
+    p = add_parser("viz",
+                   help="every grid and sheet for a release, in one folder")
+    p.add_argument("root", nargs="?", default="out/release")
+    p.add_argument("--outdir",
+                   help="where to collect them (default: <root>/viz)")
+    p.add_argument("--severity",
+                   help="only these bins for the sheets, e.g. weak,strong "
+                        "(default: every bin the release contains)")
+    p.set_defaults(fn=cmd_viz)
 
     p = add_parser("audit",
                    help="cells whose violation is not visible")

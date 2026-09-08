@@ -7,6 +7,13 @@
 #   bash scripts/run.sh review_conditions     # every difficulty condition    ~5 min
 #   bash scripts/run.sh review_ladder         # the whole ladder in proportion
 #   bash scripts/run.sh v0_release            # the published dataset
+#   bash scripts/run.sh v0_L2                 # ...or one rung of it at a time
+#
+# v0_L0..v0_L3 PARTITION v0_release: each carries the variants that rung would
+# get in a full run, so the four together produce exactly what the whole-ladder
+# config produces. Generate them on separate machines and merge the trees --
+# nothing collides, because the clip path is keyed by rung and each rung draws
+# from its own seed block.
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
 #   # generate, package AND publish in one go:
@@ -26,7 +33,7 @@
 #   bash scripts/run.sh review_L0    # baseline: flat colours, one density
 #   bash scripts/run.sh review_L1    # + materials, so mass is visible
 #   bash scripts/run.sh review_L2    # + HDRI environment
-#   bash scripts/run.sh review_L3    # + GSO objects                (NOT BUILT)
+#   bash scripts/run.sh review_L3    # + GSO objects, real 3D scans
 #
 # DIFFICULTY CONDITIONS ARE NOT RUNGS. Every clip carries one of five, applied
 # inside every rung, on a ten-variant cycle: six `standard`, then one each of
@@ -34,6 +41,11 @@
 # you want to see them -- the plain clips come first, so a shorter run is
 # entirely `standard`, which is the intended behaviour and useless for checking
 # this axis. `review_conditions` is exactly that run.
+#
+# `distractors` and `multi` both add 3-10 extra objects, some moving and some
+# still. They differ in how many bodies get INVALID PHYSICS: exactly one under
+# `distractors`, and 2..N-1 under `multi`. Only the second asks "which of these
+# is wrong".
 #
 #   PHYSLOC_CAMERA_MOTION=orbit bash scripts/run.sh review --scenario drop
 #
@@ -98,20 +110,16 @@ for BIN in $BINS; do
       --out "$REL/coverage_$BIN.mp4" || true
 done
 
-echo "== sheets: every family of a scenario, every annotation, in one frame =="
-for PAIR in $(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d | sort); do
-  for BIN in $BINS; do
-    $PV sheet "$PAIR" --severity "$BIN" || true
-  done
-done
-
-echo "== grids: the valid clip beside every severity of each family =="
-for PAIR in $(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d | sort); do
-  FAMS=$(ls "$PAIR" | sed -n 's/^invalid_\(.*\)_\(weak\|medium\|strong\)$/\1/p' | sort -u)
-  for FAM in $FAMS; do
-    $PV grid "$PAIR" --family "$FAM" || true
-  done
-done
+# Grids and sheets, collected into ONE folder rather than written beside the
+# clips they came from. A twenty-pair run scatters them four levels deep across
+# twenty directories, which puts the videos you most want to compare furthest
+# apart. `viz` names them `<level>_<scenario>_<seed>_<family>.mp4` so the sort
+# order is the reading order.
+#
+# Re-runnable on its own, against a finished run, without re-rendering:
+#   python -m physloc.cli viz out/review_conditions --outdir out/inspect
+echo "== grids and sheets -> $REL/viz =="
+$PV viz "$REL" || true
 
 echo "== randomisation: is the sampler actually varying? (renders nothing) =="
 $PV randomisation --seeds 24 || true

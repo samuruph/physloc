@@ -74,10 +74,19 @@ publication. Nothing has been published yet.
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
-  liquid does not fit the pose-based seam. `pour` (40 grains at the debug tier, 96 above)
+  liquid does not fit the pose-based seam. `pour` (80 grains at the debug tier, 176 above)
   is the v0
   stand-in and is labelled `physics_medium: "granular"` — never call it fluid. True fluid and
   cloth are Phase 3.
+
+  **The count and the box are ONE decision, and the quantity that matters is how many
+  grains deep the medium settles.** Forty grains in a 1.64 m box covered under a third of
+  the floor and settled exactly one grain deep — measured, every grain ended at z = 0.073 —
+  and a medium with no interior is one `newton2_mass` cannot stratify and one `friction`
+  cannot shape. Eighty grains in a 0.68 m box settle about four deep. Grains also carry
+  `rolling_friction`, without which they are frictionless rollers with no angle of repose
+  and no pile forms however narrowly they are poured; Kubric's constructors have no argument
+  for it, so `render.worker` applies it through `changeDynamics`.
 - **CPU rendering, upstream image, unchanged.** GPU/OptiX caps at ~1.37× (only 26% of frame
   time is sampling); clip-level parallelism measures **2.50× at four workers** and flattens
   after that — eight buys 7% more. Do not build a GPU image without a new measurement.

@@ -21,7 +21,6 @@ from __future__ import annotations
 from .. import camera as cam
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -124,7 +123,6 @@ class BarrierPass(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,
                    "wall_id": self.SEG_WALL, "actor_kind": kind,
                    "family_targets": {"solidity": [self.SEG_BALL]}})

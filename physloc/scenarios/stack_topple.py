@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -67,7 +66,6 @@ class StackTopple(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.7)),
             camera_position=(3.4, -4.8, 2.0), camera_look_at=(0.0, 0.0, 0.8),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"half_extent": half, "lean_per_level": lean,
                    "stack_ids": [self.SEG_BASE, self.SEG_MID, self.SEG_TOP]})
 

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -97,7 +96,6 @@ class Pour(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
             camera_position=(1.7, -3.2, 3.0), camera_look_at=(0.0, 0.0, 0.15),
             floor_level=0.0, complexity=complexity, physics_medium="granular",
-            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,
                    "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],

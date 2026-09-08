@@ -221,13 +221,13 @@ class Complexity:
     #: baseline and only a long one starts spending clips on realism. Naming a
     #: level explicitly (`--complexity L2`) overrides that.
     share: float
-    #: Fraction of THIS LEVEL's clips that move the camera, and that carry
-    #: distractors. Orthogonal to the ladder and to each other: see the note on
-    #: `COMPLEXITY` for why these are ratios rather than rungs.
-    camera_share: float
-    distractor_share: float
-    #: How many distractors a clip gets WHEN it gets them. A quantity, not an
-    #: axis.
+    #: May a clip at this rung move its camera at all? WHICH clips do is not a
+    #: property of the rung -- it is the `CONDITION_CYCLE`, which applies
+    #: identically at every level. This is only an off switch, for a rung whose
+    #: framing cannot survive a moving camera.
+    camera_moves: bool
+    #: How many distractors a clip gets WHEN its condition calls for them, and
+    #: how many actors a `multi` clip holds. Quantities, not axes.
     n_distractors: int
     implemented: bool
 
@@ -237,14 +237,8 @@ class Complexity:
                 "materials": self.materials,
                 "motion_blur": self.motion_blur,
                 "share": self.share,
-                "camera_share": self.camera_share,
-                "distractor_share": self.distractor_share,
+                "camera_moves": self.camera_moves,
                 "n_distractors": self.n_distractors}
-
-    @property
-    def camera_moves(self) -> bool:
-        """Whether any clip at this level may move its camera."""
-        return self.camera_share > 0.0
 
 
 #: THE LADDER IS SCENE REALISM. Four rungs, each the one below it plus one step
@@ -262,12 +256,11 @@ class Complexity:
 #: happened to draw a camera move. And making them rungs forced a choice nobody
 #: wants -- either every realistic clip moves its camera, or none does.
 #:
-#: They are ORTHOGONAL AXES with declared ratios, applied inside every level:
-#: `camera_share` of a level's clips move, `distractor_share` carry clutter, and
-#: the two are independent. So the dataset answers "how much does clutter cost
-#: at each realism level" as well as "how much does realism cost", and the
-#: overall share of moving-camera clips is one number you set rather than an
-#: artefact of how the ladder was climbed.
+#: They are DIFFICULTY CONDITIONS, one per clip, applied identically inside
+#: every rung -- see `CONDITION_CYCLE`. So the dataset answers "how much does
+#: clutter cost at each realism level" as well as "how much does realism cost",
+#: and the share of each condition is a number you set rather than an artefact
+#: of how the ladder was climbed.
 #:
 #: SHARES FALL AS REALISM RISES, for two reasons. The baseline is what everything
 #: else is compared against, so it should be the largest stratum; and an HDRI
@@ -275,11 +268,11 @@ class Complexity:
 #: expensive levels are also the ones a fixed budget can afford least of.
 #: Normalised, the four come to 50% / 25% / 15% / 10% of a full generation.
 COMPLEXITY: Dict[str, Complexity] = {
-    #                  bg      actors      mat   blur  share  cam  dist  n  built
-    "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, 0.20, 0.30, 6, True),
-    "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, 0.20, 0.30, 6, True),
-    "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, 0.20, 0.30, 6, False),
-    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, 0.20, 0.30, 12, False),
+    #                  bg      actors      mat   blur  share  cam    n  built
+    "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, True,  6, True),
+    "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, True,  6, True),
+    "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, True,  6, True),
+    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, True, 12, False),
 }
 DEFAULT_COMPLEXITY = "L0"
 
@@ -353,6 +346,10 @@ class BodySpec:
     # once the body has joined the scene, and only the renderer observes
     # `scale`, so the physics never sees it.
     render_scale: Optional[Tuple[float, float, float]] = None
+    #: Which scanned asset this body IS, when `kind == "gso"`. The id keys
+    #: `_gso.GSO_ASSETS`, which carries the mesh bounds the host needs and the
+    #: licence every asset is required to ship.
+    asset_id: Optional[str] = None
 
     @property
     def draw_scale(self) -> Tuple[float, float, float]:
@@ -360,17 +357,47 @@ class BodySpec:
 
     @property
     def bounding_radius(self) -> float:
-        """A CONSERVATIVE radius: `scale` is the mesh's scale factor, and no
-        KuBasic mesh reaches 1.0 in its own coordinates, so this over-estimates
-        for a cylinder, cone or torus. Deliberately left that way -- every
-        caller is a clearance or framing margin, where erring large is safe.
-        Anything that needs the real extent wants `extents` below."""
+        """A CONSERVATIVE radius, in METRES.
+
+        For a primitive that is `max(scale)`: `scale` is already a length there,
+        and since no KuBasic mesh reaches 1.0 in its own coordinates this
+        over-estimates for a cylinder, cone or torus. Deliberately left that
+        way -- every caller is a clearance or framing margin, where erring
+        large is safe.
+
+        For a GSO asset it CANNOT be `scale`. Following MOVi, a scanned object
+        is normalised -- `scale = target / longest mesh axis` -- so `scale` is a
+        unitless factor that says nothing about how big the thing is drawn: a
+        30 mm toy block scaled to 0.4 m carries `scale = 13`. Its real
+        half-extent is the answer, and it is still an over-estimate of the
+        radius in any direction but the longest.
+        """
+        if self.kind == "gso":
+            return float(max(self.extents))
         return float(max(self.scale))
+
+    @property
+    def mesh_bounds(self) -> Tuple[Tuple[float, float, float],
+                                   Tuple[float, float, float]]:
+        """The body's own mesh extent, before `scale`.
+
+        A primitive's comes from `KIND_BOUNDS`; a GSO asset's comes from the
+        baked manifest, because a scanned object has whatever shape it has and
+        the host has no container to ask.
+        """
+        if self.kind == "gso" and self.asset_id:
+            from ._gso import GSO_ASSETS
+
+            entry = GSO_ASSETS.get(self.asset_id)
+            if entry is not None:
+                lo, hi = entry["bounds"]
+                return tuple(lo), tuple(hi)
+        return KIND_BOUNDS.get(self.kind, KIND_BOUNDS["sphere"])
 
     @property
     def extents(self) -> Tuple[float, float, float]:
         """Half-extents in the body's own frame, as DRAWN."""
-        lo, hi = KIND_BOUNDS.get(self.kind, KIND_BOUNDS["sphere"])
+        lo, hi = self.mesh_bounds
         return tuple(float(s) * (float(h) - float(l)) / 2.0
                      for s, l, h in zip(self.draw_scale, lo, hi))
 
@@ -597,17 +624,109 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
                                    rng.uniform(-1.0, 1.0, size=3) * 0.9))
     _flatten_materials(spec)
     _add_distractors(spec, seed)
+    _add_peers(spec, seed)
     _recolour_scenery(spec, seed)
+    _pick_hdri(spec, seed)
     _maybe_move_camera(spec, seed)
     return spec
+
+
+def _pick_hdri(spec: SceneSpec, seed: int) -> None:
+    """Choose the environment map, from L2 up.
+
+    Here rather than in each scenario for the reason every other level-wide
+    property is here: it was copied into all THIRTEEN of them, identically, and
+    a property of the rung that lives in thirteen files is a property that will
+    eventually differ in one of them.
+
+    Its own salted stream, so turning the level up cannot shift a physics draw
+    -- the same rule `appearance_rng` exists for, and the exact bug it was
+    written after: `pick_hdri(rng)` once drew from the physics stream, and
+    because it only fires at the realistic level the extra draw shifted every
+    physics value after it.
+    """
+    from ._common import appearance_rng
+    from ._hdri import pick as pick_hdri
+
+    if COMPLEXITY[spec.complexity].background != "hdri":
+        spec.hdri_id = None
+        return
+    # SALTED BY SCENARIO, like every other appearance draw. Salted by the bare
+    # word "hdri" -- which is what all thirteen copies did -- every scenario
+    # picks the same environment on a given seed, and a release ships one
+    # backdrop per seed repeated thirteen times. Measured: seed 777 gave
+    # `killesberg_park` to all thirteen.
+    spec.hdri_id = pick_hdri(appearance_rng(seed, spec.scenario + "|hdri"))
+
+
+def _add_peers(spec: SceneSpec, seed: int) -> None:
+    """The `multi` condition: several actors, only some of them violating.
+
+    The hard version of the task. With one actor, "which object is wrong" has a
+    trivial answer -- there is only one object it could be -- so a model can
+    score by detecting that SOMETHING is off and pointing at the only candidate.
+    With `MULTI_ACTORS` bodies behaving lawfully except for `MULTI_CULPRITS` of
+    them, the clip asks *which*, and a spatial annotation finally has to be
+    earned rather than inferred.
+
+    A LAWFUL MAJORITY, deliberately. A scene where most things misbehave
+    answers the question before it is asked, and it also stops looking like
+    physics: the eye reads "everything is broken" as a render fault rather than
+    as two objects doing something impossible among three that are fine.
+
+    Reuses the distractor placer with `role="actor"` -- see `_common.distractors`.
+    The extras are then ordinary actors: `_geom.actors` returns them, every
+    injector's `_group` can pick them, and `group_fraction` decides how many
+    are culprits. `_group` clamps its pick to at least two and needs at least
+    four live actors to engage at all, which `MULTI_ACTORS` satisfies.
+
+    Its own salted stream, so a `multi` clip's scenario draws are the same ones
+    a `standard` clip of that scenario would have made.
+    """
+    import zlib
+
+    from . import _common as C
+
+    if not has_multi(spec.variant):
+        spec.notes["n_peers_placed"] = 0
+        return
+    live = [b for b in spec.bodies if b.role == "actor" and not b.dormant]
+    # A SCENARIO THAT IS ALREADY A CROWD NEEDS NOTHING. `pour` stages forty
+    # grains and declares `group_fraction: 1.0` on purpose -- one grain of
+    # forty hovering is perfectly annotated and impossible to see, so its
+    # families act on the whole medium. Adding five more bodies to that, and
+    # then overwriting its fraction with 2/40, would replace a deliberate
+    # choice with this condition's default and make the violation invisible.
+    spec.notes["n_peers_placed"] = 0
+    if spec.notes.get("group_fraction"):
+        spec.notes["n_actors"] = len(live)
+        return
+    want = max(0, int(MULTI_ACTORS) - len(live))
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0xBEEF + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    floor = next((b for b in spec.bodies if b.role == "floor"), None)
+    top = 0.0 if floor is None else (
+        float(floor.position[2] + floor.scale[2]) if floor.kind == "cube"
+        else float(spec.floor_level))
+    placed = C.distractors(spec, want, rng, floor_top=top, role="actor")
+    spec.bodies.extend(placed)
+    spec.notes["n_peers_placed"] = len(placed)
+    # WHAT ACTUALLY LANDED decides the fraction, not what was asked for. The
+    # placement constraints can leave no room, and a scene that ended up with
+    # three actors must not claim two-of-five.
+    total = len(live) + len(placed)
+    if total >= 4:
+        spec.notes["group_fraction"] = float(MULTI_CULPRITS) / float(total)
+    spec.notes["n_actors"] = total
 
 
 def _add_distractors(spec: SceneSpec, seed: int) -> None:
     """Populate the scene with bodies that take no part in the violation.
 
-    On `distractor_share` of every level's clips -- an orthogonal axis, not a
-    rung, so "what does clutter cost" is answerable at each realism level
-    rather than only at the top of the ladder. See `COMPLEXITY`.
+    On the clips whose CONDITION calls for them -- not a rung, so "what does
+    clutter cost" is answerable at each realism level rather than only at the
+    top of the ladder. See `CONDITION_CYCLE`.
 
     Added here rather than in each scenario because the placement rule is a
     property of the LEVEL, and because it needs the finished scene -- where the
@@ -624,7 +743,7 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
 
     cx = COMPLEXITY[spec.complexity]
     n = cx.n_distractors
-    if not n or not stratify(spec.variant, cx.distractor_share):
+    if not n or not has_distractors(spec.variant):
         # Recorded as zero rather than left absent: a clip with no distractors
         # is a fact about that clip, and a reader filtering on the axis needs
         # both sides of it.
@@ -680,39 +799,69 @@ def _flatten_materials(spec: SceneSpec) -> None:
         b.material = None
 
 
-def stratify(variant: int, share: float) -> bool:
-    """Does variant `variant` carry an axis that should be on for `share` of them?
+#: THE CONDITION EACH VARIANT CARRIES, as a cycle over variant index.
+#:
+#: Camera motion, distractors and multiple culprits are three ways to make a
+#: clip harder, and this table says which combinations the dataset actually
+#: contains and in what proportion. Read down the cycle: six plain clips, then
+#: one of each condition, then the one combination worth having.
+#:
+#:   standard       static camera, one culprit, nothing else in shot
+#:   camera         the camera moves
+#:   distractors    extra bodies that take NO part in the physics
+#:   multi          extra bodies that DO -- N actors, M of them violating
+#:   camera+multi   both
+#:
+#: **Named cells, not independent coin flips.** Independent ratios were the
+#: first design and they blur the thing a benchmark reports: a "moving camera"
+#: clip might also carry clutter, so the marginal comparison mixes two effects
+#: and the per-condition counts are only exact in expectation. One condition
+#: per clip makes every count exact and every comparison against `standard`
+#: clean.
+#:
+#: **Distractors and multi are alternatives, not a pair.** They are the same
+#: placement machinery -- extra bodies, cleared of the action and inside the
+#: frame -- differing only in whether the extras take part. A scene with both
+#: asks the viewer to sort inert clutter from lawful peers from culprits, which
+#: is three distinctions where the family only makes one.
+#:
+#: **The plain clips come FIRST**, so a short run is the easy case: eight
+#: variants get camera and distractors but never `multi`, and six get nothing
+#: at all. A run spends clips on difficulty only once it is long enough to
+#: afford them.
+#:
+#: Marginals over the cycle: camera 20%, distractors 10%, multi 20%.
+CONDITION_CYCLE = ("standard", "standard", "standard", "standard", "standard",
+                   "standard", "camera", "distractors", "multi",
+                   "camera+multi")
 
-    The rule for every orthogonal axis -- camera motion, distractors -- and the
-    reason there is one rule rather than a period per axis.
+#: How many actors a `multi` scene has, and how many of them violate. A lawful
+#: MAJORITY on purpose: the task is "which of these objects is wrong", and a
+#: scene where most things misbehave answers it before it is asked.
+MULTI_ACTORS = 5
+MULTI_CULPRITS = 2
 
-    `floor((v+1)*share) > floor(v*share)` fires `floor(V*share)` times over
-    variants 0..V-1 -- it telescopes -- and spreads them evenly, for any share,
-    without a random draw. Floor rather than round, so an axis is never
-    over-represented in a run too short to afford it. Three properties follow,
-    and all three were asked for:
 
-    * **Even per scenario.** Drawn independently per scene, a 20% axis measured
-      13% to 31% across thirteen scenarios -- some scenarios effectively had
-      moving cameras and others did not, and any per-scenario comparison
-      inherited that as a confound. Spread across a scenario's variant indices
-      instead, every scenario gets the same share.
-    * **A short run is the easy case.** At V=4 a 20% axis fires zero times,
-      because index 4 is never reached. A run only starts spending clips on
-      camera motion once it is long enough to afford them, which is what you
-      asked for -- and `--camera-motion` overrides it for anyone who wants one
-      on purpose.
-    * **Independent axes stay independent.** Two shares of 0.20 and 0.30 fire on
-      {4, 9} and {3, 6, 9} of ten, so they neither lock together nor avoid each
-      other. Clips with both are exactly as common as chance says they should
-      be, which is what makes "clutter at each realism level" answerable.
-    """
-    if share <= 0.0:
-        return False
-    if share >= 1.0:
-        return True
-    v = int(variant)
-    return math.floor((v + 1) * share) > math.floor(v * share)
+def condition_for(variant: int) -> str:
+    """Which condition variant `variant` carries. See `CONDITION_CYCLE`."""
+    return CONDITION_CYCLE[int(variant) % len(CONDITION_CYCLE)]
+
+
+def condition_share(name: str) -> float:
+    """What fraction of clips carry `name`, straight off the cycle."""
+    return CONDITION_CYCLE.count(name) / float(len(CONDITION_CYCLE))
+
+
+def has_moving_camera(variant: int) -> bool:
+    return "camera" in condition_for(variant)
+
+
+def has_distractors(variant: int) -> bool:
+    return condition_for(variant) == "distractors"
+
+
+def has_multi(variant: int) -> bool:
+    return "multi" in condition_for(variant)
 
 
 def variants_at(level: str, variants: int) -> int:
@@ -760,8 +909,8 @@ DOLLY_RANGE = (0.06, 0.12)
 
 
 def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
-    """`camera_share` of each level's clips get a moving camera, of one of three
-    kinds.
+    """The `camera` and `camera+multi` clips get a moving camera, of one of
+    three kinds.
 
     Deliberately NOT a rung on the ladder. Viewpoint is not realism, and a rung
     that fired on only some of its clips would stop the level above it from
@@ -786,8 +935,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
         return
     if not spec.camera_motion:
         return
-    share = COMPLEXITY[spec.complexity].camera_share
-    if share <= 0.0:
+    if not COMPLEXITY[spec.complexity].camera_moves:
         return
     # Its own stream, salted by scenario. Sharing `_vary`'s would do two bad
     # things: appending a draw there shifts every camera angle already
@@ -799,7 +947,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xCA31 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
-    if not forced and not stratify(spec.variant, share):
+    if not forced and not has_moving_camera(spec.variant):
         return
 
     eye = np.asarray(spec.camera_position, np.float64)
@@ -881,14 +1029,22 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
     actors do not exist yet at the point `ground()` is called. Once in `_vary`
     also means all thirteen scenarios get it without thirteen edits.
 
-    Skipped from L1 up, where the floor is the HDRI dome and the environment
-    supplies the ground and the sky together.
+    Skipped from L2 up, where an HDRI supplies the ground and the sky together
+    and a chosen colour would be painted over.
+
+    THE DOME IS THE BACKDROP TOO. Below L2 the ground is a flat-shaded dome
+    rather than a slab in front of a separate backdrop, so one colour is the
+    whole surround. That is a gain rather than a compromise: the contrast guard
+    below used to apply to the floor only, and now the actor has to stand clear
+    of everything behind it.
     """
     import colorsys
 
     from ..residuals.laws import _srgb_to_lab
 
-    floors = [b for b in spec.bodies if b.role == "floor" and b.kind != "dome"]
+    if COMPLEXITY[spec.complexity].background == "hdri":
+        return
+    floors = [b for b in spec.bodies if b.role == "floor"]
     if not floors:
         return
     import zlib
@@ -938,10 +1094,10 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
                 best, best_gap = cand, gap
     for b in floors:
         b.color = best
-    spec.background_color = tuple(float(c) for c in colorsys.hsv_to_rgb(
-        float(rng.uniform(0.0, 1.0)),
-        float(rng.uniform(*BACKDROP_SATURATION)),
-        float(rng.uniform(*BACKDROP_VALUE))))
+    # The dome IS the backdrop, so the two agree by construction. Kept as a
+    # field because `to_dict` ships it and a consumer reading `meta.json`
+    # should not have to know which body happens to fill the frame.
+    spec.background_color = best
 
 
 class Scenario:
@@ -961,6 +1117,19 @@ class Scenario:
         the scene is lit -- is applied here so it cannot drift between thirteen
         files.
         """
+        # THE UNBUILT-RUNG GUARD LIVES HERE, not in a scenario. It was in
+        # `drop` alone, referencing a `Complexity` field that no longer exists,
+        # so twelve scenarios would have quietly sampled a rung that cannot
+        # render and one would have raised an AttributeError explaining
+        # nothing.
+        cx = COMPLEXITY.get(complexity)
+        if cx is None:
+            raise KeyError("unknown complexity %r; known: %s"
+                           % (complexity, sorted(COMPLEXITY)))
+        if not cx.implemented:
+            raise NotImplementedError(
+                "complexity %s is scaffolded but not built yet; built: %s"
+                % (complexity, implemented_complexities()))
         spec = self._sample(seed, tier, complexity)
         spec.variant = int(variant)
         return _vary(spec, seed)

@@ -19,7 +19,6 @@ import numpy as np
 from .. import camera as cam
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -84,7 +83,6 @@ class OccluderPass(Scenario):
         silhouette_radius = radius * (1.0 if kind == "sphere" else math.sqrt(3.0))
         occ = _occluded_frames(eye, ball, screen, tier, radius, y_path,
                                silhouette_radius)
-        hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
@@ -100,8 +98,7 @@ class OccluderPass(Scenario):
             # camera that moves changes which frames are hidden, and the
             # precomputed list would quietly describe a different clip.
             camera_motion=False,
-            floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
-            notes={"radius": radius, "speed": speed,
+            floor_level=0.0, complexity=complexity,            notes={"radius": radius, "speed": speed,
                    "occluded_frames": occ, "actor_kind": kind,
                    "occluder_id": self.SEG_SCREEN})
 

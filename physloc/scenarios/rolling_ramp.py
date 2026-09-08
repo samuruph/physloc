@@ -16,7 +16,6 @@ import math
 from .. import camera as cam
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -106,7 +105,6 @@ class RollingRamp(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 1.0)),
             camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             camera_jitter_deg=(15.0, 8.0),
             notes={"tilt_rad": tilt, "mu": mu, "lip": list(lip),
                    "block_friction": block_mu, "ramp_friction": ramp_mu,

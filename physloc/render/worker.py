@@ -109,8 +109,10 @@ def build_scene(spec: SceneSpec, scratch):
             obj.material = material
             obj.segmentation_id = b.segmentation_id
         elif b.kind == "dome":
-            # KuBasic's dome is both the ground plane and the backdrop the HDRI
-            # is projected onto -- the idiom movi_def_worker.py uses.
+            # KuBasic's dome is both the ground plane and the backdrop -- the
+            # idiom movi_def_worker.py uses, and now the ground at EVERY rung
+            # rather than only the realistic ones, so the collision geometry
+            # cannot change underneath a level comparison. See `_common.ground`.
             kubasic = kb.AssetSource.from_manifest(KUBASIC)
             obj = kubasic.create(asset_id="dome", name=b.name, friction=b.friction,
                                  restitution=b.restitution, static=True,
@@ -121,6 +123,15 @@ def build_scene(spec: SceneSpec, scratch):
                 dome_blender = obj.linked_objects[renderer]
                 node = dome_blender.data.materials[0].node_tree.nodes["Image Texture"]
                 node.image = bpy.data.images.load(hdri_tex.filename)
+            else:
+                # NO HDRI: shade it flat, in the colour the sampler chose with
+                # its contrast guard. Left unshaded the dome renders with
+                # KuBasic's own grey texture, which would put every clip below
+                # L2 back on one fixed background -- the exact thing
+                # `_recolour_scenery` exists to prevent.
+                obj.material = kb.PrincipledBSDFMaterial(
+                    color=kb.Color(*b.color), roughness=1.0, metallic=0.0,
+                    specular=0.0)
             _set_visibility(renderer, obj, b)
             objs[b.name] = obj
             continue

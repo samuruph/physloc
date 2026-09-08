@@ -41,7 +41,7 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
     from L1 up, so sharing the scenario's stream would let that one extra draw
     shift every material and dimension after it -- and then the same seed would
     produce a different body at L0 and at L1, which is precisely the pairing
-    this function was written to protect. `test_complexity_twin` catches it.
+    this function was written to protect. `test_complexity_isolation` catches it.
     """
     import numpy as np
     import zlib
@@ -53,15 +53,28 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
 
 
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
-    """At L0 a plain cube; from L1 up KuBasic's `dome`, which doubles as the
-    HDRI backdrop -- the same trick MOVi uses."""
-    if cx.background == "hdri":
-        return BodySpec(name="floor", kind="dome", position=(0.0, 0.0, 0.0),
-                        mass=0.0, static=True, friction=0.6, restitution=0.4,
-                        segmentation_id=seg_id, role="floor")
-    return BodySpec(name="floor", kind="cube", position=(0.0, 0.0, -0.1),
-                    scale=(size, size, 0.1), mass=0.0, static=True,
-                    friction=0.6, restitution=0.4, color=(0.32, 0.33, 0.36),
+    """KuBasic's `dome`, at EVERY rung -- shaded flat below L2, lit by an HDRI
+    at L2 and above. The trick MOVi uses, and the thing that makes the ladder a
+    ladder.
+
+    It used to be a cube below the HDRI level and the dome at it, and that was
+    the one thing blocking L2: a dome is a genuinely different collision shape,
+    so the same seed did not roll the same way and the two levels were
+    independent releases that happened to share a seed rather than a pair.
+
+    Measured in the pinned image (`physloc/render/probe_dome.py`) before
+    committing to the swap: a 0.35 m sphere dropped on each surface at 0, 0.5,
+    1, 2, 3, 4 and 5 m from the origin comes to rest at 0.3500 on the cube and
+    0.3509 on the dome -- flat and level to within a millimetre, which is
+    Bullet's collision margin rather than a bowl. Once BOTH sides use it the
+    difference is not a millimetre, it is zero.
+
+    `size` is kept in the signature and ignored: the dome is 80 m across, and
+    every caller passed a half-extent for a slab that no longer exists.
+    """
+    return BodySpec(name="floor", kind="dome", position=(0.0, 0.0, 0.0),
+                    mass=0.0, static=True, friction=0.6, restitution=0.4,
+                    color=(0.32, 0.33, 0.36),
                     segmentation_id=seg_id, role="floor")
 
 
@@ -330,8 +343,23 @@ SIGHTLINE_RADII = 1.35
 KEEP_CLEAR_RADII = 5.0
 
 
-def distractors(spec, n: int, rng, floor_top: float = 0.0):
-    """`n` inert bodies placed around the scene, clear of the action.
+#: Where a multi-object peer's segmentation ids start. Distinct from the
+#: distractor block so a reader can tell the two conditions apart from ids
+#: alone, and far from any scenario's own.
+SEG_PEER_BASE = 600
+
+
+def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distractor"):
+    """`n` extra bodies placed around the scene, clear of the action.
+
+    ONE PLACER, TWO CONDITIONS. With `role="distractor"` the extras are inert
+    scenery that no family can target. With `role="actor"` the very same bodies
+    become lawful PEERS -- eligible culprits, which is what the `multi`
+    condition is made of. The placement problem is identical either way (extra
+    bodies, clear of the action, inside the frame), and the only thing that
+    differs is whether the physics is allowed to notice them, so writing it
+    twice would be writing the same rejection sampler twice and letting the two
+    copies drift.
 
     MOVi places its distractors with `kb.move_until_no_overlap`, which
     resamples a pose until the SIMULATOR reports no overlap
@@ -351,9 +379,9 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
     * NEAR ENOUGH to be in shot. A distractor outside the frustum is not a
       distractor, it is a body that costs render time.
 
-    They are `role="distractor"`, which every actor query already excludes --
-    the injectors select on `role == "actor"` -- so no family can target one by
-    accident.
+    `role="distractor"` is excluded by every actor query -- the injectors select
+    on `role == "actor"` -- so no family can target one by accident. That is
+    exactly the line the `multi` condition crosses on purpose.
     """
     import numpy as np
 
@@ -443,6 +471,18 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
             rad = float(rng.uniform(inner, outer))
             pos = np.array([aim[0] + rad * np.cos(ang),
                             aim[1] + rad * np.sin(ang), floor_top + r])
+            # AIRBORNE SOMETIMES, and decided HERE -- before anything is
+            # checked. If only the actor ever falls, "the thing that falls"
+            # identifies the actor without looking at physics.
+            #
+            # It used to be decided after the sightline test, and lifting a
+            # body changes where it is on screen: a candidate cleared at floor
+            # height rose straight into the actor's line, which is the same
+            # mistake as approving a clearance and then growing the body.
+            # Measured on `toss`: `distractor_04` ended 0.109 rad from the ball
+            # against the 0.131 it needed.
+            if float(rng.uniform()) < DISTRACTOR_AIRBORNE:
+                pos[2] = floor_top + r + float(rng.uniform(0.5, 2.5)) * r
             if any(float(np.linalg.norm(pos - c)) < (keep + r)
                    for c, keep in keep_clear):
                 continue
@@ -464,11 +504,6 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
             if any(float(np.linalg.norm(pos - np.asarray(o.position))) <
                    (r + float(o.bounding_radius)) * 1.15 for o in out):
                 continue
-            # AIRBORNE SOMETIMES. If only the actor ever falls, "the thing
-            # that falls" identifies the actor without looking at physics.
-            if float(rng.uniform()) < DISTRACTOR_AIRBORNE:
-                pos[2] = floor_top + r + float(rng.uniform(0.5, 2.5)) * r
-
             # AND MOVING SOMETIMES, for the same reason: static clutter lets a
             # model find the subject by asking what moves.
             ref = max(float(np.linalg.norm(actor_v)), 0.6)
@@ -477,14 +512,17 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0):
             vel = (speed * np.cos(heading), speed * np.sin(heading), 0.0)
             spin = tuple(float(rng.uniform(-2.5, 2.5)) for _ in range(3))
 
+            peer = role == "actor"
             body = BodySpec(
-                name="distractor_%02d" % i, kind=kind, position=tuple(pos),
+                name=("peer_%02d" if peer else "distractor_%02d") % i,
+                kind=kind, position=tuple(pos),
                 scale=probe.scale, velocity=vel, angular_velocity=spin,
                 mass=1.0,
                 friction=float(rng.uniform(0.2, 0.8)),
                 restitution=float(rng.uniform(0.1, 0.6)),
                 color=hue_rgb(float(rng.uniform(0, 1))),
-                segmentation_id=SEG_DISTRACTOR_BASE + i, role="distractor")
+                segmentation_id=(SEG_PEER_BASE if peer else SEG_DISTRACTOR_BASE) + i,
+                role=role)
             out.append(with_material(body, M.pick(rng), rng))
             break
     return out

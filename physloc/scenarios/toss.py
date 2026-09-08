@@ -15,7 +15,6 @@ from __future__ import annotations
 from .. import camera as cam
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -49,7 +48,6 @@ class Toss(Scenario):
         # never near an edge at either end of the clip.
         x0 = -vx * flight * 0.5
 
-        hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
         # Any shape it likes: nothing here assumes a rolling contact, so a
         # cone that topples and a ring that rolls away are both fair
         # pictures of the same physics. Drawn off the appearance
@@ -84,8 +82,7 @@ class Toss(Scenario):
             lights=C.lights(cx, look_at=(0.0, 0.0, f.look_z * 0.4),
                             scale=f.scene_scale),
             camera_position=camera_position, camera_look_at=camera_look_at,
-            floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
-            camera_jitter_deg=(15.0, 8.0),
+            floor_level=0.0, complexity=complexity,            camera_jitter_deg=(15.0, 8.0),
             notes={"radius": radius, "v0": [vx, 0.0, f.vz],
                    "flight_seconds": flight, "actor_kind": kind,
                    "apex": f.apex, "scene_scale": f.scene_scale,

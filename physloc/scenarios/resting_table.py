@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -79,7 +78,6 @@ class RestingTable(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.9)),
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None,
             notes={"table_top": top_z, "actor_radius": r0,
                    "actor_kind": actor_kind})
 

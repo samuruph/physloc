@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from . import _common as C
 from . import materials as M
-from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
@@ -30,12 +29,6 @@ class Drop(Scenario):
         # out identical across every scenario on a given seed. Threading one
         # stream lets the draws advance.
         arng = C.appearance_rng(seed, self.name)
-        if not cx.implemented:
-            raise NotImplementedError(
-                "complexity %s (%s) is scaffolded but not built yet; "
-                "implemented: %s" % (complexity, cx.movi_analogue,
-                                     [k for k, v in COMPLEXITY.items() if v.implemented]))
-
         radius = float(rng.uniform(0.35, 0.55))
         drop_height = float(rng.uniform(2.4, 3.4))
         restitution = float(rng.uniform(0.55, 0.75))
@@ -43,7 +36,6 @@ class Drop(Scenario):
         vx, vy = float(rng.uniform(-0.5, 0.5)), float(rng.uniform(-0.5, 0.5))
         hue = float(rng.uniform(0.0, 1.0))
 
-        hdri_id = pick_hdri(C.appearance_rng(seed, "hdri")) if cx.background == "hdri" else None
         floor = C.ground(cx, self.SEG_FLOOR)
 
         # Sphere or cube: both fall and bounce, so the shape is free to vary
@@ -72,8 +64,7 @@ class Drop(Scenario):
             bodies=[floor, ball, C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx),
             camera_position=(5.2, -4.4, 2.4), camera_look_at=(0.0, 0.0, 1.0),
-            floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
-            notes={"radius": radius, "drop_height": drop_height,
+            floor_level=0.0, complexity=complexity,            notes={"radius": radius, "drop_height": drop_height,
                    "restitution": restitution, "actor_kind": kind},
         )
 

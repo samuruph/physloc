@@ -100,34 +100,29 @@ v1 could be failing at realism, at clutter, or merely at a resolution it had not
 on, and the release could not say which. Fixing the geometry is what makes v0 and v1
 **paired**, which is the entire point of the axis.
 
-### 3a. The complexity twin — and the one thing blocking it
+### 3a. Rung isolation — and the blocker that is now closed
 
-The design is that `(scenario, seed)` names *the same physical event*, rendered plainly in v0
-and photographically in v1. A benchmark can then ask the question that matters: does a model's
-grasp of the physics survive the realism, or was it reading the plain background?
+A rung must change **one axis and nothing else**, or a level comparison means
+nothing. Note what this is *not*: the release does **not** ship the same scene
+at several rungs. Every rung draws its own scenes from its own seed block, because
+a ladder whose upper rungs contain no new physical events adds difficulty but no
+breadth. "Twin" in this project means the valid/invalid pair and nothing else.
 
-That requires the rollout to be **bit-identical across complexity**, and today it is not.
-
-- **Fixed.** `pick_hdri(rng)` drew from the physics stream, and because it only fires at the
-  HDRI level the extra draw shifted every physics value after it. Appearance now has its own
-  salted stream (`_common.appearance_rng`), so the draw order no longer depends on complexity.
-- **Fixed for L0 → L1.** They share a background and differ only in materials, so the
-  geometry is identical and `tests/test_complexity_twin.py` pins that a `drop` rolls the same
-  at both. Mass differs by design at that rung — materials *are* densities — which is why the
-  scenario that pins it is one whose rollout is mass-independent.
-- **Still open at L1 → L2.** `C.ground` returns a **cube** below the HDRI level and a KuBasic
-  **dome** at it. That is a
-  genuine geometry change — different collision surface, different support height — so the
-  same seed still produces a different rollout.
-
-  The fix is to make the collision geometry identical at both levels and let complexity vary
-  only the *material*, the lighting and the backdrop. Two candidates, neither yet chosen:
-  use the dome at every level, shaded flat below L2 instead of with an HDRI; or keep the cube
-  at L2 and add the dome as a non-colliding backdrop body. The second changes body counts and segmentation
-  ids across complexity, which the first does not, so the first is probably right.
-
-  **Until this is fixed the twin stops at L1**: L0 and L1 pair clip for clip, L2 and above do
-  not. `tests/test_complexity_twin.py` holds the property where it holds, so it cannot regress.
+- **Fixed.** `pick_hdri(rng)` drew from the PHYSICS stream, and because it only
+  fired on the realistic rung the extra draw shifted every physics value after
+  it. Appearance has its own salted stream now (`_common.appearance_rng`), and
+  the choice itself moved out of all thirteen scenarios into `_vary`.
+- **Fixed — the ground.** `C.ground` returned a **cube** below the HDRI level
+  and a KuBasic **dome** at it: a genuinely different collision surface, so the
+  same seed did not roll the same way and the rungs could not be compared at
+  all. The dome is now the ground at **every** rung, shaded flat below L2 and
+  lit by an HDRI at it. Measured before committing to it
+  (`physloc/render/probe_dome.py`): a 0.35 m sphere dropped at 0–5 m from the
+  origin rests at 0.3500 on the cube and 0.3509 on the dome — flat to within
+  Bullet's collision margin, and once both sides use the dome the difference is
+  zero.
+- **Verified.** `tests/test_complexity_isolation.py` rolls all thirteen
+  scenarios at every built rung: **0 of 13 differ**. L2 is unblocked and built.
 
 ### 3b. Population — single vs multi
 
@@ -197,8 +192,8 @@ pieces and should land last, because it multiplies whatever the other two produc
 
 ### Order
 
-1. **Make the complexity twin real** — the floor-geometry fix in 3a, plus the regression test.
-   Nothing else in v1 means anything until `(scenario, seed)` names one physical event.
+1. ~~**Make the rungs isolable**~~ — **done**: the dome is the ground at every rung and
+   `test_complexity_isolation.py` shows 0 of 13 scenarios differ (§3a). L2 is built.
 2. **Population axis in the scenes**, still one culprit per clip. All 180 cells run unchanged
    in a busier scene, which is what makes this safe to land on its own.
 3. **Multi-culprit annotation**, one family at a time. `support` and `friction` first — they
@@ -223,7 +218,7 @@ because every prose copy of them in this repository drifted.
    a `LightSpec` animation channel. Completes the appearance domain. Note it necessarily
    co-moves with `shadow`, so the two must not share a scenario.
 2. **Population + multi-culprit** — the big structural piece (§3a).
-3. **Complexity ladder L2–L3** — HDRI, then GSO (§3b).
+3. **Complexity ladder** — L2 (HDRI) is **built**; L3 (GSO) is the remaining rung (§3b).
 4. **Randomisation depth** — mostly falls out of 3 (§3c).
 
 1 is the last of v0. 2–4 are v1.

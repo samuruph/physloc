@@ -37,13 +37,24 @@ bash scripts/fetch_refs.sh
 
 ## 2. The runs
 
-Three configs, one command each. `conda activate physloc` first.
+One command each. `conda activate physloc` first, and
+`python -m physloc.cli taxonomy --config <name>` prices any of them exactly before you start.
 
-| | config | what it is | cost |
+**Each answers ONE question.** They are cheap on purpose — every debug config below is under
+twenty minutes at four workers — because a check you will not run is a check you do not have.
+
+| config | the question it answers | scope | cost |
 |---|---|---|---|
-| **review** | `configs/review.yaml` | every cell once, all bins, tier `debug`, L0 | **~35 min** |
-| **ladder** | `configs/review_ladder.yaml` | the whole ladder, tier `debug`, 10 variants | ~3.1 h at 4 workers |
-| **v0** | `configs/v0_release.yaml` | tier `release`, **whole ladder**, all bins, 3 variants | price with `taxonomy` |
+| `review_severity` | do **weak / medium / strong** differ, for every family? | all **23 families** via 3 scenarios, 3 bins, 1 variant | **~8 min** |
+| `review_conditions` | do the **difficulty conditions** do what they claim? | 10 variants = one full cycle, 2 scenarios, 3 families | **~5 min** |
+| `review_L0` … `review_L3` | does **this rung** render every scene correctly? | all 13 scenarios, 3 families, 1 variant | ~3 min (L0/L1), ~18 min (L2/L3) |
+| `review_ladder` | do the rungs come out in their **declared proportions**? | `complexity: all`, 10 variants, 2 scenarios, 3 families | ~18 min |
+| `review` | does **every cell** build? | the full 166-cell matrix, all bins, L0 | ~35 min |
+| `v0_release` | the published dataset | tier `release`, whole ladder, all bins, 3 variants | **price it first** |
+
+Between them: `review` covers every *cell*, `review_severity` every *family* at every
+*strength*, `review_conditions` every *condition*, and `review_L*` every *rung*. None of them
+tries to cover more than one of those at once, which is why they stay short.
 
 **`v0` and `v1` are release names, not tiers.** There are two tiers, because there are two
 geometries: `debug` (128², 25 f) and `release` (512², 89 f). Difficulty is the
@@ -425,10 +436,9 @@ out/release/
           ...
 ```
 
-**The rung is part of a clip's identity.** The same seed and variant serve every rung on
-purpose — that pairing is what makes "what did materials cost" a paired comparison rather
-than two population averages — so the level has to be in the key, or L1 writes over L0 and
-the index carries duplicate `clip_uid`s.
+**The rung is part of a clip's identity**, so a level is a directory you can hold up on its
+own — copy one out, delete one, or point a loader at one without filtering. Each rung also
+draws its **own seed block**, so the seeds never collide.
 
 **How the four axes multiply.** A *cell* is one (scenario, family) pair — 166 of them, chosen
 by `taxonomy.COMPATIBILITY`, which is why `drop` has 14 families and `pendulum_swing` has 8.
@@ -728,24 +738,51 @@ from "copes with clutter".
 | **L2** | HDRI environment | **hdri** | primitives | materials | 0.30 (15%) | ✗ |
 | **L3** | GSO objects | hdri | **gso** | materials | 0.20 (10%) | ✗ |
 
-### Camera motion and distractors are NOT rungs
+### Difficulty conditions are NOT rungs
 
-They are **orthogonal axes applied inside every level** at declared ratios:
+Camera motion, distractors and multiple culprits are three ways to make a clip harder. Which
+combinations exist, and how often, is one declared cycle over the variant index —
+`CONDITION_CYCLE` in `physloc/scenarios/base.py`:
 
-| axis | share of each level's clips | fires on variants (of 10) |
-|---|---|---|
-| moving camera | **20%** | 4, 9 |
-| distractors (6, or 12 at L3) | **30%** | 3, 6, 9 |
+| of 10 | condition | camera | extra bodies | culprits |
+|---|---|---|---|---|
+| **6** | `standard` | static | none | 1 |
+| 1 | `camera` | **moving** | none | 1 |
+| 1 | `distractors` | static | 6, **inert** | 1 |
+| 1 | `multi` | static | 5 actors, **live** | **2 of 5** |
+| 1 | `camera+multi` | **moving** | 5 actors, live | 2 of 5 |
 
-They used to be rungs, and that was wrong twice over. A rung whose axis fires on only *some*
-of its clips is not a stratum at all: with camera motion on 1 variant in 5, "L2 minus L1" was
-not measuring materials, it was measuring materials plus whichever variants happened to draw
-a camera move. And making them rungs forced a choice nobody wants — either every realistic
-clip moves its camera, or none does.
+Marginals: camera **20%**, distractors 10%, multi **20%**. Every clip carries its condition
+in `meta.json` and in the published index, alongside `n_actors`, `n_culprits` and
+`n_distractors`.
 
-As ratios, the dataset answers *"what does clutter cost at each realism level"* as well as
-*"what does realism cost"*, and the overall share of moving-camera clips is a number you set
-rather than an artefact of how the ladder was climbed.
+**One condition per clip, not independent coin flips per axis.** Independent ratios were the
+first design and they blur what a benchmark reports: a "moving camera" clip might also carry
+clutter, so the marginal comparison mixes two effects and the per-condition counts are only
+exact in expectation. Named cells make every count exact and every comparison against
+`standard` isolate one change.
+
+**Distractors and `multi` are alternatives, never combined.** They are the *same placement
+machinery* — extra bodies, cleared of the action, inside the frame — differing only in
+whether the extras take part in the physics. A distractor is `role="distractor"`, which every
+injector query excludes; a peer is `role="actor"` with a `group_fraction`. A scene with both
+would ask the viewer to sort inert clutter from lawful peers from culprits: three
+distinctions where the family only makes one.
+
+**`multi` keeps a lawful majority**, deliberately. With one actor, "which object is wrong"
+has a trivial answer — there is only one candidate — so a model can score by detecting that
+*something* is off. With two of five misbehaving, the clip asks *which*, and a spatial
+annotation has to be earned. A scene where most things misbehave answers the question before
+it is asked, and stops looking like physics at all.
+
+A scenario that is **already a crowd** is left alone: `pour` stages forty grains and declares
+`group_fraction: 1.0` on purpose, because one grain of forty hovering is perfectly annotated
+and impossible to see.
+
+**They are not rungs**, and it took two attempts to get that right. A rung whose axis fires
+on only *some* of its clips is not a stratum: with camera motion at 1 variant in 5 *inside*
+L1, "L2 minus L1" was not measuring materials, it was measuring materials plus whichever
+variants happened to draw a camera move.
 
 ### How the shares work
 
@@ -754,14 +791,17 @@ rather than an artefact of how the ladder was climbed.
 - **A level that does not buy a whole variant is skipped.** `--variants 1` is L0 only. That
   is deliberate: a short run should be the easy case. **Naming a level explicitly overrides
   it** — `--complexity L2 --variants 1` gives you L2.
-- **The orthogonal axes work the same way.** `floor(V × share)` clips get the axis, spread
-  evenly across the variant *indices* rather than drawn per scene — so every scenario gets
-  the same share instead of each flipping its own coin (measured across thirteen scenarios,
-  independent draws ranged from 13% to 31%). Below 5 variants nothing moves; below 4 nothing
-  is cluttered. `PHYSLOC_CAMERA_MOTION=orbit` forces one on demand.
-- **The same seed and variant index serve every rung**, so each L1 clip has an L0 counterpart
-  built from the same draw with one axis changed — a paired comparison, not two population
-  averages.
+- **The conditions work the same way.** The plain clips come *first* in the cycle, so a run
+  shorter than the first hard index gets nothing but `standard` — below 7 variants nothing
+  moves, below 8 nothing is cluttered, below 9 there is no `multi`. A run spends clips on
+  difficulty only once it is long enough to afford them. `PHYSLOC_CAMERA_MOTION=orbit`
+  forces one on demand.
+- **Every rung draws its own scenes.** Each level gets its own seed block, so an L1 clip is
+  not an L0 clip in better materials — it is a different drop, of a different object, from a
+  different height, under a different camera. Reusing one seed block across rungs was tried
+  and rejected: it pairs clips neatly and buys an ablation, at the cost of the breadth the
+  dataset exists for. A ladder whose upper rungs contain no new physical events contributes
+  none.
 - **Shares fall as realism rises** for two reasons: the baseline is what everything else is
   compared against so it should be the largest stratum, and an HDRI clip costs ~44 s against
   a solid background's ~8 s at the debug tier.

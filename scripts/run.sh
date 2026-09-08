@@ -3,38 +3,37 @@
 # looking at.
 #
 #   bash scripts/run.sh                       # the review sweep (configs/review.yaml)
-#   bash scripts/run.sh review_ladder         # the WHOLE ladder in its declared shares
+#   bash scripts/run.sh review_severity       # every family, all three bins  ~8 min
+#   bash scripts/run.sh review_conditions     # every difficulty condition    ~5 min
+#   bash scripts/run.sh review_ladder         # the whole ladder in proportion
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
 #   # generate, package AND publish in one go:
 #   PHYSLOC_PUSH_TO=samueleruf/physloc bash scripts/run.sh review ...
 #
-#   # a small run that still shows everything:
-#   bash scripts/run.sh review -n 45 --variants 10 \
-#        --outdir out/physloc_mini --workdir out/work_mini
+# EACH CONFIG ANSWERS ONE QUESTION, which is why they are all minutes rather
+# than hours. `review` covers every CELL; `review_severity` every FAMILY at
+# every strength; `review_conditions` every CONDITION; `review_L*` every RUNG.
+# Price any of them first:
+#
+#   python -m physloc.cli taxonomy --config review_ladder
 #
 # ONE RUNG AT A TIME. The ladder is scene realism -- L0 baseline, L1 materials,
 # L2 HDRI, L3 GSO -- and each rung adds exactly one thing, so rendering them
-# separately is how you find out WHICH thing broke. There is a config per rung:
+# separately is how you find out WHICH thing broke:
 #
-#   bash scripts/run.sh review_L0 --scenario drop   # baseline: flat colours, one density
-#   bash scripts/run.sh review_L1 --scenario drop   # + materials, so mass is visible
-#   bash scripts/run.sh review_L2 --scenario drop   # + HDRI environment   (NOT BUILT)
-#   bash scripts/run.sh review_L3 --scenario drop   # + GSO objects        (NOT BUILT)
+#   bash scripts/run.sh review_L0    # baseline: flat colours, one density
+#   bash scripts/run.sh review_L1    # + materials, so mass is visible
+#   bash scripts/run.sh review_L2    # + HDRI environment
+#   bash scripts/run.sh review_L3    # + GSO objects                (NOT BUILT)
 #
-# Or all of them in one go:
-#
-#   for L in L0 L1 L2 L3; do
-#     bash scripts/run.sh review --complexity $L --scenario drop --variants 10 \
-#          --outdir out/$L --workdir out/work_$L
-#   done
-#
-# THE OTHER TWO AXES ARE NOT RUNGS. Camera motion (20%) and distractors (30%)
-# apply inside EVERY level, stratified by variant index -- so use ten variants
-# when you want to see them. At 10, variants 4 and 9 move the camera and 3, 6
-# and 9 carry distractors; below 5 nothing moves and below 4 nothing is
-# cluttered, which is the intended behaviour for a short run.
+# DIFFICULTY CONDITIONS ARE NOT RUNGS. Every clip carries one of five, applied
+# inside every rung, on a ten-variant cycle: six `standard`, then one each of
+# `camera`, `distractors`, `multi` and `camera+multi`. So use TEN variants when
+# you want to see them -- the plain clips come first, so a shorter run is
+# entirely `standard`, which is the intended behaviour and useless for checking
+# this axis. `review_conditions` is exactly that run.
 #
 #   PHYSLOC_CAMERA_MOTION=orbit bash scripts/run.sh review --scenario drop
 #

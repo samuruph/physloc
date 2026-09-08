@@ -42,9 +42,16 @@ publication. Nothing has been published yet.
   "L2 minus L1" measured materials plus whichever variants happened to draw a camera move --
   a rung whose axis fires on only some of its clips is not a stratum. A level that does not
   buy a whole variant is SKIPPED, so a short run is all baseline; naming a level explicitly
-  is the override. `--complexity all` walks the ladder in one run, and the rung is part of a
-  clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`) because the same seed serves
-  every rung on purpose. All of it lives in `COMPLEXITY` in `physloc/scenarios/base.py`.
+  is the override. `--complexity all` walks the ladder in one run, and **every rung draws its OWN scenes**
+  from its own seed block (`cli.LEVEL_SEED_STRIDE`) — an L1 clip is not an L0 clip in better
+  materials. Reusing one seed block across rungs was tried and rejected: it pairs clips
+  neatly and buys an ablation, at the cost of the breadth the dataset exists for. The rung is
+  part of a clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`) so a level is a
+  directory you can hold up on its own. All of it lives in `COMPLEXITY` in
+  `physloc/scenarios/base.py`.
+
+  **"Twin" means the valid/invalid pair and nothing else** — one scene, bit-identical prefix
+  up to `t_event`. Levels are not twins of each other and must not be described as such.
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 13 scenarios x 23 families needs 13 + 8 files,
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.

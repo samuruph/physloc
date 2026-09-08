@@ -338,6 +338,17 @@ def cmd_generate(a) -> int:
         by_scenario.setdefault(scenario, []).append(family)
 
     work = a.workdir or os.path.join("out", "work")
+    # THE KNOBS, RESOLVED ONCE for the whole run and written where the
+    # container can read them. `common.yaml` plus this config's own `params:`
+    # block; the worker gets a path, not a parse, because the container has no
+    # PyYAML. See `physloc/params.py`.
+    from . import config as _cfg
+    from . import params as _params
+
+    tunables = _cfg.load_params(getattr(a, "config", None))
+    params_path = _params.write(tunables, work)
+    _params.apply(tunables)
+    print("-- params: %s" % params_path)
     rel = a.outdir or os.path.join("out", "release")
 
     done, failed, t0 = [], [], time.perf_counter()
@@ -385,7 +396,7 @@ def cmd_generate(a) -> int:
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, here, complexity=level,
                                window=a.window, variant=variant,
-                               n_variants=n_v,
+                               n_variants=n_v, params_path=params_path,
                                dials={"resolution": a.resolution, "fps": a.fps,
                                       "frames": a.frames, "spp": a.spp})
         if rc != 0:
@@ -563,7 +574,7 @@ def _levels_for(spec: str, variants: int):
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
                 complexity="L0", window=None, dials=None, variant=0,
-                n_variants=None):
+                n_variants=None, params_path=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
@@ -571,6 +582,8 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
            "--variant", str(variant), "--outdir", workdir]
     if n_variants:
         cmd += ["--n-variants", str(int(n_variants))]
+    if params_path:
+        cmd += ["--params", params_path]
     if window:
         cmd += ["--window", str(window)]
     for flag, value in (dials or {}).items():
@@ -648,6 +661,33 @@ def _condition_in(pair_dir) -> Optional[str]:
         if got:
             return str(got).replace("+", "-")
     return None
+
+
+def cmd_params(a) -> int:
+    """Print the knobs in force, and where each one differs from the shipped
+    default -- which is the question actually being asked when someone runs
+    this: not "what are the settings" but "what has been changed"."""
+    import json as _json
+
+    from . import config as _cfg
+    from . import params as _params
+
+    got = _cfg.load_params(getattr(a, "config", None))
+    if a.json:
+        print(_json.dumps(got, indent=2, sort_keys=True))
+        return 0
+    changed = 0
+    for section in sorted(got):
+        print("%s:" % section)
+        for key in sorted(got[section]):
+            now = got[section][key]
+            was = _params.DEFAULTS[section][key]
+            mark = "" if now == was else "   <- changed from %r" % (was,)
+            changed += bool(mark)
+            print("  %-20s %s%s" % (key, now, mark))
+    print("\n%d value(s) differ from the shipped defaults"
+          % changed if changed else "\nall shipped defaults")
+    return 0
 
 
 def cmd_viz(a) -> int:
@@ -981,6 +1021,12 @@ def _build(suppress: bool = False):
                    help="L0..L3 -- see README section 8. L0-L1 are built.")
     p.add_argument("--scenario", help="restrict to one scenario")
     p.set_defaults(fn=cmd_randomisation)
+
+    p = add_parser("params",
+                   help="the generation knobs in force, and what differs")
+    p.add_argument("--json", action="store_true",
+                   help="machine-readable, the same shape as params.json")
+    p.set_defaults(fn=cmd_params)
 
     p = add_parser("viz",
                    help="every grid and sheet for a release, in one folder")

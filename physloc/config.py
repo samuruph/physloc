@@ -33,6 +33,38 @@ def resolve_path(name: str) -> str:
     return os.path.join(repo, "configs", name + ".yaml")
 
 
+#: The section a config uses to override `configs/common.yaml`.
+PARAMS_KEY = "params"
+
+
+def load_params(name: Optional[str] = None) -> Dict[str, Any]:
+    """`common.yaml`, with a run's own `params:` block layered on top.
+
+    Host-side: this is the only place PyYAML is used for the knobs, and the
+    result crosses the seam as JSON -- the container's Python has Kubric's
+    pinned set and no PyYAML.
+    """
+    import yaml
+
+    from . import params as P
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    common = os.path.join(repo, "configs", "common.yaml")
+    base = {}
+    if os.path.exists(common):
+        with open(common) as fh:
+            base = yaml.safe_load(fh) or {}
+    over = {}
+    if name:
+        path = resolve_path(name)
+        if os.path.exists(path):
+            with open(path) as fh:
+                over = (yaml.safe_load(fh) or {}).get(PARAMS_KEY) or {}
+    # Three layers, each validated against the known tree: what the code ships
+    # with, what `common.yaml` says, and what this run overrides.
+    return P.resolved(over, base=P.resolved(base))
+
+
 def load(name: Optional[str], command: str, valid: Set[str]) -> Dict[str, Any]:
     """Flatten a config file into `{dest: value}` for one subcommand.
 

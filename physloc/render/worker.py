@@ -573,6 +573,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="drop")
     ap.add_argument("--seed", type=int, default=91731)
+    ap.add_argument("--params",
+                    help="path to the resolved `params.json` the host wrote. "
+                         "Applied before any sampling, so the knobs are in "
+                         "force for the scene as well as the annotation.")
     ap.add_argument("--n-variants", type=int, default=None,
                     help="how many variants this RUNG was allocated. The "
                          "difficulty condition is spread across them, so a "
@@ -603,6 +607,10 @@ def main() -> int:
     tier = scenarios.TIERS[a.tier].override(
         resolution=a.resolution, fps=a.fps, num_frames=a.frames,
         samples_per_pixel=a.spp)
+    if a.params:
+        from .. import params as _params
+
+        _params.apply(_params.read(a.params))
     spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity,
                                            variant=a.variant,
                                            n_variants=a.n_variants)

@@ -1,0 +1,112 @@
+# ============================================================================
+# common -- the generation knobs, in one place.
+#
+# Shares, counts and bands used to live as module constants spread across
+# `scenarios/base.py`, `_common.py` and `materials.py`: each well documented
+# where it sat, and collectively impossible to see or change as a set. This is
+# the set.
+#
+#   python -m physloc.cli params                 # what is in force
+#   python -m physloc.cli params --config v0_mini  # ...for one run
+#
+# Every run reads this file, and any config may override part of it in its own
+# `params:` block -- so this holds the defaults and a run states its
+# differences. The resolved values are written to `params.json` in the workdir
+# and recorded in every `meta.json`, so a clip says what it was generated
+# under: a tunable nobody can reproduce is worse than a constant nobody can
+# change.
+#
+# Anything NOT listed here cannot be set from a file, and that is deliberate --
+# a knob is a promise to keep it working. `physloc/params.py` holds the same
+# tree with the shipped values and rejects an unknown key rather than ignoring
+# it.
+# ============================================================================
+
+ladder:
+  # What share of a full generation each complexity rung gets, relative to L0.
+  # Falling as realism rises, for two reasons: the baseline is what everything
+  # else is compared against so it should be the largest stratum, and an HDRI
+  # clip costs several times a solid-background one.
+  #
+  # A rung whose share does not buy a whole variant is SKIPPED, so raising a
+  # share is how you make an expensive rung appear in a smaller run.
+  shares:
+    L0: 1.00
+    L1: 0.50
+    L2: 0.30
+    L3: 0.20
+
+conditions:
+  # The difficulty cycle: one entry per variant slot, and its LENGTH is the
+  # period. Its contents are the shares -- six `standard` in ten is 60% -- and
+  # nothing else stores them, so editing this edits the metadata, the dataset
+  # card, the README table and the cost estimate together.
+  #
+  # The plain slots come FIRST on purpose: a run shorter than the first hard
+  # index is entirely `standard`, which is what makes a quick check the easy
+  # case. A rung given fewer variants than there are slots SPREADS across them
+  # rather than taking a prefix, so every rung still sees real conditions.
+  cycle: [standard, standard, standard, standard, standard, standard,
+          camera, distractors, multi, camera+multi]
+
+objects:
+  # How many EXTRA bodies a crowded clip holds, drawn per clip, for
+  # `distractors` and `multi` alike. Randomised rather than fixed: a scene that
+  # is always six objects teaches the count instead of the physics.
+  extra_min: 3
+  extra_max: 10
+
+  # `multi` only. At least this many culprits -- one is what `standard`
+  # already is -- and always this many bodies left lawful, so there is
+  # something to contrast against. At the smallest scene these collide and the
+  # scene is a violating majority, which is deliberate: it makes the small
+  # scenes the hardest.
+  multi_culprits_min: 2
+  multi_lawful_min: 1
+
+  # A distractor's size as a fraction of the actor's; how fast a MOVING one
+  # goes as a fraction of the actor's speed; what share move at all; what
+  # share start airborne rather than resting.
+  #
+  # The last two exist to remove shortcuts: if only the actor moves, "the thing
+  # that moves" identifies it, and if only the actor falls, so does "the thing
+  # that falls".
+  distractor_size: [0.35, 1.60]
+  distractor_speed: [0.25, 0.85]
+  distractor_moving: 0.5
+  distractor_airborne: 0.35
+
+  # Clearance, in actor radii. `keep_clear` is physical -- a distractor that
+  # joins the collision changes the event the clip is labelled for -- and
+  # `sightline` is optical, and only has to clear the silhouette. Using the
+  # physical margin for both excluded most of the visible floor and some scenes
+  # placed nothing.
+  keep_clear_radii: 5.0
+  sightline_radii: 1.35
+
+camera:
+  # The three motions, and how often each is chosen among the clips that move.
+  # A panning variant (translate AND swing the aim) is deliberately absent:
+  # with both moving, "did the object move or did the camera?" stops being
+  # answerable from the clip, and every violation here is a claim about object
+  # motion.
+  kinds: [track, orbit, dolly]
+  weights: [0.40, 0.40, 0.20]
+
+  # How far a track or orbit travels, as a fraction of the camera's distance to
+  # its aim point. Small on purpose: every scenario's viewpoint was derived for
+  # one shot, and a camera that travels a third of its own standoff has made it
+  # a different shot.
+  travel: [0.10, 0.22]
+
+  # How much a dolly changes its distance. Tighter than the others because this
+  # is the motion that changes APPARENT SIZE -- the exact cue `immutability`
+  # and `deformation` make their claim about.
+  dolly: [0.06, 0.12]
+
+materials:
+  # Divides every density. Anchors a median wooden actor near 1 kg, which is
+  # the mass every body carried before materials existed, so a scenario stays
+  # in the contact regime its restitution and friction were tuned in. Ratios
+  # between materials are what the physics reads, and those are the real ones.
+  mass_scale: 250.0

@@ -632,6 +632,13 @@ def _camera_block(spec, spec_d: Dict, num_frames: int) -> Dict[str, Any]:
     }
 
 
+def _params_block():
+    """The generation knobs in force, for `meta.json`."""
+    from .. import params
+
+    return params.CURRENT
+
+
 def _condition_of(spec_d) -> str:
     """The condition a clip carries.
 
@@ -710,6 +717,11 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "physics_medium": SCENARIOS[scenario].physics_medium,
         "medium": SCENARIOS[scenario].physics_medium,
         "complexity": spec_d.get("complexity", {}),
+        # THE KNOBS THIS CLIP WAS MADE UNDER. `configs/common.yaml` is
+        # editable, which is the point -- and a tunable nobody can reproduce is
+        # worse than a constant nobody can change, so the resolved values ride
+        # along. See `physloc/params.py`.
+        "params": _params_block(),
         "hdri_id": spec_d.get("hdri_id"),
         "intphys2_category": fam.intphys2, "likephys_domain": fam.likephys,
         "fps": tier.fps, "num_frames": tier.num_frames,

@@ -272,7 +272,7 @@ COMPLEXITY: Dict[str, Complexity] = {
     "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, True,  6, True),
     "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, True,  6, True),
     "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, True,  6, True),
-    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, True, 12, False),
+    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, True, 12, True),
 }
 DEFAULT_COMPLEXITY = "L0"
 
@@ -625,10 +625,118 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     _flatten_materials(spec)
     _add_distractors(spec, seed)
     _add_peers(spec, seed)
+    _match_understudies(spec)
     _recolour_scenery(spec, seed)
+    _swap_in_gso(spec, seed)
     _pick_hdri(spec, seed)
     _maybe_move_camera(spec, seed)
     return spec
+
+
+def _match_understudies(spec: SceneSpec) -> None:
+    """A dormant stand-in must LOOK like the body it stands in for.
+
+    `fission` needs a duplicate in the scene graph from frame 0 -- adding an
+    object part-way through a render would perturb the render path, and prefix
+    identity is the one thing that cannot be traded away. Each scenario stages
+    that as `<parent>_split`, and copied the parent's colour but not the rest
+    of its appearance.
+
+    So from L1 up the two halves rendered with different SURFACE FINISH: on
+    `drop` the parent drew cork at roughness 0.9 and its understudy kept the
+    0.55 default, which is one object splitting into two that are not quite the
+    same object. It also split the pair in `_swap_in_gso`, which groups bodies
+    by what a viewer can tell apart -- `drop` came out as a shark splitting
+    into an unrelated scan.
+
+    Appearance only. Mass stays the understudy's own, because `fission.stage`
+    deliberately gives BOTH halves half the parent's mass and reading it from
+    here would just be a second answer to the same question.
+    """
+    by_name = {b.name: b for b in spec.bodies}
+    for body in spec.bodies:
+        if not body.dormant or not body.name.endswith("_split"):
+            continue
+        parent = by_name.get(body.name[:-len("_split")])
+        if parent is None:
+            continue
+        body.color = parent.color
+        body.roughness = parent.roughness
+        body.metallic = parent.metallic
+        body.material = parent.material
+
+
+def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
+    """From L3 up, actors become scanned objects rather than primitives.
+
+    The last rung, and the one that changes what an object IS rather than how
+    it is lit. A GSO asset is real photogrammetry: irregular, textured, and
+    shaped like nothing the physics has a primitive for.
+
+    THE DRAWN SIZE IS PRESERVED. Following MOVi
+    (`movi_c_worker.py:167-170`), the asset is normalised by its own longest
+    axis -- `scale = target / max(bounds[1] - bounds[0])` -- so a body that was
+    a 0.4 m sphere becomes a 0.4 m teapot rather than whatever size the scan
+    happened to be. Without that the rung would change the scene's SCALE as
+    well as its geometry, and two axes would move at once.
+
+    Scenery is left alone: a floor, a ramp or a barrier is staging, and the
+    violation is defined against it. Swapping those for scanned meshes would
+    change what the physics means, not how hard it is to look at.
+
+    Its own salted stream, so turning the rung up cannot shift a physics draw
+    a scenario already made.
+    """
+    import zlib
+
+    from ._gso import GSO_ASSETS, GSO_IDS
+
+    if COMPLEXITY[spec.complexity].actor_assets != "gso" or not GSO_IDS:
+        return
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0x6507 + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    # ONE ASSET PER LOOK. Bodies that were indistinguishable as primitives must
+    # stay indistinguishable as scans, and two scenarios depend on it outright:
+    # `fission`'s dormant understudy has to be the same object its parent
+    # splits into, or the clip shows one thing becoming a different thing; and
+    # `collision`'s two balls must match in every respect or `newton2_mass`
+    # loses its meaning. Drawing per body gave `drop` a shark that split into
+    # an unrelated scan.
+    #
+    # The signature is what a viewer could tell apart before the swap, so the
+    # grouping is exactly as fine as the distinction it has to preserve.
+    picked = {}
+    for body in spec.bodies:
+        if body.role not in ("actor", "distractor") or body.static:
+            continue
+        # Keyed on what is VISIBLE, not on the material NAME. `fission`'s
+        # understudy is drawn with its parent's colour but carries no material
+        # of its own -- it is a stand-in the simulator holds parked -- so
+        # keying on the name split the very pair this exists to hold together,
+        # and `drop` got a shark that split into an unrelated scan. Colour,
+        # roughness and metallic are what a material actually shows.
+        look = (body.kind, tuple(np.round(body.scale, 9)),
+                tuple(np.round(body.color, 6)),
+                round(float(body.roughness), 6), round(float(body.metallic), 6),
+                body.role)
+        if look not in picked:
+            picked[look] = str(GSO_IDS[int(rng.randint(0, len(GSO_IDS)))])
+        aid = picked[look]
+        lo, hi = np.asarray(GSO_ASSETS[aid]["bounds"], np.float64)
+        longest = float(np.max(hi - lo))
+        if longest <= 1e-6:
+            continue
+        # The size it was DRAWN at, not its `scale` -- for a primitive those
+        # agree, and for what it is about to become they do not.
+        target = 2.0 * float(max(body.extents))
+        f = target / longest
+        body.kind = "gso"
+        body.asset_id = aid
+        body.scale = (f, f, f)
+        body.render_scale = None
+    spec.notes["gso_assets"] = sorted(
+        {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
 
 
 def _pick_hdri(spec: SceneSpec, seed: int) -> None:

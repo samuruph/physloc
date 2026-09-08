@@ -48,6 +48,12 @@ KUBASIC = "gs://kubric-public/assets/KuBasic/KuBasic.json"
 #: asking whether the clip obeyed physics. A suzanne head tumbling is a fine
 #: picture and a poor test.
 KUBASIC_SHAPES = ("cylinder", "cone", "torus")
+
+#: Google Scanned Objects: real photogrammetry, and the L3 rung's whole
+#: content. The id list and every asset's bounds are baked into
+#: `physloc/scenarios/_gso.py` -- see there for why the host needs the geometry
+#: and the HDRI list gets away with ids alone.
+GSO = "gs://kubric-public/assets/GSO/GSO.json"
 HDRI = "gs://kubric-public/assets/HDRI_haven/HDRI_haven.json"
 
 
@@ -91,6 +97,25 @@ def build_scene(spec: SceneSpec, scratch):
             obj = kb.Sphere(scale=b.scale, **common)
         elif b.kind == "cube":
             obj = kb.Cube(scale=b.scale, **common)
+        elif b.kind == "gso":
+            # A SCANNED OBJECT, normalised the way MOVi does it
+            # (`movi_c_worker.py:167-170`): the asset's own bounds vary from
+            # 31 mm to 45 cm across, so the sampler stores `scale = target /
+            # longest mesh axis` and the drawn size is whatever it chose.
+            #
+            # Uniform scale only, like every other file-based object --
+            # `kubric/simulator/pybullet.py` asserts it.
+            gso = kb.AssetSource.from_manifest(GSO)
+            obj = gso.create(asset_id=b.asset_id, name=b.name,
+                             scale=float(b.scale[0]),
+                             position=b.position, quaternion=b.quaternion,
+                             static=b.sim_static, mass=b.mass,
+                             friction=b.friction, restitution=b.restitution)
+            # NO MATERIAL OVERRIDE. A GSO asset ships its own scanned texture,
+            # and that is the entire point of the rung -- painting a flat
+            # colour over it would leave the geometry hard and the appearance
+            # exactly as easy as L1.
+            obj.segmentation_id = b.segmentation_id
         elif b.kind in KUBASIC_SHAPES:
             # A KuBasic mesh, with a collision mesh Kubric bakes for it, so
             # these simulate as themselves rather than as a bounding box.
@@ -479,7 +504,14 @@ def replay(spec, objs, traj: Trajectory, renderer=None, scene=None) -> None:
         # The rule for any channel added later: keyframe it unconditionally.
         # The cost is a few thousand redundant keyframes; the alternative is a
         # silent cross-family leak that only shows up by eye.
-        recolour = b.kind != "dome"
+        # ...with ONE exception, and it is not an exception to that rule. A GSO
+        # asset carries its own SCANNED TEXTURE rather than a flat colour, so
+        # `material.color` is not a trait it has -- keyframing it raised
+        # `TraitError` and killed every L3 render before the first frame. There
+        # is no leak to guard against here either: nothing can recolour a body
+        # that has no colour, so no family can contaminate the next one through
+        # a channel that does not exist.
+        recolour = b.kind not in ("dome", "gso")
         fade_socket = _fade_control(renderer, obj) if b.kind != "dome" else None
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
@@ -618,6 +650,18 @@ def main() -> int:
             # noticed, because every check ran against a single generation.
             rng = np.random.RandomState(
                 (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1))
+            # A RUNG CAN REMOVE WHAT A FAMILY ACTS ON, and that is not a
+            # failure. `colour_shift` has nothing to shift once actors are
+            # scanned GSO assets: it declines here rather than producing a
+            # fully annotated clip in which nothing changes. Reported as
+            # `skipped` so the caller's missing-clip count stays honest --
+            # a cell that cannot exist at this rung was never owed.
+            if not inj.available_at(spec):
+                variants.append({"family": family, "severity": sev,
+                                 "ok": False, "skipped": True,
+                                 "error": "family cannot act at complexity %s"
+                                          % spec.complexity})
+                continue
             try:
                 plan = inj.plan(spec, traj_valid, rng, sev)
             except Exception as exc:                       # noqa: BLE001

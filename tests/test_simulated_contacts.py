@@ -174,18 +174,44 @@ def test_a_prevented_collision_leaves_no_contact(work):
         before = _pairs_after(a, te)
         culprits = {int(i) for i in blob["causal_body_ids"]}
 
-        # Only where there was something to prevent. A body teleported across
-        # flat ground still lands on the floor, and no contact is lost -- which
-        # is correct, not a failure. The claim is about an OBSTACLE: a wall the
-        # body was moved past, or a surface it was sent through. Floor contacts
-        # are excluded because gravity puts the body back on the floor either
-        # way.
+        lost = before - _pairs_after(b, te)
+
+        # ASK THE PLAN WHICH PAIR IT SUPPRESSED, where the plan knows.
+        # `solidity` names its partner outright, and that is a stricter and
+        # truer check than any heuristic over normals: the exact pair it
+        # disabled must be gone.
+        #
+        # The heuristic alone was wrong here, and a real clip found it. On
+        # `stack_topple` the family suppressed a SUPPORT pair -- body 2 resting
+        # on body 4, contact normal z = -0.996 -- because passing through the
+        # thing holding you up is a solidity violation like any other. The
+        # normal test classified that pair as a support and excluded it, then
+        # demanded that some sideways contact be lost instead, and failed on a
+        # clip whose physics was exactly right.
+        partner = (blob.get("notes") or {}).get("partner_id")
+        if partner is not None:
+            want = {(min(int(c), int(partner)), max(int(c), int(partner)))
+                    for c in culprits if int(c) != int(partner)}
+            lost_norm = {(min(x, y), max(x, y)) for x, y in lost}
+            had = {(min(x, y), max(x, y)) for x, y in before}
+            want &= had                 # only pairs that touched lawfully
+            if want:
+                assert want & lost_norm, (
+                    "%s: the pair it suppressed %s is still in contact after "
+                    "t_event -- the intervention did not take"
+                    % (family, sorted(want)))
+                checked += 1
+                continue
+
+        # Otherwise -- `continuity`, which moves a body rather than naming a
+        # pair -- fall back to the obstacle heuristic. A body teleported across
+        # flat ground still lands on the floor and loses no contact, which is
+        # correct; the claim is about an OBSTACLE it was moved past.
         obstacle = {p for p in _obstacle_pairs(a, te)
                     if p[0] in culprits or p[1] in culprits}
         if not obstacle:
             continue
 
-        lost = before - _pairs_after(b, te)
         assert lost & obstacle, (
             "%s: the invalid clip kept every obstacle contact the valid one had "
             "(%s) -- the body it was moved past or through is still stopping it"

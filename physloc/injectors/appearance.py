@@ -300,6 +300,12 @@ class ColourShift(Injector):
 
     family = "colour_shift"
     persistent = True
+
+    def available_at(self, spec) -> bool:
+        """Not on a rung whose actors are scanned assets -- they have textures
+        rather than a flat colour, and there is nothing to shift. See `plan`."""
+        return not any(b.kind == "gso" for b in _geom.actors(spec))
+
     #: Target perceptual separation, in CIE-Lab distance over 100. Specified
     #: here and *solved for* per body, rather than specified as a hue rotation.
     #:
@@ -375,7 +381,18 @@ class ColourShift(Injector):
         return best
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        targets = [b for b in self._group(spec) if b.kind != "dome"]
+        # A BODY MUST HAVE A COLOUR TO SHIFT ONE. A scanned GSO asset carries
+        # its own texture instead, and `replay` cannot keyframe a `color` trait
+        # it does not have -- so at the GSO rung this family planned, annotated
+        # and rendered a clip in which absolutely nothing changed. Measured on
+        # `drop x colour_shift` at L3: a full set of labels, `t_event=8`,
+        # `vwin=[[8,13]]`, and `sev=0.00`.
+        #
+        # That is the worst failure a dataset can ship -- not a missing clip
+        # but a present one whose annotation is a lie -- so the family declines
+        # instead, and `available_at` tells the cell walker not to expect it.
+        targets = [b for b in self._group(spec)
+                   if b.kind not in ("dome", "gso")]
         if not targets:
             return None
         T = traj.num_frames

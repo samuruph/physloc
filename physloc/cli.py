@@ -388,12 +388,18 @@ def cmd_generate(a) -> int:
         if rc != 0:
             return {"scenario": scenario, "seed": seed, "level": level,
                     "rc": rc, "info": info, "results": [], "bad": []}
-        bad = [x for x in info.get("variants", []) if not x.get("ok")]
+        # A SKIP IS NOT A FAILURE. `colour_shift` cannot act on a scanned
+        # asset, so at the GSO rung it declines -- and reporting that as a
+        # broken cell would train everyone to ignore the failure list.
+        bad = [x for x in info.get("variants", [])
+               if not x.get("ok") and not x.get("skipped")]
+        skipped = [x for x in info.get("variants", []) if x.get("skipped")]
         produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
         results = list(_annotate(info["outdir"], rel,
                                  overlay=not a.no_overlay, only=produced))
         return {"scenario": scenario, "seed": seed, "level": level, "rc": 0,
-                "info": info, "results": results, "bad": bad}
+                "info": info, "results": results, "bad": bad,
+                "skipped": skipped}
 
     done_count = {"n": 0}
 
@@ -501,9 +507,16 @@ def cmd_generate(a) -> int:
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
+    # Cells the rung cannot express were never owed, so they do not count as
+    # missing -- see `Injector.available_at`.
+    n_skipped = sum(len(o.get("skipped") or []) for o in outcomes)
     expected = len(cells) * sum(n for _, n in levels) * len(
         ["weak", "medium", "strong"] if a.severity == "all"
         else [x for x in a.severity.split(",") if x.strip()])
+    if n_skipped:
+        print("   %d cell(s) skipped: the complexity rung removed what the "
+              "family acts on" % n_skipped)
+    expected -= n_skipped
     if len(done) < expected:
         print("\n!! %d of %d expected clips are MISSING -- see the failures below"
               % (expected - len(done), expected), file=sys.stderr)

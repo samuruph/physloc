@@ -89,36 +89,73 @@ def test_materials_are_what_l1_changes(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_whole_built_ladder_rolls_identically(name):
-    """Handed one seed, every rung rolls it the same way.
+    """Handed one seed, every rung with the same OBJECTS rolls it the same way.
 
     Not a claim that the release contains these pairs -- it does not, by
     design. A claim that a rung's machinery touches its own axis and nothing
     else, which is the only reason a level comparison means anything at all.
 
-    It used to hold for one scenario across one step, and the blocker was
-    geometry: `C.ground` returned a cube below the HDRI level and a KuBasic
-    dome at it, which is a genuinely different collision shape, so the same
-    seed did not roll the same way and the levels were independent releases
-    that happened to share a seed.
+    The blocker this closed was geometry: `C.ground` returned a cube below the
+    HDRI level and a KuBasic dome at it, so the ground changed shape under a
+    rung that was supposed to be about lighting. The dome is now the ground
+    everywhere -- measured against the cube in `physloc/render/probe_dome.py`,
+    flat to within Bullet's collision margin -- and L0, L1 and L2 roll
+    identically on all thirteen scenarios.
 
-    The dome is now the ground at every rung -- shaded flat below L2, lit by an
-    HDRI at it -- so the geometry is identical by construction. Measured before
-    committing to the swap (`physloc/render/probe_dome.py`): a 0.35 m sphere
-    dropped on each surface at 0 to 5 m from the origin rests at 0.3500 on the
-    cube and 0.3509 on the dome, flat to within Bullet's collision margin. Once
-    both sides use it the difference is zero rather than a millimetre.
+    **L3 IS EXEMPT, and that is the rung working.** It replaces primitives with
+    scanned GSO meshes, so the collision geometry changes by construction: a
+    shark does not roll like a sphere. Asserting otherwise would be asserting
+    that the hardest rung does nothing. The exemption is derived from
+    `actor_assets` rather than hardcoded, so a future rung that keeps
+    primitives is still held to the rule.
 
-    This is the HOST rollout, which is an approximation of PyBullet -- so it
-    pins that nothing in the SPEC differs in a way the physics would see, not
-    that the container agrees to the bit. `prefix_identical` is what guards the
-    render, and it guards it per twin rather than across rungs.
+    This is the HOST rollout, an approximation of PyBullet -- so it pins that
+    nothing in the SPEC differs in a way the physics would see, not that the
+    container agrees to the bit. `prefix_identical` guards the render, per
+    twin.
     """
     sc = scenarios.get(name)
     built = [k for k, v in COMPLEXITY.items() if v.implemented]
-    rolls = [mockroll.roll(sc.sample(SEED, TIERS["release"], lv), sc)
-             for lv in built]
-    for lv, roll in zip(built[1:], rolls[1:]):
-        assert roll.pos.shape == rolls[0].pos.shape, (name, lv)
-        assert np.allclose(rolls[0].pos, roll.pos, atol=1e-9), (
+    base_assets = COMPLEXITY[built[0]].actor_assets
+    same = [k for k in built if COMPLEXITY[k].actor_assets == base_assets]
+    assert len(same) >= 2, "nothing to compare"
+    rolls = {lv: mockroll.roll(sc.sample(SEED, TIERS["release"], lv), sc)
+             for lv in built}
+    for lv in same[1:]:
+        assert rolls[lv].pos.shape == rolls[same[0]].pos.shape, (name, lv)
+        assert np.allclose(rolls[same[0]].pos, rolls[lv].pos, atol=1e-9), (
             "%s: %s rolls differently from %s -- max %.3e"
-            % (name, lv, built[0], float(np.abs(rolls[0].pos - roll.pos).max())))
+            % (name, lv, same[0],
+               float(np.abs(rolls[same[0]].pos - rolls[lv].pos).max())))
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_the_gso_rung_actually_changes_the_objects(name):
+    """The other half: a rung whose objects are indistinguishable from the
+    rung below measures nothing.
+
+    L3 swaps every non-static actor and distractor for a scanned asset, sized
+    so its LONGEST AXIS matches what the primitive was drawn at -- MOVi's
+    normalisation (`movi_c_worker.py:167-170`). Without that the rung would
+    change the scene's scale as well as its geometry, and two axes would move
+    at once.
+    """
+    gso = [k for k, v in COMPLEXITY.items()
+           if v.implemented and v.actor_assets == "gso"]
+    if not gso:
+        pytest.skip("no GSO rung is built")
+    sc = scenarios.get(name)
+    plain = sc.sample(SEED, TIERS["release"], "L0")
+    scanned = sc.sample(SEED, TIERS["release"], gso[0])
+    swapped = [b for b in scanned.bodies if b.kind == "gso"]
+    assert swapped, "%s: the GSO rung swapped nothing" % name
+    assert all(b.asset_id for b in swapped), name
+    for before, after in zip(plain.bodies, scanned.bodies):
+        if after.kind != "gso":
+            continue
+        # The DRAWN size is preserved; `scale` is a normalising factor and
+        # says nothing on its own -- a 30 mm block scaled to 0.4 m carries
+        # scale 13.
+        assert 2 * max(after.extents) == pytest.approx(
+            2 * max(before.extents), rel=0.02), (
+            "%s: %s changed size across the rung" % (name, after.name))

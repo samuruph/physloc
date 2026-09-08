@@ -207,6 +207,21 @@ class Injector:
         """
         return self.simulated
 
+    def available_at(self, spec) -> bool:
+        """Can this family express itself in THIS scene at all?
+
+        Not "did it decline this seed" -- that is `plan` returning None, and a
+        seed retry answers it. This is the stronger claim that no seed will
+        work, because the rung itself has removed what the family acts on.
+
+        One family needs it today: `colour_shift` has nothing to shift once
+        actors are scanned GSO assets, which carry a texture rather than a flat
+        colour. Without this the cell was still walked, and it produced a fully
+        annotated clip in which nothing changed -- `sev=0.00` with a complete
+        set of labels, which is worse than a missing clip.
+        """
+        return True
+
     def revives(self, spec, plan: InterventionPlan) -> frozenset:
         """Scripted causal bodies this family will make DYNAMIC when it stages.
 

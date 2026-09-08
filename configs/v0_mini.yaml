@@ -7,13 +7,13 @@
 #   python -m physloc.cli viz      out/physloc_v0_mini
 #
 # NOT a review sweep -- the same structure as the release, made small. Every
-# family, every complexity rung, every difficulty condition and every severity
+# family, every complexity level, every difficulty condition and every severity
 # bin, so what you learn from it transfers to the real thing. Roughly 15 h at
 # four workers.
 #
 # It is small in CELLS, not in variants, and that is forced rather than chosen.
-# The condition cycle has ten slots and the rungs take a share of them, so it
-# takes TEN variants before all four rungs and all five conditions appear:
+# The condition cycle has ten slots and the levels take a share of them, so it
+# takes TEN variants before all four levels and all five conditions appear:
 #
 #     variants=2   L0 2, L1 1, L2 1, L3 0   -> 1 of 5 conditions
 #     variants=4   L0 4, L1 2, L2 1, L3 1   -> 3 of 5

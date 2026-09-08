@@ -1,5 +1,5 @@
 # ============================================================================
-# review_L0 -- every cell at ONE rung of the ladder, at debug size.
+# review_L0 -- every cell at ONE level of the ladder, at debug size.
 #
 #   python -m physloc.cli generate --config review_L0
 #   python -m physloc.cli validate out/review_L0
@@ -8,7 +8,7 @@
 # L0 is primitives, flat colours, a solid background.
 # STATUS: BUILT.
 #
-# The baseline every other rung is measured against. If something is wrong
+# The baseline every other level is measured against. If something is wrong
 # here it is wrong everywhere, so this is the first sweep to watch -- and
 # the cheapest, at ~8 s a clip.
 #
@@ -39,8 +39,8 @@ defaults:
   complexity: L0
   severity: strong
   variants: 1
-  # ALL THIRTEEN SCENARIOS, three families. A per-rung check asks "does this
-  # rung render every scene correctly", so breadth of SCENARIO is what matters
+  # ALL THIRTEEN SCENARIOS, three families. A per-level check asks "does this
+  # level render every scene correctly", so breadth of SCENARIO is what matters
   # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
   # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
   # so the full matrix here would be over an hour.

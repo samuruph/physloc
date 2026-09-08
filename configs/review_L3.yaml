@@ -1,5 +1,5 @@
 # ============================================================================
-# review_L3 -- every cell at ONE rung of the ladder, at debug size.
+# review_L3 -- every cell at ONE level of the ladder, at debug size.
 #
 #   python -m physloc.cli generate --config review_L3
 #   python -m physloc.cli validate out/review_L3
@@ -8,7 +8,7 @@
 # L3 is + GSO objects in that environment.
 # STATUS: NOT BUILT.
 #
-# The hardest rung: unfamiliar geometry under real lighting. Sits behind
+# The hardest level: unfamiliar geometry under real lighting. Sits behind
 # L2, and carries twice the distractors when a clip draws them.
 #
 # Naming a level explicitly is what overrides the ladder's share rule: a
@@ -38,8 +38,8 @@ defaults:
   complexity: L3
   severity: strong
   variants: 1
-  # ALL THIRTEEN SCENARIOS, three families. A per-rung check asks "does this
-  # rung render every scene correctly", so breadth of SCENARIO is what matters
+  # ALL THIRTEEN SCENARIOS, three families. A per-level check asks "does this
+  # level render every scene correctly", so breadth of SCENARIO is what matters
   # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
   # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
   # so the full matrix here would be over an hour.

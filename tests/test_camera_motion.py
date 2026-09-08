@@ -20,7 +20,7 @@ BASE = 777
 N_VARIANTS = 20
 
 
-#: Camera motion is a CONDITION, not a rung: `camera` and `camera+multi` clips
+#: Camera motion is a CONDITION, not a level: `camera` and `camera+multi` clips
 #: move, at every level including L0. Tested at L0 because that is where the
 #: rest of the scene is held stillest, so anything the camera does is the only
 #: thing that changed.
@@ -97,13 +97,13 @@ def test_occluder_pass_never_moves_the_camera():
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_camera_track_is_identical_across_complexity(name):
-    """Two rungs must film the same clip from the same place.
+    """Two levels must film the same clip from the same place.
 
     The ladder exists to ask whether a model's grasp of the physics survives
     realism, which only means anything if the two renders are otherwise the
     same shot. Camera motion is an orthogonal axis with the same share at every
-    level, so the answer must not depend on the rung -- and comparing the two
-    BUILT rungs is what pins that.
+    level, so the answer must not depend on the level -- and comparing the two
+    BUILT levels is what pins that.
     """
     sc = scenarios.get(name)
     for seed in (0, 7, 4242):

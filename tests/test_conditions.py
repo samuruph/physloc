@@ -30,7 +30,7 @@ SEED = 777
 def _spec(name, variant, level=LEVEL):
     """A spec at the FULL cycle length, so `variant` indexes the cycle directly.
 
-    `condition_for` spreads a rung's conditions over the cycle when the rung was
+    `condition_for` spreads a level's conditions over the cycle when the level was
     given fewer variants than the cycle has slots -- which is what stops L3
     being 100% `standard`. Passing `n_variants=PERIOD` here asks for the
     unspread form, so these tests keep addressing conditions by index.

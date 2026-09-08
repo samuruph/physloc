@@ -77,7 +77,7 @@ def test_apply_actually_moves_the_behaviour():
 
     Every value in `DEFAULTS` should have a home; this checks the ones whose
     effect is visible without rendering, including one that flows all the way
-    through to how many variants a rung is allocated.
+    through to how many variants a level is allocated.
     """
     from physloc.scenarios import _common as C
     from physloc.scenarios import base as B

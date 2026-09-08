@@ -399,10 +399,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- write both clips -------------------------------------------------
     sev_bin = plan_d["intervention"]["severity_bin"]
-    # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY, so a rung is a
+    # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY, so a level is a
     # directory you can hold up on its own -- copy one out, delete one, point a
     # loader at one -- without filtering a flat tree. It also cannot collide:
-    # each rung draws its own seed block.
+    # each level draws its own seed block.
     level = (spec_d.get("complexity") or {}).get("name") or "L0"
     # THE CONDITION IS IN THE PATH, because a seed is opaque. Browsing a run,
     # `0783_distractors` says what the clip is and `0783` says nothing -- and
@@ -644,7 +644,7 @@ def _condition_of(spec_d) -> str:
 
     Read off the SPEC, which resolved it once. It used to be recomputed here
     from the variant index alone, and that stopped being enough the moment the
-    condition began depending on how many variants the rung was given -- the
+    condition began depending on how many variants the level was given -- the
     metadata would have said `standard` for clips that were built with
     distractors. One decider, recorded, and everything else reads it.
     """

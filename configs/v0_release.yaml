@@ -10,7 +10,7 @@
 # field stamped into every meta.json. It is NOT a tier and NOT a difficulty.
 # A tier is a geometry (512x512, 30 fps, 89 frames); difficulty is the
 # complexity ladder, and this release contains the WHOLE ladder rather than
-# picking one rung.
+# picking one level.
 #
 # That is the answer to "how do I get examples of L0, L1, ... in one dataset":
 # `complexity: all` partitions inside the release, in the shares declared on
@@ -44,9 +44,9 @@
 #       10        L0 10, L1 5, L2 3, L3 2         ~1795 h   5 of 5
 #
 # THIS IS WEEKS ON ONE BOX. It is also embarrassingly parallel: jobs are
-# independent by (scenario, seed, rung) and the per-clip rng is keyed by
+# independent by (scenario, seed, level) and the per-clip rng is keyed by
 # content rather than queue position, so N machines is N times faster. Split
-# with `--scenario a,b,c` per machine, or a rung apiece with v0_L0..v0_L3, and
+# with `--scenario a,b,c` per machine, or a level apiece with v0_L0..v0_L3, and
 # merge the clip trees -- nothing collides.
 #
 defaults:
@@ -55,7 +55,7 @@ defaults:
   complexity: all      # the whole BUILT ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
   # TEN, and it is forced rather than chosen. The condition cycle has ten slots
-  # and each rung takes a share of them, so below ten the upper rungs and the
+  # and each level takes a share of them, so below ten the upper levels and the
   # rarer conditions simply do not appear: at three variants L3 gets one clip
   # per cell and the release contains two of its five conditions. Ten is the
   # smallest number that makes the dataset the thing it claims to be.

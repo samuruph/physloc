@@ -33,7 +33,7 @@ from typing import Any, Dict, Optional
 #: which is deliberate -- a knob is a promise to keep it working.
 DEFAULTS: Dict[str, Any] = {
     "ladder": {
-        # What share of a full generation each rung gets, relative to L0.
+        # What share of a full generation each level gets, relative to L0.
         # Falling as realism rises: the baseline is what everything is compared
         # against, and an HDRI clip costs several times a solid-background one.
         "shares": {"L0": 1.00, "L1": 0.50, "L2": 0.30, "L3": 0.20},

@@ -150,7 +150,7 @@ Severity asks *how badly is the law broken*. Complexity asks *how hard is the sc
 parse*. They are independent axes, and reporting across both is what separates "understands
 physics" from "copes with clutter".
 
-**Four rungs of scene realism**, each the one below it plus exactly one thing:
+**Four levels of scene realism**, each the one below it plus exactly one thing:
 
 <!-- physloc:ladder -->
 | level | adds | background | objects | materials | share | built |
@@ -161,8 +161,8 @@ physics" from "copes with clutter".
 | **L3** | **GSO objects** — real 3D scans | hdri | gso | yes | 10% | yes |
 <!-- /physloc:ladder -->
 
-Every clip carries its rung in `complexity`, so a rung is a filter rather than a separate
-download. **Each rung draws its own scenes** — an L1 clip is not an L0 clip in better
+Every clip carries its level in `complexity`, so a level is a filter rather than a separate
+download. **Each level draws its own scenes** — an L1 clip is not an L0 clip in better
 materials, it is a different event — so the ladder buys breadth as well as difficulty.
 
 Below L1 every object shares **one density**, so mass varies only with size, which a viewer
@@ -231,13 +231,13 @@ heavy and the resulting motion is legible rather than arbitrary.
 
 They apply to the **staging** as well as the actors — a ramp is wooden, a pendulum post is
 steel — because half of what is on screen is staging, and leaving it as untextured blocks
-meant the rung changed only a fraction of the frame. Four materials are metallic and two
+meant the level changed only a fraction of the frame. Four materials are metallic and two
 transmissive, which matters most from L2 up: a metal or glass body *reflects and refracts the
 environment*, and that is what makes an object look like it belongs in the scene rather than
 composited onto it.
 
 **The draw is weighted, not uniform**, and the `share` column is why. The palette is not
-uniform in density — the metals that make a rung legible are also 7800–8900 kg/m³ — so
+uniform in density — the metals that make a level legible are also 7800–8900 kg/m³ — so
 drawing evenly would put the mean density at 3458 against the 2313 the scenarios' contact
 parameters were tuned against, and double the median. That is a change to the *physics*
 smuggled in by a change to the *appearance*. Weighting the light end up puts it back at 2256.
@@ -308,7 +308,7 @@ df = pd.read_parquet("index.parquet")
 
 df.groupby(["domain", "severity_bin"]).peak_severity.mean()
 df.groupby("condition").size()                       # standard / camera / multi / ...
-df[df.complexity == "L3"].groupby("family").size()   # what survives the hardest rung
+df[df.complexity == "L3"].groupby("family").size()   # what survives the hardest level
 df[df.n_culprits > 1]                                # the multi-object clips
 ```
 
@@ -365,23 +365,23 @@ a check you will not run is a check you do not have.
 |---|---|---|
 | `review_severity` | do **weak / medium / strong** differ, for every family? | ~8 min |
 | `review_conditions` | do the **five conditions** do what they claim? | ~5 min |
-| `review_L0` … `review_L3` | does **this rung** render every scene correctly? | ~3–18 min |
-| `review_ladder` | do the rungs come out in their **declared proportions**? | ~18 min |
+| `review_L0` … `review_L3` | does **this level** render every scene correctly? | ~3–18 min |
+| `review_ladder` | do the levels come out in their **declared proportions**? | ~18 min |
 | `review` | does **every cell** build? | ~35 min |
-| `v0_mini` | **the whole dataset in miniature** — every family, rung, condition and bin | **~6 h** |
+| `v0_mini` | **the whole dataset in miniature** — every family, level, condition and bin | **~6 h** |
 | `v0_release` | the published dataset, whole ladder, 10 variants | **~1795 h — read below** |
-| `v0_L0` … `v0_L3` | one rung of that release, on its own | the four **sum to** `v0_release` |
+| `v0_L0` … `v0_L3` | one level of that release, on its own | the four **sum to** `v0_release` |
 
 **`v0_mini` is not a review sweep** — it is the same structure as the release, made small, so
 what you learn from it transfers. It is small in *cells*, not variants, and that is forced:
-the condition cycle has ten slots and each rung takes a share of them, so it takes **ten
-variants** before all four rungs and all five conditions appear at all. Three scenarios
+the condition cycle has ten slots and each level takes a share of them, so it takes **ten
+variants** before all four levels and all five conditions appear at all. Three scenarios
 (`pour`, `shadow_track`, `drop`) cover all 23 families between them, which is 41 cells
 instead of 166.
 
 **`v0_release` is weeks on one box**, and embarrassingly parallel: jobs are independent by
-`(scenario, seed, rung)` and the per-clip rng is keyed by content rather than queue position,
-so N machines is N× faster. Split with `--scenario a,b,c` per machine, or a rung apiece with
+`(scenario, seed, level)` and the per-clip rng is keyed by content rather than queue position,
+so N machines is N× faster. Split with `--scenario a,b,c` per machine, or a level apiece with
 `v0_L0`…`v0_L3`, and merge the clip trees — nothing collides.
 
 ```bash
@@ -464,22 +464,22 @@ clips = 166 cells × bins × variants        invalid
 ```
 
 A variant is a **fresh seed**, not a re-roll: variant *N* uses `seed + N`, and each complexity
-rung draws from its own seed block, so no two rungs share a scene.
+level draws from its own seed block, so no two levels share a scene.
 
-### Generating one rung at a time
+### Generating one level at a time
 
-`v0_L0` … `v0_L3` are `v0_release` split by rung, and they **partition** it: each carries the
-number of variants that rung would get in a full run, so generating all four produces exactly
-what `--complexity all` produces, and generating one produces exactly that rung's share.
+`v0_L0` … `v0_L3` are `v0_release` split by level, and they **partition** it: each carries the
+number of variants that level would get in a full run, so generating all four produces exactly
+what `--complexity all` produces, and generating one produces exactly that level's share.
 
 ```bash
-python -m physloc.cli taxonomy --config v0_L0     # price the rung
-python -m physloc.cli generate --config v0_L0     # ...and only that rung
+python -m physloc.cli taxonomy --config v0_L0     # price the level
+python -m physloc.cli generate --config v0_L0     # ...and only that level
 ```
 
-Useful for spreading a release across machines a rung at a time, regenerating one rung after
+Useful for spreading a release across machines a level at a time, regenerating one level after
 a fix, or shipping a smaller dataset that is only ever L0. Nothing collides when the trees
-are merged: the clip path is keyed by rung already, and every rung draws from its own seed
+are merged: the clip path is keyed by level already, and every level draws from its own seed
 block.
 
 ## 15. Publishing
@@ -505,7 +505,7 @@ python -m physloc.cli params --config v0_mini   # ...for one run
 
 | section | what it holds |
 |---|---|
-| `ladder` | each rung's share of a full generation |
+| `ladder` | each level's share of a full generation |
 | `conditions` | the difficulty cycle — its length is the period, its contents are the shares |
 | `objects` | extra-object count, culprit counts, distractor size/speed/clearance |
 | `camera` | motion kinds and weights, travel and dolly ranges |

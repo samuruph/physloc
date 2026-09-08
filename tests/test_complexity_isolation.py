@@ -1,17 +1,17 @@
-"""A rung must change ONE thing, and nothing else -- docs/roadmap.md section 3a.
+"""A level must change ONE thing, and nothing else -- docs/roadmap.md section 3a.
 
 **These are not twins.** "Twin" in this project means the valid/invalid pair:
 one scene, bit-identical prefix up to `t_event`. Two complexity levels are not
-twins of each other and the dataset does not ship them as such -- every rung
+twins of each other and the dataset does not ship them as such -- every level
 draws its own scenes from its own seed block, because a ladder whose upper
-rungs contain no new physical events adds difficulty but no breadth.
+levels contain no new physical events adds difficulty but no breadth.
 
 What is tested here is a property of the SAMPLER, not of the release: handed
-the same seed, two rungs must differ only on the axis between them. That is
-what proves a rung changes its own axis and leaves everything else alone -- the
+the same seed, two levels must differ only on the axis between them. That is
+what proves a level changes its own axis and leaves everything else alone -- the
 appearance streams are salted, `pick_hdri` does not steal a physics draw, and
 turning the level up does not silently resample the scene. Generation then
-hands the rungs different seeds on purpose, and the guarantee still holds: it
+hands the levels different seeds on purpose, and the guarantee still holds: it
 is about what a level DOES, not about which seeds it is given.
 
 L0 -> L1 is MATERIALS, so mass is the one physical quantity that is supposed to
@@ -61,9 +61,9 @@ def test_appearance_draws_do_not_shift_the_physics_stream(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_materials_are_what_l1_changes(name):
-    """The other half: the rung has to actually DO something.
+    """The other half: the level has to actually DO something.
 
-    A ladder whose rungs are indistinguishable measures nothing, and a test
+    A ladder whose levels are indistinguishable measures nothing, and a test
     that only checks what stayed the same would pass on a level that changed
     nothing at all. L1 gives every body a material, which gives it a density,
     which gives it a mass.
@@ -89,24 +89,24 @@ def test_materials_are_what_l1_changes(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_whole_built_ladder_rolls_identically(name):
-    """Handed one seed, every rung with the same OBJECTS rolls it the same way.
+    """Handed one seed, every level with the same OBJECTS rolls it the same way.
 
     Not a claim that the release contains these pairs -- it does not, by
-    design. A claim that a rung's machinery touches its own axis and nothing
+    design. A claim that a level's machinery touches its own axis and nothing
     else, which is the only reason a level comparison means anything at all.
 
     The blocker this closed was geometry: `C.ground` returned a cube below the
     HDRI level and a KuBasic dome at it, so the ground changed shape under a
-    rung that was supposed to be about lighting. The dome is now the ground
+    level that was supposed to be about lighting. The dome is now the ground
     everywhere -- measured against the cube in `physloc/render/probe_dome.py`,
     flat to within Bullet's collision margin -- and L0, L1 and L2 roll
     identically on all thirteen scenarios.
 
-    **L3 IS EXEMPT, and that is the rung working.** It replaces primitives with
+    **L3 IS EXEMPT, and that is the level working.** It replaces primitives with
     scanned GSO meshes, so the collision geometry changes by construction: a
     shark does not roll like a sphere. Asserting otherwise would be asserting
-    that the hardest rung does nothing. The exemption is derived from
-    `actor_assets` rather than hardcoded, so a future rung that keeps
+    that the hardest level does nothing. The exemption is derived from
+    `actor_assets` rather than hardcoded, so a future level that keeps
     primitives is still held to the rule.
 
     This is the HOST rollout, an approximation of PyBullet -- so it pins that
@@ -130,25 +130,25 @@ def test_the_whole_built_ladder_rolls_identically(name):
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_the_gso_rung_actually_changes_the_objects(name):
-    """The other half: a rung whose objects are indistinguishable from the
-    rung below measures nothing.
+def test_the_gso_level_actually_changes_the_objects(name):
+    """The other half: a level whose objects are indistinguishable from the
+    level below measures nothing.
 
     L3 swaps every non-static actor and distractor for a scanned asset, sized
     so its LONGEST AXIS matches what the primitive was drawn at -- MOVi's
-    normalisation (`movi_c_worker.py:167-170`). Without that the rung would
+    normalisation (`movi_c_worker.py:167-170`). Without that the level would
     change the scene's scale as well as its geometry, and two axes would move
     at once.
     """
     gso = [k for k, v in COMPLEXITY.items()
            if v.implemented and v.actor_assets == "gso"]
     if not gso:
-        pytest.skip("no GSO rung is built")
+        pytest.skip("no GSO level is built")
     sc = scenarios.get(name)
     plain = sc.sample(SEED, TIERS["release"], "L0")
     scanned = sc.sample(SEED, TIERS["release"], gso[0])
     swapped = [b for b in scanned.bodies if b.kind == "gso"]
-    assert swapped, "%s: the GSO rung swapped nothing" % name
+    assert swapped, "%s: the GSO level swapped nothing" % name
     assert all(b.asset_id for b in swapped), name
     for before, after in zip(plain.bodies, scanned.bodies):
         if after.kind != "gso":
@@ -158,4 +158,4 @@ def test_the_gso_rung_actually_changes_the_objects(name):
         # scale 13.
         assert 2 * max(after.extents) == pytest.approx(
             2 * max(before.extents), rel=0.02), (
-            "%s: %s changed size across the rung" % (name, after.name))
+            "%s: %s changed size across the level" % (name, after.name))

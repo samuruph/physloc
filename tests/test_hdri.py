@@ -1,4 +1,4 @@
-"""The environment map: chosen once, per rung, and every id has to resolve.
+"""The environment map: chosen once, per level, and every id has to resolve.
 
 The list is baked into the repo so `SceneSpec` sampling works on the host with
 no container and no network. That is the right trade, and it has a cost nothing
@@ -33,10 +33,10 @@ def test_the_id_list_is_well_formed():
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_only_the_hdri_rungs_get_an_environment(name):
+def test_only_the_hdri_levels_get_an_environment(name):
     """`background` decides, and nothing else. It used to be decided in each
     scenario -- thirteen identical copies of one conditional -- which is a
-    property of the rung living in thirteen files."""
+    property of the level living in thirteen files."""
     sc = scenarios.get(name)
     for level, cx in COMPLEXITY.items():
         if not cx.implemented:
@@ -61,7 +61,7 @@ def test_the_environment_varies_across_scenarios_and_seeds():
     level = next((k for k, v in COMPLEXITY.items()
                   if v.background == "hdri" and v.implemented), None)
     if level is None:
-        pytest.skip("no HDRI rung is built")
+        pytest.skip("no HDRI level is built")
     across = {n: scenarios.get(n).sample(SEED, TIERS["debug"], level).hdri_id
               for n in NAMES}
     assert len(set(across.values())) >= len(NAMES) // 2, across
@@ -72,13 +72,13 @@ def test_the_environment_varies_across_scenarios_and_seeds():
 
 def test_choosing_an_environment_does_not_shift_a_physics_draw():
     """Its own salted stream. `pick_hdri(rng)` once drew from the PHYSICS
-    stream, and because it only fires on the realistic rung the extra draw
+    stream, and because it only fires on the realistic level the extra draw
     shifted every physics value after it -- so the two levels were independent
     releases wearing the same seed rather than a pair."""
     level = next((k for k, v in COMPLEXITY.items()
                   if v.background == "hdri" and v.implemented), None)
     if level is None:
-        pytest.skip("no HDRI rung is built")
+        pytest.skip("no HDRI level is built")
     for name in NAMES:
         sc = scenarios.get(name)
         plain = sc.sample(SEED, TIERS["debug"], "L1")

@@ -49,7 +49,7 @@ KUBASIC = "gs://kubric-public/assets/KuBasic/KuBasic.json"
 #: picture and a poor test.
 KUBASIC_SHAPES = ("cylinder", "cone", "torus")
 
-#: Google Scanned Objects: real photogrammetry, and the L3 rung's whole
+#: Google Scanned Objects: real photogrammetry, and the L3 level's whole
 #: content. The id list and every asset's bounds are baked into
 #: `physloc/scenarios/_gso.py` -- see there for why the host needs the geometry
 #: and the HDRI list gets away with ids alone.
@@ -115,7 +115,7 @@ def build_scene(spec: SceneSpec, scratch):
                              static=b.sim_static, mass=b.mass,
                              friction=b.friction, restitution=b.restitution)
             # NO MATERIAL OVERRIDE. A GSO asset ships its own scanned texture,
-            # and that is the entire point of the rung -- painting a flat
+            # and that is the entire point of the level -- painting a flat
             # colour over it would leave the geometry hard and the appearance
             # exactly as easy as L1.
             obj.segmentation_id = b.segmentation_id
@@ -138,7 +138,7 @@ def build_scene(spec: SceneSpec, scratch):
             obj.segmentation_id = b.segmentation_id
         elif b.kind == "dome":
             # KuBasic's dome is both the ground plane and the backdrop -- the
-            # idiom movi_def_worker.py uses, and now the ground at EVERY rung
+            # idiom movi_def_worker.py uses, and now the ground at EVERY level
             # rather than only the realistic ones, so the collision geometry
             # cannot change underneath a level comparison. See `_common.ground`.
             kubasic = kb.AssetSource.from_manifest(KUBASIC)
@@ -606,9 +606,9 @@ def main() -> int:
                          "Applied before any sampling, so the knobs are in "
                          "force for the scene as well as the annotation.")
     ap.add_argument("--n-variants", type=int, default=None,
-                    help="how many variants this RUNG was allocated. The "
+                    help="how many variants this LEVEL was allocated. The "
                          "difficulty condition is spread across them, so a "
-                         "rung given two still sees more than `standard` -- "
+                         "level given two still sees more than `standard` -- "
                          "see `scenarios.base.condition_for`.")
     ap.add_argument("--variant", type=int, default=0,
                     help="which randomisation of this cell this is. Some "
@@ -702,12 +702,12 @@ def main() -> int:
             # noticed, because every check ran against a single generation.
             rng = np.random.RandomState(
                 (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1))
-            # A RUNG CAN REMOVE WHAT A FAMILY ACTS ON, and that is not a
+            # A LEVEL CAN REMOVE WHAT A FAMILY ACTS ON, and that is not a
             # failure. `colour_shift` has nothing to shift once actors are
             # scanned GSO assets: it declines here rather than producing a
             # fully annotated clip in which nothing changes. Reported as
             # `skipped` so the caller's missing-clip count stays honest --
-            # a cell that cannot exist at this rung was never owed.
+            # a cell that cannot exist at this level was never owed.
             if not inj.available_at(spec):
                 variants.append({"family": family, "severity": sev,
                                  "ok": False, "skipped": True,

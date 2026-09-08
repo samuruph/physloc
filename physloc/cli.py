@@ -87,9 +87,9 @@ SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
                     ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
 
 
-#: How far apart each complexity rung's seed block sits. Wide enough that no
+#: How far apart each complexity level's seed block sits. Wide enough that no
 #: run's variant count can reach the next block, so `--complexity all` produces
-#: independent scenes per rung rather than one scene ladder-ed four ways, and
+#: independent scenes per level rather than one scene ladder-ed four ways, and
 #: narrow enough to stay readable in a directory listing.
 LEVEL_SEED_STRIDE = 1_000_000
 
@@ -117,8 +117,8 @@ def _print_release_size(cells, a) -> None:
     variants = max(1, a.variants)
     scenarios = {s for s, _ in cells}
 
-    # ONE ROW PER RUNG, because a ladder run is several different prices. The
-    # rungs differ in background -- an HDRI clip costs ~44 s against a solid
+    # ONE ROW PER LEVEL, because a ladder run is several different prices. The
+    # levels differ in background -- an HDRI clip costs ~44 s against a solid
     # background's ~8 s at the debug tier -- and in how many variants they get,
     # so quoting the whole run at L0's rate understated a ladder by more than
     # a factor of two.
@@ -365,16 +365,16 @@ def cmd_generate(a) -> int:
     if not levels:
         print("no complexity level selected", file=sys.stderr)
         return 2
-    # EVERY RUNG DRAWS ITS OWN SCENES. Each level gets its own seed block, so
+    # EVERY LEVEL DRAWS ITS OWN SCENES. Each level gets its own seed block, so
     # an L1 clip is not an L0 clip wearing better materials -- it is a
     # different drop, of a different object, from a different height, under a
     # different camera.
     #
     # The alternative was tried and rejected: reusing one seed block across
-    # rungs makes every level a re-render of L0, which pairs clip for clip and
+    # levels makes every level a re-render of L0, which pairs clip for clip and
     # buys a neat ablation at the cost of the thing the dataset is actually
     # for. A benchmark wants breadth -- more distinct physical events -- and a
-    # ladder whose upper rungs contain no new scenes contributes none.
+    # ladder whose upper levels contain no new scenes contributes none.
     #
     # The stride is far wider than any run's variant count, so blocks cannot
     # overlap and a level's seeds are reproducible from its name alone.
@@ -391,7 +391,7 @@ def cmd_generate(a) -> int:
         # A level of its own in the work tree when the ladder is walked. Not
         # required for correctness any more -- the seed blocks are disjoint, so
         # the scratch paths cannot collide -- but a ladder run's scratch is
-        # easier to read, and to delete a rung from, when it is grouped.
+        # easier to read, and to delete a level from, when it is grouped.
         here = work if len(levels) == 1 else os.path.join(work, level)
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, here, complexity=level,
@@ -403,7 +403,7 @@ def cmd_generate(a) -> int:
             return {"scenario": scenario, "seed": seed, "level": level,
                     "rc": rc, "info": info, "results": [], "bad": []}
         # A SKIP IS NOT A FAILURE. `colour_shift` cannot act on a scanned
-        # asset, so at the GSO rung it declines -- and reporting that as a
+        # asset, so at the GSO level it declines -- and reporting that as a
         # broken cell would train everyone to ignore the failure list.
         bad = [x for x in info.get("variants", [])
                if not x.get("ok") and not x.get("skipped")]
@@ -521,14 +521,14 @@ def cmd_generate(a) -> int:
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
-    # Cells the rung cannot express were never owed, so they do not count as
+    # Cells the level cannot express were never owed, so they do not count as
     # missing -- see `Injector.available_at`.
     n_skipped = sum(len(o.get("skipped") or []) for o in outcomes)
     expected = len(cells) * sum(n for _, n in levels) * len(
         ["weak", "medium", "strong"] if a.severity == "all"
         else [x for x in a.severity.split(",") if x.strip()])
     if n_skipped:
-        print("   %d cell(s) skipped: the complexity rung removed what the "
+        print("   %d cell(s) skipped: the complexity level removed what the "
               "family acts on" % n_skipped)
     expected -= n_skipped
     if len(done) < expected:

@@ -100,29 +100,29 @@ v1 could be failing at realism, at clutter, or merely at a resolution it had not
 on, and the release could not say which. Fixing the geometry is what makes v0 and v1
 **paired**, which is the entire point of the axis.
 
-### 3a. Rung isolation — and the blocker that is now closed
+### 3a. Level isolation — and the blocker that is now closed
 
-A rung must change **one axis and nothing else**, or a level comparison means
+A level must change **one axis and nothing else**, or a level comparison means
 nothing. Note what this is *not*: the release does **not** ship the same scene
-at several rungs. Every rung draws its own scenes from its own seed block, because
-a ladder whose upper rungs contain no new physical events adds difficulty but no
+at several levels. Every level draws its own scenes from its own seed block, because
+a ladder whose upper levels contain no new physical events adds difficulty but no
 breadth. "Twin" in this project means the valid/invalid pair and nothing else.
 
 - **Fixed.** `pick_hdri(rng)` drew from the PHYSICS stream, and because it only
-  fired on the realistic rung the extra draw shifted every physics value after
+  fired on the realistic level the extra draw shifted every physics value after
   it. Appearance has its own salted stream now (`_common.appearance_rng`), and
   the choice itself moved out of all thirteen scenarios into `_vary`.
 - **Fixed — the ground.** `C.ground` returned a **cube** below the HDRI level
   and a KuBasic **dome** at it: a genuinely different collision surface, so the
-  same seed did not roll the same way and the rungs could not be compared at
-  all. The dome is now the ground at **every** rung, shaded flat below L2 and
+  same seed did not roll the same way and the levels could not be compared at
+  all. The dome is now the ground at **every** level, shaded flat below L2 and
   lit by an HDRI at it. Measured before committing to it
   (`physloc/render/probe_dome.py`): a 0.35 m sphere dropped at 0–5 m from the
   origin rests at 0.3500 on the cube and 0.3509 on the dome — flat to within
   Bullet's collision margin, and once both sides use the dome the difference is
   zero.
 - **Verified.** `tests/test_complexity_isolation.py` rolls all thirteen
-  scenarios at every built rung: **0 of 13 differ**. L2 is unblocked and built.
+  scenarios at every built level: **0 of 13 differ**. L2 is unblocked and built.
 
 ### 3b. Population — single vs multi
 
@@ -192,7 +192,7 @@ pieces and should land last, because it multiplies whatever the other two produc
 
 ### Order
 
-1. ~~**Make the rungs isolable**~~ — **done**: the dome is the ground at every rung and
+1. ~~**Make the levels isolable**~~ — **done**: the dome is the ground at every level and
    `test_complexity_isolation.py` shows 0 of 13 scenarios differ (§3a). L2 is built.
 2. **Population axis in the scenes**, still one culprit per clip. All 180 cells run unchanged
    in a busier scene, which is what makes this safe to land on its own.
@@ -218,7 +218,7 @@ because every prose copy of them in this repository drifted.
    a `LightSpec` animation channel. Completes the appearance domain. Note it necessarily
    co-moves with `shadow`, so the two must not share a scenario.
 2. **Population + multi-culprit** — the big structural piece (§3a).
-3. **Complexity ladder** — L2 (HDRI) is **built**; L3 (GSO) is the remaining rung (§3b).
+3. **Complexity ladder** — L2 (HDRI) is **built**; L3 (GSO) is the remaining level (§3b).
 4. **Randomisation depth** — mostly falls out of 3 (§3c).
 
 1 is the last of v0. 2–4 are v1.

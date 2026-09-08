@@ -16,7 +16,7 @@ from physloc.scenarios.base import (CONDITION_CYCLE, EXTRA_OBJECTS,
 
 NAMES = sorted(scenarios.available())
 
-#: Distractors are a CONDITION, not a rung: every level places them on the
+#: Distractors are a CONDITION, not a level: every level places them on the
 #: clips whose condition asks for them. Tested at L0, where the rest of the
 #: scene is held plainest, so anything the clutter does is the only thing that
 #: changed.
@@ -57,7 +57,7 @@ def _split(spec):
 def test_distractors_land_only_on_their_declared_share():
     """The ratio, at the declared value, on every scenario.
 
-    Clutter is a CONDITION rather than a rung, so what pins it is not "which
+    Clutter is a CONDITION rather than a level, so what pins it is not "which
     level" but "which variants, and how many of them". The condition cycle
     decides by variant INDEX, so every scenario gets the same share instead of
     each flipping its own coin -- measured with independent draws, a nominal

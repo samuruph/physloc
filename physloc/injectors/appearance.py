@@ -302,7 +302,7 @@ class ColourShift(Injector):
     persistent = True
 
     def available_at(self, spec) -> bool:
-        """Not on a rung whose actors are scanned assets -- they have textures
+        """Not on a level whose actors are scanned assets -- they have textures
         rather than a flat colour, and there is nothing to shift. See `plan`."""
         return not any(b.kind == "gso" for b in _geom.actors(spec))
 
@@ -383,7 +383,7 @@ class ColourShift(Injector):
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         # A BODY MUST HAVE A COLOUR TO SHIFT ONE. A scanned GSO asset carries
         # its own texture instead, and `replay` cannot keyframe a `color` trait
-        # it does not have -- so at the GSO rung this family planned, annotated
+        # it does not have -- so at the GSO level this family planned, annotated
         # and rendered a clip in which absolutely nothing changed. Measured on
         # `drop x colour_shift` at L3: a full set of labels, `t_event=8`,
         # `vwin=[[8,13]]`, and `sev=0.00`.

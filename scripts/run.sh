@@ -15,12 +15,12 @@
 #   bash scripts/run.sh review_ladder         # -> samueleruf/physloc-review_ladder
 #   bash scripts/run.sh review_ladder         # the whole ladder in proportion
 #   bash scripts/run.sh v0_release            # the published dataset
-#   bash scripts/run.sh v0_L2                 # ...or one rung of it at a time
+#   bash scripts/run.sh v0_L2                 # ...or one level of it at a time
 #
-# v0_L0..v0_L3 PARTITION v0_release: each carries the variants that rung would
+# v0_L0..v0_L3 PARTITION v0_release: each carries the variants that level would
 # get in a full run, so the four together produce exactly what the whole-ladder
 # config produces. Generate them on separate machines and merge the trees --
-# nothing collides, because the clip path is keyed by rung and each rung draws
+# nothing collides, because the clip path is keyed by level and each level draws
 # from its own seed block.
 #   bash scripts/run.sh review --tier release # extra flags pass straight through
 #
@@ -29,13 +29,13 @@
 #
 # EACH CONFIG ANSWERS ONE QUESTION, which is why they are all minutes rather
 # than hours. `review` covers every CELL; `review_severity` every FAMILY at
-# every strength; `review_conditions` every CONDITION; `review_L*` every RUNG.
+# every strength; `review_conditions` every CONDITION; `review_L*` every LEVEL.
 # Price any of them first:
 #
 #   python -m physloc.cli taxonomy --config review_ladder
 #
-# ONE RUNG AT A TIME. The ladder is scene realism -- L0 baseline, L1 materials,
-# L2 HDRI, L3 GSO -- and each rung adds exactly one thing, so rendering them
+# ONE LEVEL AT A TIME. The ladder is scene realism -- L0 baseline, L1 materials,
+# L2 HDRI, L3 GSO -- and each level adds exactly one thing, so rendering them
 # separately is how you find out WHICH thing broke:
 #
 #   bash scripts/run.sh review_L0    # baseline: flat colours, one density
@@ -43,8 +43,8 @@
 #   bash scripts/run.sh review_L2    # + HDRI environment
 #   bash scripts/run.sh review_L3    # + GSO objects, real 3D scans
 #
-# DIFFICULTY CONDITIONS ARE NOT RUNGS. Every clip carries one of five, applied
-# inside every rung, on a ten-variant cycle: six `standard`, then one each of
+# DIFFICULTY CONDITIONS ARE NOT LEVELS. Every clip carries one of five, applied
+# inside every level, on a ten-variant cycle: six `standard`, then one each of
 # `camera`, `distractors`, `multi` and `camera+multi`. So use TEN variants when
 # you want to see them -- the plain clips come first, so a shorter run is
 # entirely `standard`, which is the intended behaviour and useless for checking
@@ -107,7 +107,7 @@ $PV validate "$REL" || true
 
 # Which severity bins this release actually contains.
 # clips/<release>/<level>/<scenario>/<seed>/<clip> -- the level joined the key
-# when one run started producing several rungs, so these depths went up by one.
+# when one run started producing several levels, so these depths went up by one.
 BINS=$(find "$REL/clips" -mindepth 5 -maxdepth 5 -type d -name 'invalid_*' \
        | sed -n 's/.*_\(weak\|medium\|strong\)$/\1/p' | sort -u)
 BINS=${BINS:-strong}

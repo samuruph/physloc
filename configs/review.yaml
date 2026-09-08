@@ -13,7 +13,7 @@
 # Anything typed on the command line overrides what is written here, so
 # `--config review --tier release` is this sweep at release size.
 #
-# To isolate ONE rung of the ladder, use its own file -- review_L0 .. review_L3.
+# To isolate ONE level of the ladder, use its own file -- review_L0 .. review_L3.
 # To produce a whole ladder in one run, use review_ladder.
 #
 # PUBLISH IT. Packaging always happens; uploading is opt-in, because packaging
@@ -46,7 +46,7 @@ defaults:
   #   physically neutral. Variant N uses seed+N.
   seed: 777
 
-  # complexity: HOW HARD THE SCENE IS TO LOOK AT. Four rungs of scene realism;
+  # complexity: HOW HARD THE SCENE IS TO LOOK AT. Four levels of scene realism;
   #   `physloc taxonomy` prints them.
   #     L0  primitives, flat colours, solid background     (built)
   #     L1  + materials: wood, steel, rubber -- appearance
@@ -56,7 +56,7 @@ defaults:
   #   `all` walks the built ladder in one run, at the shares declared on
   #   `COMPLEXITY` -- see configs/review_ladder.yaml.
   #
-  #   CAMERA MOTION AND DISTRACTORS ARE NOT RUNGS. They are orthogonal axes
+  #   CAMERA MOTION AND DISTRACTORS ARE NOT LEVELS. They are orthogonal axes
   #   applied inside every level at declared ratios (20% and 30%), stratified
   #   by variant index. So a run of one variant is entirely static and
   #   uncluttered, and only a longer run starts spending clips on them.

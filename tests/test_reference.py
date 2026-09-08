@@ -3,7 +3,7 @@
 Counts live in `physloc/taxonomy.py` and `physloc/scenarios/base.py` and
 nowhere else -- prose copies of them have drifted five separate ways, which is
 the whole reason `physloc/reference.py` exists. This is the tripwire: add a
-family, move a share, build a rung, and the README goes stale until someone
+family, move a share, build a level, and the README goes stale until someone
 runs one command.
 
     python -m physloc.reference --write

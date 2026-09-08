@@ -212,7 +212,7 @@ class Injector:
 
         Not "did it decline this seed" -- that is `plan` returning None, and a
         seed retry answers it. This is the stronger claim that no seed will
-        work, because the rung itself has removed what the family acts on.
+        work, because the level itself has removed what the family acts on.
 
         One family needs it today: `colour_shift` has nothing to shift once
         actors are scanned GSO assets, which carry a texture rather than a flat

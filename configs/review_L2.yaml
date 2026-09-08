@@ -1,5 +1,5 @@
 # ============================================================================
-# review_L2 -- every cell at ONE rung of the ladder, at debug size.
+# review_L2 -- every cell at ONE level of the ladder, at debug size.
 #
 #   python -m physloc.cli generate --config review_L2
 #   python -m physloc.cli validate out/review_L2
@@ -8,9 +8,9 @@
 # L2 is + an HDRI environment, lit from a real capture.
 # STATUS: BUILT.
 #
-# It was blocked on the ground being a cube below this rung and a dome at it --
-# a real change of collision shape. The dome is now the ground at EVERY rung,
-# shaded flat below L2 and lit by an HDRI here, so the rungs differ only in
+# It was blocked on the ground being a cube below this level and a dome at it --
+# a real change of collision shape. The dome is now the ground at EVERY level,
+# shaded flat below L2 and lit by an HDRI here, so the levels differ only in
 # their own axis. An HDRI clip costs ~44 s against a solid background's ~8 s,
 # which is why the ladder's shares fall as realism rises.
 #
@@ -41,8 +41,8 @@ defaults:
   complexity: L2
   severity: strong
   variants: 1
-  # ALL THIRTEEN SCENARIOS, three families. A per-rung check asks "does this
-  # rung render every scene correctly", so breadth of SCENARIO is what matters
+  # ALL THIRTEEN SCENARIOS, three families. A per-level check asks "does this
+  # level render every scene correctly", so breadth of SCENARIO is what matters
   # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
   # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
   # so the full matrix here would be over an hour.

@@ -34,10 +34,10 @@ publication. Nothing has been published yet.
   big and how long, the **complexity ladder (L0–L3)** says how hard, and `v0`/`v1` are what
   a published dataset is CALLED — set by `--outdir`, recorded as `release` in every
   `meta.json`. **Debug at the debug tier; a bug found there is fixed for both.**
-- **The complexity ladder is SCENE REALISM, and nothing else.** Four rungs -- L0 baseline,
+- **The complexity ladder is SCENE REALISM, and nothing else.** Four levels -- L0 baseline,
   L1 materials, L2 HDRI, L3 GSO -- each with a declared `share` of a full generation
   (1.00/0.50/0.30/0.20). **Difficulty is FIVE NAMED CONDITIONS, one per clip**, applied
-  inside every rung and never rungs of their own -- `CONDITION_CYCLE`, a ten-variant cycle:
+  inside every level and never levels of their own -- `CONDITION_CYCLE`, a ten-variant cycle:
   `standard` 60%, then `camera`, `distractors`, `multi` and `camera+multi` at 10% each
   (marginals: camera 20%, distractors 10%, multi 20%). One condition per clip rather than
   independent per-axis coin flips, so every count is exact and every comparison against
@@ -49,14 +49,14 @@ publication. Nothing has been published yet.
   scenery no family can target; `multi` makes them `role="actor"` peers and 2..N-1 violate.
   Only the second asks "which of these is wrong". They are never combined.
 
-  Conditions used to be rungs, firing on 1 variant in 5 *within* a level, which meant
+  Conditions used to be levels, firing on 1 variant in 5 *within* a level, which meant
   "L2 minus L1" measured materials plus whichever variants happened to draw a camera move --
-  a rung whose axis fires on only some of its clips is not a stratum. A level that does not
+  a level whose axis fires on only some of its clips is not a stratum. A level that does not
   buy a whole variant is SKIPPED, so a short run is all baseline; naming a level explicitly
-  is the override, and `v0_L0`..`v0_L3` partition `v0_release` for exactly that. `--complexity all` walks the ladder in one run, and **every rung draws its OWN scenes**
+  is the override, and `v0_L0`..`v0_L3` partition `v0_release` for exactly that. `--complexity all` walks the ladder in one run, and **every level draws its OWN scenes**
   from its own seed block (`cli.LEVEL_SEED_STRIDE`) — an L1 clip is not an L0 clip in better
-  materials. Reusing one seed block across rungs was tried and rejected: it pairs clips
-  neatly and buys an ablation, at the cost of the breadth the dataset exists for. The rung is
+  materials. Reusing one seed block across levels was tried and rejected: it pairs clips
+  neatly and buys an ablation, at the cost of the breadth the dataset exists for. The level is
   part of a clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`) so a level is a
   directory you can hold up on its own. All of it lives in `COMPLEXITY` in
   `physloc/scenarios/base.py`.

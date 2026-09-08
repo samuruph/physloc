@@ -53,7 +53,7 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
 
 
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
-    """KuBasic's `dome`, at EVERY rung -- shaded flat below L2, lit by an HDRI
+    """KuBasic's `dome`, at EVERY level -- shaded flat below L2, lit by an HDRI
     at L2 and above. The trick MOVi uses, and the thing that makes the ladder a
     ladder.
 

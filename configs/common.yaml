@@ -23,13 +23,13 @@
 # ============================================================================
 
 ladder:
-  # What share of a full generation each complexity rung gets, relative to L0.
+  # What share of a full generation each complexity level gets, relative to L0.
   # Falling as realism rises, for two reasons: the baseline is what everything
   # else is compared against so it should be the largest stratum, and an HDRI
   # clip costs several times a solid-background one.
   #
-  # A rung whose share does not buy a whole variant is SKIPPED, so raising a
-  # share is how you make an expensive rung appear in a smaller run.
+  # A level whose share does not buy a whole variant is SKIPPED, so raising a
+  # share is how you make an expensive level appear in a smaller run.
   shares:
     L0: 1.00
     L1: 0.50
@@ -44,8 +44,8 @@ conditions:
   #
   # The plain slots come FIRST on purpose: a run shorter than the first hard
   # index is entirely `standard`, which is what makes a quick check the easy
-  # case. A rung given fewer variants than there are slots SPREADS across them
-  # rather than taking a prefix, so every rung still sees real conditions.
+  # case. A level given fewer variants than there are slots SPREADS across them
+  # rather than taking a prefix, so every level still sees real conditions.
   cycle: [standard, standard, standard, standard, standard, standard,
           camera, distractors, multi, camera+multi]
 

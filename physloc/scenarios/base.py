@@ -221,13 +221,13 @@ class Complexity:
     #: baseline and only a long one starts spending clips on realism. Naming a
     #: level explicitly (`--complexity L2`) overrides that.
     share: float
-    #: May a clip at this rung move its camera at all? WHICH clips do is not a
-    #: property of the rung -- it is the `CONDITION_CYCLE`, which applies
-    #: identically at every level. This is only an off switch, for a rung whose
+    #: May a clip at this level move its camera at all? WHICH clips do is not a
+    #: property of the level -- it is the `CONDITION_CYCLE`, which applies
+    #: identically at every level. This is only an off switch, for a level whose
     #: framing cannot survive a moving camera.
     camera_moves: bool
     #: How many extra objects a crowded clip holds is `EXTRA_OBJECTS`, drawn
-    #: per clip and identical at every rung -- it was a per-level field, and a
+    #: per clip and identical at every level -- it was a per-level field, and a
     #: quantity of the same thing is not a step of realism.
 
     implemented: bool
@@ -241,7 +241,7 @@ class Complexity:
                 "camera_moves": self.camera_moves}
 
 
-#: THE LADDER IS SCENE REALISM. Four rungs, each the one below it plus one step
+#: THE LADDER IS SCENE REALISM. Four levels, each the one below it plus one step
 #: of how hard the scene is to look at:
 #:
 #:   L0  primitives, flat colours, a solid background   -- the baseline
@@ -249,15 +249,15 @@ class Complexity:
 #:   L2  + a real environment, lit by an HDRI
 #:   L3  + GSO objects in that environment              -- the hardest
 #:
-#: **Camera motion and distractors are NOT rungs.** They used to be, and it was
+#: **Camera motion and distractors are NOT levels.** They used to be, and it was
 #: wrong twice over. A level whose axis fires on only some of its clips is not a
 #: stratum at all: with camera motion on 1 variant in 5, "L2 minus L1" was not
 #: measuring materials, it was measuring materials plus whichever variants
-#: happened to draw a camera move. And making them rungs forced a choice nobody
+#: happened to draw a camera move. And making them levels forced a choice nobody
 #: wants -- either every realistic clip moves its camera, or none does.
 #:
 #: They are DIFFICULTY CONDITIONS, one per clip, applied identically inside
-#: every rung -- see `CONDITION_CYCLE`. So the dataset answers "how much does
+#: every level -- see `CONDITION_CYCLE`. So the dataset answers "how much does
 #: clutter cost at each realism level" as well as "how much does realism cost",
 #: and the share of each condition is a number you set rather than an artefact
 #: of how the ladder was climbed.
@@ -474,7 +474,7 @@ class SceneSpec:
     physics_medium: str = "rigid"
     complexity: str = DEFAULT_COMPLEXITY
     hdri_id: Optional[str] = None
-    #: How many variants this rung was allocated, and which difficulty
+    #: How many variants this level was allocated, and which difficulty
     #: condition this clip therefore carries. See `condition_for`.
     n_variants: Optional[int] = None
     condition: str = "standard"
@@ -703,7 +703,7 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
     looked like L0. Half of what is on screen is a ramp, a barrier, a table, a
     pendulum post and a floor -- and every one of them stayed an untextured
     block of flat colour while one object in the middle got a material. The
-    rung changed a fraction of the frame.
+    level changed a fraction of the frame.
 
     Two different treatments, because the two kinds of scenery answer to
     different constraints:
@@ -758,7 +758,7 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
 def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     """From L3 up, actors become scanned objects rather than primitives.
 
-    The last rung, and the one that changes what an object IS rather than how
+    The last level, and the one that changes what an object IS rather than how
     it is lit. A GSO asset is real photogrammetry: irregular, textured, and
     shaped like nothing the physics has a primitive for.
 
@@ -766,14 +766,14 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     (`movi_c_worker.py:167-170`), the asset is normalised by its own longest
     axis -- `scale = target / max(bounds[1] - bounds[0])` -- so a body that was
     a 0.4 m sphere becomes a 0.4 m teapot rather than whatever size the scan
-    happened to be. Without that the rung would change the scene's SCALE as
+    happened to be. Without that the level would change the scene's SCALE as
     well as its geometry, and two axes would move at once.
 
     Scenery is left alone: a floor, a ramp or a barrier is staging, and the
     violation is defined against it. Swapping those for scanned meshes would
     change what the physics means, not how hard it is to look at.
 
-    Its own salted stream, so turning the rung up cannot shift a physics draw
+    Its own salted stream, so turning the level up cannot shift a physics draw
     a scenario already made.
     """
     import zlib
@@ -833,7 +833,7 @@ def _pick_hdri(spec: SceneSpec, seed: int) -> None:
 
     Here rather than in each scenario for the reason every other level-wide
     property is here: it was copied into all THIRTEEN of them, identically, and
-    a property of the rung that lives in thirteen files is a property that will
+    a property of the level that lives in thirteen files is a property that will
     eventually differ in one of them.
 
     Its own salted stream, so turning the level up cannot shift a physics draw
@@ -941,7 +941,7 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
 def _add_distractors(spec: SceneSpec, seed: int) -> None:
     """Populate the scene with bodies that take no part in the violation.
 
-    On the clips whose CONDITION calls for them -- not a rung, so "what does
+    On the clips whose CONDITION calls for them -- not a level, so "what does
     clutter cost" is answerable at each realism level rather than only at the
     top of the ladder. See `CONDITION_CYCLE`.
 
@@ -969,7 +969,7 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
         (int(seed) * 2654435761 + 0xD157 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
     # HOW MANY, drawn per clip, from the same range `multi` uses. It was a
-    # fixed six (twelve at the GSO rung), which is a count a model can learn
+    # fixed six (twelve at the GSO level), which is a count a model can learn
     # instead of the physics -- the same reason `multi` draws its own.
     n = int(rng.randint(EXTRA_OBJECTS[0], EXTRA_OBJECTS[1] + 1))
     floor = next((b for b in spec.bodies if b.role == "floor"), None)
@@ -1093,18 +1093,18 @@ def condition_for(variant: int, n_variants: Optional[int] = None,
                   level: Optional[str] = None) -> str:
     """Which condition this clip carries. See `CONDITION_CYCLE`.
 
-    **SPREAD ACROSS WHATEVER A RUNG WAS GIVEN, not indexed from zero.** A rung
+    **SPREAD ACROSS WHATEVER A LEVEL WAS GIVEN, not indexed from zero.** A level
     high on the ladder gets few variants -- at ten, L3 gets two -- and the six
     `standard` slots come first, so indexing the cycle directly gave every
-    upper rung nothing but `standard`. Measured on a real ladder run: L1, L2
+    upper level nothing but `standard`. Measured on a real ladder run: L1, L2
     and L3 were 100% standard, so the dataset would have shipped its three
-    hardest rungs with no camera motion, no clutter and no multi-culprit clips
+    hardest levels with no camera motion, no clutter and no multi-culprit clips
     at all, and the conditions would have existed only at L0.
 
-    So a rung's `n` variants are spread over the cycle's `P` slots --
-    `slot = v*P // n` -- which keeps each rung's mix close to the declared
-    shares whatever it was allocated. A per-rung PHASE then rotates the result,
-    so the rungs do not all sample the same few slots and the ladder as a whole
+    So a level's `n` variants are spread over the cycle's `P` slots --
+    `slot = v*P // n` -- which keeps each level's mix close to the declared
+    shares whatever it was allocated. A per-level PHASE then rotates the result,
+    so the levels do not all sample the same few slots and the ladder as a whole
     covers every condition:
 
         L0 (10 var)  standard x6, camera, distractors, multi, camera+multi
@@ -1113,7 +1113,7 @@ def condition_for(variant: int, n_variants: Optional[int] = None,
         L3 ( 2 var)  standard, multi
 
     `n_variants` unknown or at least `P` means index directly, which is the
-    L0 case and every single-rung run -- so `--complexity L3 --variants 10`
+    L0 case and every single-level run -- so `--complexity L3 --variants 10`
     still walks the cycle in order, and a short run still starts on `standard`.
     """
     P = len(CONDITION_CYCLE)
@@ -1125,8 +1125,8 @@ def condition_for(variant: int, n_variants: Optional[int] = None,
     return CONDITION_CYCLE[((v % n) * P // n + phase) % P]
 
 
-#: How far each rung rotates the cycle. Its position in the ladder, so the
-#: rungs sample different slots and no condition is confined to one rung.
+#: How far each level rotates the cycle. Its position in the ladder, so the
+#: levels sample different slots and no condition is confined to one level.
 LEVEL_PHASE = {name: i for i, name in enumerate(COMPLEXITY)}
 
 
@@ -1195,7 +1195,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     """The `camera` and `camera+multi` clips get a moving camera, of one of
     three kinds.
 
-    Deliberately NOT a rung on the ladder. Viewpoint is not realism, and a rung
+    Deliberately NOT a level on the ladder. Viewpoint is not realism, and a level
     that fired on only some of its clips would stop the level above it from
     isolating its own axis. See `COMPLEXITY` and `CONDITION_CYCLE`.
 
@@ -1400,9 +1400,9 @@ class Scenario:
         the scene is lit -- is applied here so it cannot drift between thirteen
         files.
         """
-        # THE UNBUILT-RUNG GUARD LIVES HERE, not in a scenario. It was in
+        # THE UNBUILT-LEVEL GUARD LIVES HERE, not in a scenario. It was in
         # `drop` alone, referencing a `Complexity` field that no longer exists,
-        # so twelve scenarios would have quietly sampled a rung that cannot
+        # so twelve scenarios would have quietly sampled a level that cannot
         # render and one would have raised an AttributeError explaining
         # nothing.
         cx = COMPLEXITY.get(complexity)

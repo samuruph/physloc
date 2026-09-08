@@ -346,7 +346,7 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
     lx = PAD + 2 + _w(left, 0.52) + 22
     sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
-    # THE CONDITION AND THE RUNG, on the frame. A clip's difficulty is not
+    # THE CONDITION AND THE LEVEL, on the frame. A clip's difficulty is not
     # readable from the picture -- a static camera looks like a moving one that
     # has not moved yet, and five lawful peers look like five distractors --
     # so watching a run meant remembering which seed was which. It is written

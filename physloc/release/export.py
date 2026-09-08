@@ -622,9 +622,9 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "## The complexity ladder",
         "",
-        "SCENE REALISM, four rungs, each the one below plus one thing. Every "
-        "clip carries its rung in `complexity`, so a rung is a filter rather "
-        "than a separate download, and each rung draws its OWN scenes -- an L1 "
+        "SCENE REALISM, four levels, each the one below plus one thing. Every "
+        "clip carries its level in `complexity`, so a level is a filter rather "
+        "than a separate download, and each level draws its OWN scenes -- an L1 "
         "clip is not an L0 clip in better materials.",
         "",
         # GENERATED, from the same functions the README uses. Two documents
@@ -634,8 +634,8 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "## Difficulty conditions",
         "",
-        "Not rungs -- every clip carries exactly ONE of these, applied inside "
-        "every rung, so \"what does clutter cost\" is answerable at each "
+        "Not levels -- every clip carries exactly ONE of these, applied inside "
+        "every level, so \"what does clutter cost\" is answerable at each "
         "realism level and not only at the top. Filter on `condition`.",
         "",
         reference.render("conditions"),

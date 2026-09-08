@@ -1,13 +1,23 @@
-"""A rung must change ONE thing -- docs/roadmap.md section 3a.
+"""A rung must change ONE thing, and nothing else -- docs/roadmap.md section 3a.
 
-The design is that `(scenario, seed, variant)` names one event, staged at
-several realism levels, so a benchmark can ask whether a model's grasp of the
-physics survives the realism. That only means anything if each rung changes its
-own axis and nothing else.
+**These are not twins.** "Twin" in this project means the valid/invalid pair:
+one scene, bit-identical prefix up to `t_event`. Two complexity levels are not
+twins of each other and the dataset does not ship them as such -- every rung
+draws its own scenes from its own seed block, because a ladder whose upper
+rungs contain no new physical events adds difficulty but no breadth.
+
+What is tested here is a property of the SAMPLER, not of the release: handed
+the same seed, two rungs must differ only on the axis between them. That is
+what proves a rung changes its own axis and leaves everything else alone -- the
+appearance streams are salted, `pick_hdri` does not steal a physics draw, and
+turning the level up does not silently resample the scene. Generation then
+hands the rungs different seeds on purpose, and the guarantee still holds: it
+is about what a level DOES, not about which seeds it is given.
 
 L0 -> L1 is MATERIALS, so mass is the one physical quantity that is supposed to
-differ across it -- mass is `density x volume`, and giving an object a material
-is giving it a density. Everything else must not move.
+move across it -- mass is `density x volume`, and giving an object a material is
+giving it a density. L1 -> L2 is the ENVIRONMENT, which changes no physics at
+all.
 """
 from __future__ import annotations
 
@@ -17,6 +27,7 @@ import pytest
 import mockroll
 from physloc import scenarios
 from physloc.scenarios import TIERS
+from physloc.scenarios.base import COMPLEXITY
 
 SEED = 777
 NAMES = sorted(scenarios.available())
@@ -76,22 +87,38 @@ def test_materials_are_what_l1_changes(name):
     assert moved, "%s: materials changed no mass on any seed" % name
 
 
-@pytest.mark.parametrize("name", ["drop"])
-def test_complexity_twin_rolls_identically(name):
-    """The GEOMETRY is identical across L0 -> L1, so a `drop` rolls the same.
+@pytest.mark.parametrize("name", NAMES)
+def test_the_whole_built_ladder_rolls_identically(name):
+    """Handed one seed, every rung rolls it the same way.
 
-    Mass differs by design at this rung, and a body in free fall does not care
-    -- so the one scenario whose rollout is mass-independent is the one that
-    can pin "the collision geometry did not change". That is the property that
-    matters: it used to fail, because `C.ground` returned a cube at the plain
-    level and a KuBasic dome at the realistic one, which is a genuine change of
-    shape, and the two levels were independent releases rather than twins.
+    Not a claim that the release contains these pairs -- it does not, by
+    design. A claim that a rung's machinery touches its own axis and nothing
+    else, which is the only reason a level comparison means anything at all.
 
-    The same gap now sits at L1 -> L2, where the HDRI dome arrives. Closing it
-    is what would let a release and its harder twin be compared clip for clip.
+    It used to hold for one scenario across one step, and the blocker was
+    geometry: `C.ground` returned a cube below the HDRI level and a KuBasic
+    dome at it, which is a genuinely different collision shape, so the same
+    seed did not roll the same way and the levels were independent releases
+    that happened to share a seed.
+
+    The dome is now the ground at every rung -- shaded flat below L2, lit by an
+    HDRI at it -- so the geometry is identical by construction. Measured before
+    committing to the swap (`physloc/render/probe_dome.py`): a 0.35 m sphere
+    dropped on each surface at 0 to 5 m from the origin rests at 0.3500 on the
+    cube and 0.3509 on the dome, flat to within Bullet's collision margin. Once
+    both sides use it the difference is zero rather than a millimetre.
+
+    This is the HOST rollout, which is an approximation of PyBullet -- so it
+    pins that nothing in the SPEC differs in a way the physics would see, not
+    that the container agrees to the bit. `prefix_identical` is what guards the
+    render, and it guards it per twin rather than across rungs.
     """
     sc = scenarios.get(name)
-    a, b = sc.sample(SEED, TIERS["release"], "L0"), sc.sample(SEED, TIERS["release"], "L1")
-    ta, tb = mockroll.roll(a, sc), mockroll.roll(b, sc)
-    assert ta.pos.shape == tb.pos.shape
-    assert np.allclose(ta.pos, tb.pos, atol=1e-9)
+    built = [k for k, v in COMPLEXITY.items() if v.implemented]
+    rolls = [mockroll.roll(sc.sample(SEED, TIERS["release"], lv), sc)
+             for lv in built]
+    for lv, roll in zip(built[1:], rolls[1:]):
+        assert roll.pos.shape == rolls[0].pos.shape, (name, lv)
+        assert np.allclose(rolls[0].pos, roll.pos, atol=1e-9), (
+            "%s: %s rolls differently from %s -- max %.3e"
+            % (name, lv, built[0], float(np.abs(rolls[0].pos - roll.pos).max())))

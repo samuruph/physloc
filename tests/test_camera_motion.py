@@ -11,20 +11,20 @@ import pytest
 
 from physloc import scenarios
 from physloc.scenarios import TIERS
-from physloc.scenarios.base import (CAMERA_MOTION_KINDS, COMPLEXITY,
-                                    DOLLY_RANGE, stratify)
+from physloc.scenarios.base import (CAMERA_MOTION_KINDS, CONDITION_CYCLE,
+                                    DOLLY_RANGE, has_moving_camera)
 
 NAMES = sorted(scenarios.available())
 BASE = 777
 N_VARIANTS = 20
 
 
-#: Camera motion is an ORTHOGONAL AXIS, not a rung: every level moves
-#: `camera_share` of its clips, L0 included. Tested at L0 because that is where
-#: the rest of the scene is held stillest, so anything the camera does is the
-#: only thing that changed.
+#: Camera motion is a CONDITION, not a rung: `camera` and `camera+multi` clips
+#: move, at every level including L0. Tested at L0 because that is where the
+#: rest of the scene is held stillest, so anything the camera does is the only
+#: thing that changed.
 CAMERA_LEVEL = "L0"
-CAMERA_SHARE = COMPLEXITY[CAMERA_LEVEL].camera_share
+PERIOD = len(CONDITION_CYCLE)
 
 
 def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
@@ -35,16 +35,17 @@ def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
 
 
 def test_every_scenario_moves_the_camera_on_the_same_share_of_variants():
-    """`camera_share` of them, PER SCENARIO -- not a coin flip per scene.
+    """The `camera` and `camera+multi` clips, PER SCENARIO -- not a coin flip.
 
     An independent flip gives the right share overall and an uneven one per
     scenario: measured across thirteen scenarios it ranged from 13% to 31%, so
     some scenarios had moving cameras and others effectively did not, and any
     per-scenario comparison inherited that as a confound.
     """
-    expected = sum(stratify(v, CAMERA_SHARE) for v in range(N_VARIANTS))
-    assert expected == round(N_VARIANTS * CAMERA_SHARE), (
-        "the stratifier must deliver the declared share exactly")
+    expected = sum(has_moving_camera(v) for v in range(N_VARIANTS))
+    assert expected == N_VARIANTS // PERIOD * sum(
+        1 for c in CONDITION_CYCLE if "camera" in c), (
+        "the cycle must deliver its declared count exactly")
     for name in NAMES:
         if name == "occluder_pass":
             continue                       # opts out entirely; see below
@@ -70,11 +71,12 @@ def test_a_short_run_is_entirely_static():
     """Fewer variants than the period means no camera motion at all.
 
     Asked for explicitly: a short run should be the easy case unless motion is
-    requested. `stratify` fires on the LAST variant of each block, so a run of
-    four never reaches it -- a run only spends clips on camera motion once it
-    is long enough to afford them.
+    requested. The plain clips come FIRST in `CONDITION_CYCLE`, so a run
+    shorter than the first `camera` index never reaches one -- a run only
+    spends clips on camera motion once it is long enough to afford them.
     """
-    for n in range(1, int(1.0 / CAMERA_SHARE)):
+    first = min(v for v in range(PERIOD) if has_moving_camera(v))
+    for n in range(1, first + 1):
         for name in NAMES:
             assert not any(sp.camera_moves for sp in _specs(name, n=n)), (
                 "%s moved the camera in a %d-variant run" % (name, n))

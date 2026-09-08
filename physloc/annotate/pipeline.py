@@ -399,12 +399,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- write both clips -------------------------------------------------
     sev_bin = plan_d["intervention"]["severity_bin"]
-    # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY. The same seed and
-    # variant serve every rung on purpose -- that pairing is what makes "what
-    # did materials cost" a paired comparison -- so without the level in the
-    # key, L1 writes over L0's clips in the release tree and the index ends up
-    # with duplicate uids. Measured: a 10-variant `--complexity all` run of
-    # `drop` produced 15 renders and 10 surviving clip directories.
+    # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY, so a rung is a
+    # directory you can hold up on its own -- copy one out, delete one, point a
+    # loader at one -- without filtering a flat tree. It also cannot collide:
+    # each rung draws its own seed block.
     level = (spec_d.get("complexity") or {}).get("name") or "L0"
     pair_uid = "%s/%s/%s/%04d" % (release, level, scenario, seed)
     written = {}
@@ -628,6 +626,18 @@ def _camera_block(spec, spec_d: Dict, num_frames: int) -> Dict[str, Any]:
     }
 
 
+def _condition_of(spec_d) -> str:
+    """The condition a clip carries, from its variant index.
+
+    Read back rather than stored on the spec, so a clip cannot claim a
+    condition the sampler did not build: the same function decides what the
+    scene gets and what the metadata says it got.
+    """
+    from ..scenarios.base import condition_for
+
+    return condition_for(int(spec_d.get("variant") or 0))
+
+
 def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
                 primary_id, sev_bin, prefix_diff: int = 0,
@@ -664,14 +674,28 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         # THE VARIANT INDEX IS DATA, not bookkeeping. Both orthogonal axes --
         # camera motion and distractors -- are stratified by it, so it is the
         # only field that says why this clip got clutter and its neighbour did
-        # not, and it is what pairs a clip with its counterpart at another
-        # level.
+        # not.
         "variant": int(spec_d.get("variant") or 0),
+        # WHICH CONDITION THIS CLIP CARRIES -- standard, camera, distractors,
+        # multi or camera+multi. The label a benchmark reports accuracy
+        # against, and the one field that says why this clip is harder than a
+        # plain one. Derived from the variant index, so it cannot disagree with
+        # what the sampler actually built.
+        "condition": _condition_of(spec_d),
         # What this clip ACTUALLY has, not what its level allows. The level's
         # `n_distractors` is a capacity; placement can fall short of it, and
-        # `distractor_share` means most clips have none at all.
+        # only the `distractors` condition asks for any at all.
         "n_distractors": int((spec_d.get("notes") or {}).get(
             "n_distractors_placed") or 0),
+        # How many actors are in shot, and how many of them the plan names as
+        # culprits. Under `multi` a lawful MAJORITY is the point -- the clip
+        # asks which objects are wrong, not whether something is.
+        "n_actors": int((spec_d.get("notes") or {}).get("n_actors")
+                        or len([b for b in (spec_d.get("bodies") or [])
+                                if b.get("role") == "actor"
+                                and not b.get("dormant")])),
+        "n_culprits": (0 if is_valid
+                       else len(plan_d.get("causal_body_ids") or [])),
         "physics_medium": SCENARIOS[scenario].physics_medium,
         "medium": SCENARIOS[scenario].physics_medium,
         "complexity": spec_d.get("complexity", {}),

@@ -202,7 +202,10 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         "variant": meta.get("variant"),
         "tier": _name(meta.get("tier")),
         "complexity": _name(meta.get("complexity")),
+        "condition": meta.get("condition"),
         "n_distractors": meta.get("n_distractors"),
+        "n_actors": meta.get("n_actors"),
+        "n_culprits": meta.get("n_culprits"),
         "num_frames": meta.get("num_frames"),
         "fps": meta.get("fps"),
         "camera_motion": cam.get("motion"),
@@ -409,7 +412,8 @@ INDEX_COLUMNS = (
     "label", "split", "scenario", "family", "domain", "medium",
     "severity_bin", "magnitude", "peak_severity",
     "t_event_frame", "violation_windows", "observability_lag",
-    "complexity", "camera_motion", "n_distractors",
+    "complexity", "condition", "camera_motion", "n_distractors",
+    "n_actors", "n_culprits",
     "actor_shape", "actor_material", "actor_mass",
     "tier", "num_frames", "fps", "seed", "variant",
     "pair_uid", "twin_uid",
@@ -610,6 +614,8 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
             "%s %d" % (lv, n) for lv, n in sorted(_count(rows, "complexity"))),
         "| with distractors | %d clips (%.0f%%) |" % (
             cluttered, 100.0 * cluttered / max(len(rows), 1)),
+        "| condition | %s |" % ", ".join(
+            "%s %d" % (c, n) for c, n in _count(rows, "condition")),
         "",
         "## The complexity ladder",
         "",
@@ -618,10 +624,18 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "environment, `L3` GSO objects in it. Every clip carries its rung in "
         "`complexity`, so a rung is a filter rather than a separate download.",
         "",
-        "**Camera motion and distractors are not rungs.** They are orthogonal "
-        "conditions applied inside every rung at declared ratios, so \"what "
-        "does clutter cost\" is answerable at each realism level and not only "
-        "at the top. Filter on `camera_motion` and `n_distractors`.",
+        "**Difficulty conditions are not rungs.** Every clip carries one of "
+        "five, applied inside every rung: `standard` (6 in 10), `camera` "
+        "(1), `distractors` (1), `multi` (1) and `camera+multi` (1). So "
+        "\"what does clutter cost\" is answerable at each realism level and "
+        "not only at the top. Filter on `condition`.",
+        "",
+        "One condition per clip, rather than independent coin flips per axis, "
+        "so every per-condition count is exact and every comparison against "
+        "`standard` isolates one change. Under `multi` the scene holds several "
+        "actors and only some of them violate -- `n_actors` and `n_culprits` "
+        "say how many -- so the clip asks WHICH objects are wrong rather than "
+        "whether something is.",
         "",
         "## Files",
         "",

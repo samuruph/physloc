@@ -89,6 +89,15 @@ publication. Nothing has been published yet.
 - **Taxonomy is five levels**: medium (5) → domain (8) → family (23) → scenario (15
   declared, 13 built) → instance. Encoded as data in `physloc/taxonomy.py`, including the
   scenario × family compatibility matrix. `clutter_toss` and `tumble` are `UNBUILT`.
+- **A scenario's driven bodies are re-derived on every INVALID clip, not just the
+  valid one.** `shadow_track`'s cast shadow is a projection of its actor, so
+  `Scenario.rescript` re-casts it from the trajectory the intervention actually
+  produced -- position, footprint, presence and opacity -- for every family whose
+  culprit is not the shadow itself. Without it, every family on that scenario shipped a
+  *detached shadow*, which is the `shadow` family, inside a clip claiming and
+  annotating something else. The three optical families own the shadow and are left
+  alone. **A shadow also carries no energy**: it is a picture of an absence, not matter,
+  and `role == "shadow"` is skipped by `residuals.energy`.
 - **`reference_mask` ships on both twins** -- the culprit's lawful footprint, taken from the
   valid render and ungated in time. It is the counterfactual "where it should be", and for a
   vanished body it is the only mask with any pixels. Visualisers draw it as a green outline

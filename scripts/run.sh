@@ -5,6 +5,14 @@
 #   bash scripts/run.sh                       # the review sweep (configs/review.yaml)
 #   bash scripts/run.sh review_severity       # every family, all three bins  ~8 min
 #   bash scripts/run.sh review_conditions     # every difficulty condition    ~5 min
+#
+# PUBLISH EVERY RUN. Set the owner once and each sweep lands on the hub under
+# its own name, so a review is a link rather than a directory on this box:
+#
+#   export PHYSLOC_PUSH_OWNER=samueleruf
+#   bash scripts/run.sh review_severity       # -> samueleruf/physloc-review_severity
+#   bash scripts/run.sh review_conditions     # -> samueleruf/physloc-review_conditions
+#   bash scripts/run.sh review_ladder         # -> samueleruf/physloc-review_ladder
 #   bash scripts/run.sh review_ladder         # the whole ladder in proportion
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh v0_L2                 # ...or one rung of it at a time
@@ -134,11 +142,24 @@ echo "== export: package it as a dataset -- shards, index, card, splits =="
 #   PHYSLOC_PUSH_TO=<user>/<dataset> bash scripts/run.sh review ...
 #
 # Add PHYSLOC_PUSH_PRIVATE=1 to create the repo private.
+#
+# PHYSLOC_PUSH_OWNER is the shortcut: set it once and every run publishes to
+# `<owner>/physloc-<config>`, so a review sweep lands somewhere you can open in
+# a browser without naming a repo each time. An explicit PHYSLOC_PUSH_TO still
+# wins, because a one-off artefact should not be able to overwrite a release
+# just because the owner was exported in your shell.
+#
+#   export PHYSLOC_PUSH_OWNER=samueleruf
+#   bash scripts/run.sh review_conditions      # -> samueleruf/physloc-review_conditions
 PUSH=()
-if [ -n "${PHYSLOC_PUSH_TO:-}" ]; then
-  PUSH=(--push-to "$PHYSLOC_PUSH_TO")
+TARGET="${PHYSLOC_PUSH_TO:-}"
+if [ -z "$TARGET" ] && [ -n "${PHYSLOC_PUSH_OWNER:-}" ]; then
+  TARGET="$PHYSLOC_PUSH_OWNER/physloc-$(basename "$REL")"
+fi
+if [ -n "$TARGET" ]; then
+  PUSH=(--push-to "$TARGET")
   [ -n "${PHYSLOC_PUSH_PRIVATE:-}" ] && PUSH+=(--private)
-  echo "   -> will upload to $PHYSLOC_PUSH_TO"
+  echo "   -> will upload to $TARGET"
 fi
 $PV export "$REL" --outdir "out/hf/$(basename "$REL")" "${PUSH[@]}" || true
 

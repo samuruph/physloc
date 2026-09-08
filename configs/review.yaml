@@ -15,6 +15,20 @@
 #
 # To isolate ONE rung of the ladder, use its own file -- review_L0 .. review_L3.
 # To produce a whole ladder in one run, use review_ladder.
+#
+# PUBLISH IT. Packaging always happens; uploading is opt-in, because packaging
+# is local and repeatable and uploading is neither. Copy-paste:
+#
+#   PHYSLOC_PUSH_TO=<user>/physloc-review bash scripts/run.sh review
+#
+# ...or set the owner once and every run publishes under its own name:
+#
+#   export PHYSLOC_PUSH_OWNER=<user>
+#   bash scripts/run.sh review          # -> <user>/physloc-review
+#
+# Add PHYSLOC_PUSH_PRIVATE=1 for a private repo. A push REPLACES the card and
+# index at that id, so a distinct name per artefact keeps a review sweep from
+# overwriting a release.
 # ============================================================================
 
 # --------------------------------------------------------------------------

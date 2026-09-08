@@ -26,6 +26,20 @@
 # they are not rungs, and every rung carries all of them.
 #
 # See configs/review.yaml for what every key means.
+#
+# PUBLISH IT. Packaging always happens; uploading is opt-in, because packaging
+# is local and repeatable and uploading is neither. Copy-paste:
+#
+#   PHYSLOC_PUSH_TO=<user>/physloc-v0_L0 bash scripts/run.sh v0_L0
+#
+# ...or set the owner once and every run publishes under its own name:
+#
+#   export PHYSLOC_PUSH_OWNER=<user>
+#   bash scripts/run.sh v0_L0          # -> <user>/physloc-v0_L0
+#
+# Add PHYSLOC_PUSH_PRIVATE=1 for a private repo. A push REPLACES the card and
+# index at that id, so a distinct name per artefact keeps a review sweep from
+# overwriting a release.
 # ============================================================================
 
 defaults:

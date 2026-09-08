@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from .. import camera as _cam
+from ..scenarios import base
 
 
 # ----------------------------------------------------------------- bodies --
@@ -37,14 +38,21 @@ def top_of(spec, body) -> float:
     """World z of the walkable top face of `body`."""
     if body is None:
         return float(spec.floor_level)
-    if body.kind in ("cube", "cylinder", "cone"):
-        # A cylinder and a cone are as tall as their half-height, same as a
-        # box; a cone's tip is the top even though its bulk is lower.
-        return float(body.position[2] + body.scale[2])
     if body.kind == "dome":
         # KuBasic's dome is a bowl whose interior floor sits at the origin.
         return float(spec.floor_level)
-    return float(body.position[2] + max(body.scale))
+    # THE MESH'S OWN TOP, not its scale. `scale` is a scale FACTOR, and no
+    # KuBasic mesh reaches 1.0 in its own coordinates: a cylinder stops at 0.5,
+    # a torus at 0.15, and a cone's tip is at 0.900 while its base is at
+    # -0.306, so it is not even centred on its origin. This used to return
+    # `position + scale` for all of them, which puts a cylinder's support
+    # surface at TWICE its real height and a torus's at nearly seven times.
+    #
+    # It matters because this is the datum `support` scores against: a body
+    # resting on a cylinder was measured as floating half the cylinder's height
+    # on a perfectly lawful frame.
+    lo, hi = base.KIND_BOUNDS.get(body.kind, base.KIND_BOUNDS["sphere"])
+    return float(body.position[2] + float(hi[2]) * float(body.scale[2]))
 
 
 def _over(surface, position, radius: float) -> bool:

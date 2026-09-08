@@ -13,22 +13,21 @@
 #   python -m physloc.cli coverage out/review_ladder        # every cell, one video
 #
 # `complexity: all` walks the built rungs at the shares declared on
-# `COMPLEXITY`, so 10 variants comes out as:
+# `COMPLEXITY`, and every rung carries the full condition cycle. 10 variants
+# comes out as:
 #
 #     L0  10 variants per cell      the baseline, half the clips
 #     L1   5                        materials
-#     L2   3                        HDRI            (once built)
+#     L2   3                        HDRI environment
 #     L3   2                        HDRI + GSO      (once built)
 #
-# and the two ORTHOGONAL axes ride inside every rung at their own ratios:
-# 20% of each level's clips move the camera, 30% carry distractors, spread
-# evenly across the variant indices rather than drawn per scene. At 10
-# variants that is variants 4 and 9 moving, and 3, 6 and 9 cluttered.
+# and the DIFFICULTY CONDITIONS ride inside every rung: six plain clips, then
+# one each of camera, distractors, multi and camera+multi. Marginals are camera
+# 20%, distractors 10%, multi 20%.
 #
-# The same seed and variant index serve every rung, so each L1 clip has an L0
-# counterpart built from the same draw with one axis changed. That is what
-# makes "what did materials cost" a paired comparison rather than two
-# population averages.
+# Every rung draws its OWN scenes, from its own seed block -- an L1 clip is not
+# an L0 clip in better materials, it is a different drop of a different object
+# from a different height. The ladder buys breadth as well as difficulty.
 #
 # To look at ONE thing instead, do not run this file -- render a single cell:
 #
@@ -41,25 +40,30 @@
 
 defaults:
 
-  # seed: variant N uses seed+N. Deliberately NOT `review`'s 777: that seed has
-  #   been looked at enough that it is no longer a fair sample of what the
-  #   sampler does.
+  # seed: variant N uses seed+N, within each rung's own seed block.
+  #   Deliberately NOT `review`'s 777: that seed has been looked at enough that
+  #   it is no longer a fair sample of what the sampler does.
   seed: 20260907
 
   complexity: all
   tier: debug
 
-  # severity: the strongest bin only. Breadth first -- what this sweep is for
-  #   is seeing every cell several ways at several rungs, and three bins on top
-  #   of that is a night's render for a question about magnitude that
-  #   `--severity all` on a single cell answers better.
+  # severity: the strongest bin only. What this sweep is for is seeing every
+  #   rung and every condition, and three bins on top of that is a night's
+  #   render for a question `review_severity` answers better and faster.
   severity: strong
 
-  # variants: the L0 allocation; every other rung is a share of it. Ten is the
-  #   smallest number that exercises both orthogonal axes at their declared
-  #   ratios -- below five nothing moves and nothing is cluttered, which is the
-  #   intended behaviour for a short run but not what this sweep is for.
+  # variants: one full turn of CONDITION_CYCLE at L0, so every condition
+  #   appears. The rungs above get their declared share of that -- L1 five,
+  #   L2 three -- which is the point: the ladder's proportions are what this
+  #   config exists to produce.
   variants: 10
+
+  # Two scenarios and three families, so the run is minutes rather than hours.
+  # Breadth of FAMILY is `review_severity`'s job and breadth of CELL is
+  # `review`'s; this one spends its budget on rungs and conditions.
+  scenario: drop,stack_topple
+  family: solidity,support,continuity
 
 generate:
   keep_going: true

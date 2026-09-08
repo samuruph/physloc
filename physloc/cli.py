@@ -44,7 +44,22 @@ def cmd_taxonomy(a) -> int:
     for s, v in SCENARIOS.items():
         print("  %-16s %-46s [%s]" % (s, v.description, v.physics_medium))
     cells = build_cells()
-    print("\nBUILD cells: %d" % len(cells))
+    # THE SAME FILTER `generate` APPLIES, or the estimate is of a different
+    # run. `review_severity` names three scenarios and would otherwise have
+    # been priced at the full 166-cell matrix -- 1.4 h against its real 8 min.
+    def _set(v):
+        return {x.strip() for x in str(v or "").split(",") if x.strip()}
+
+    want, fams = _set(getattr(a, "scenario", "")), _set(getattr(a, "family", ""))
+    if want:
+        cells = [c for c in cells if c[0] in want]
+    if fams:
+        cells = [c for c in cells if c[1] in fams]
+    note = ", ".join(sorted(want | fams))
+    print("\nBUILD cells: %d%s"
+          % (len(cells),
+             " (of %d, filtered to %s)" % (len(build_cells()), note)
+             if note else ""))
     if a.verbose:
         for scen, fam in cells:
             print("  %-16s x %s" % (scen, fam))
@@ -70,6 +85,13 @@ SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
 #: onto their background rather than listed one by one.
 SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
                     ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
+
+
+#: How far apart each complexity rung's seed block sits. Wide enough that no
+#: run's variant count can reach the next block, so `--complexity all` produces
+#: independent scenes per rung rather than one scene ladder-ed four ways, and
+#: narrow enough to stay readable in a directory listing.
+LEVEL_SEED_STRIDE = 1_000_000
 
 
 #: What each distractor adds to a clip's render time, as a fraction of the base
@@ -112,10 +134,17 @@ def _print_release_size(cells, a) -> None:
         bg = cx.background if cx else "solid"
         rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
         # Every extra body is more geometry to shade, every frame -- but only
-        # `distractor_share` of a level's clips carry any, so the level's
-        # average pays that fraction of the cost.
+        # the `distractors` and `multi` conditions carry any, so the average
+        # clip pays their combined share of the cost.
         if cx is not None:
-            rate *= 1.0 + DISTRACTOR_COST * cx.n_distractors * cx.distractor_share
+            from .scenarios.base import (MULTI_ACTORS, condition_share)
+
+            extra = (DISTRACTOR_COST * cx.n_distractors
+                     * condition_share("distractors")
+                     + DISTRACTOR_COST * max(0, MULTI_ACTORS - 1)
+                     * (condition_share("multi")
+                        + condition_share("camera+multi")))
+            rate *= 1.0 + extra
         inv = len(cells) * n_bins * n_v
         val = len(scenarios) * n_v      # one per scenario+seed, shared
         invalid += inv
@@ -275,12 +304,24 @@ def cmd_generate(a) -> int:
     from . import injectors
     have, inj = set(scen_mod.available()), set(injectors.available())
     cells = [c for c in build_cells() if c[0] in have and c[1] in inj]
-    if a.scenario:
-        cells = [c for c in cells if c[0] == a.scenario]
-    if a.family:
-        cells = [c for c in cells if c[1] == a.family]
-    if a.scenario and a.family and not cells:
-        cells = [(a.scenario, a.family)]        # force an off-matrix probe
+    # A COMMA LIST, not just one name. `review_severity` needs three scenarios
+    # -- the smallest set that reaches all 23 families -- and without this it
+    # would have to be three runs into three directories.
+    want = {x.strip() for x in str(a.scenario or "").split(",") if x.strip()}
+    if want:
+        unknown = want - {c[0] for c in cells}
+        if unknown and len(want) > 1:
+            print("unknown scenario(s): %s" % ", ".join(sorted(unknown)),
+                  file=sys.stderr)
+            return 2
+        cells = [c for c in cells if c[0] in want]
+    fams = {x.strip() for x in str(a.family or "").split(",") if x.strip()}
+    if fams:
+        cells = [c for c in cells if c[1] in fams]
+    if len(want) == 1 and len(fams) == 1 and not cells:
+        # An off-matrix probe: one named cell the compatibility matrix does not
+        # list, for checking whether it ought to be.
+        cells = [(next(iter(want)), next(iter(fams)))]
     if a.limit:
         cells = cells[:a.limit]
     if not cells:
@@ -312,13 +353,21 @@ def cmd_generate(a) -> int:
     if not levels:
         print("no complexity level selected", file=sys.stderr)
         return 2
-    # THE SAME SEED AND VARIANT INDEX ACROSS LEVELS, on purpose. A level's
-    # allocation is a prefix of the variants below it, so every L1 clip has an
-    # L0 counterpart built from the same draw with one axis changed -- which is
-    # what makes "what did materials cost" answerable by pairing clips rather
-    # than by comparing two population averages.
-    jobs = [(a.seed + v, scenario, families, v, level)
-            for level, n_v in levels
+    # EVERY RUNG DRAWS ITS OWN SCENES. Each level gets its own seed block, so
+    # an L1 clip is not an L0 clip wearing better materials -- it is a
+    # different drop, of a different object, from a different height, under a
+    # different camera.
+    #
+    # The alternative was tried and rejected: reusing one seed block across
+    # rungs makes every level a re-render of L0, which pairs clip for clip and
+    # buys a neat ablation at the cost of the thing the dataset is actually
+    # for. A benchmark wants breadth -- more distinct physical events -- and a
+    # ladder whose upper rungs contain no new scenes contributes none.
+    #
+    # The stride is far wider than any run's variant count, so blocks cannot
+    # overlap and a level's seeds are reproducible from its name alone.
+    jobs = [(a.seed + v + LEVEL_SEED_STRIDE * i, scenario, families, v, level)
+            for i, (level, n_v) in enumerate(levels)
             for v in range(n_v)
             for scenario, families in sorted(by_scenario.items())]
     if len(levels) > 1:
@@ -326,10 +375,10 @@ def cmd_generate(a) -> int:
 
     def run_one(job):
         seed, scenario, families, variant, level = job
-        # A LEVEL OF ITS OWN in the work tree when the ladder is walked: the
-        # worker keys its scratch on (scenario, seed), and the same seed serves
-        # every level by design, so without this L1 would render straight over
-        # L0's passes.
+        # A level of its own in the work tree when the ladder is walked. Not
+        # required for correctness any more -- the seed blocks are disjoint, so
+        # the scratch paths cannot collide -- but a ladder run's scratch is
+        # easier to read, and to delete a rung from, when it is grouped.
         here = work if len(levels) == 1 else os.path.join(work, level)
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, here, complexity=level,
@@ -678,7 +727,11 @@ def _build(suppress: bool = False):
                    help="list every (scenario, family) cell")
     p.add_argument("--tier", default="release", help="debug | release")
     p.add_argument("--complexity", default="L0",
-                   help="L0..L3 -- see README section 8. L0-L1 are built.")
+                   help="L0..L3, or `all` -- see README section 8")
+    p.add_argument("--scenario",
+                   help="price only these scenarios (comma list), so the "
+                        "estimate matches a filtered `generate`")
+    p.add_argument("--family", help="price only these families (comma list)")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
     p.add_argument("--workers", type=int, default=4,

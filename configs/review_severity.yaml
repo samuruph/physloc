@@ -1,0 +1,51 @@
+# ============================================================================
+# review_severity -- does weak / medium / strong actually mean something?
+#
+#   python -m physloc.cli generate --config review_severity
+#   python -m physloc.cli audit    out/review_severity   # cells depicting nothing
+#   python -m physloc.cli grid out/review_severity/clips/review_severity/L0/drop/0777 \
+#          --family solidity                             # the three bins side by side
+#
+# EVERY ONE OF THE 23 FAMILIES, at all three bins, in about 8 minutes.
+#
+# The trick is that three scenarios cover the whole taxonomy: `pour`,
+# `shadow_track` and `drop` between them are compatible with all 23 families
+# (computed from `taxonomy.COMPATIBILITY`, which is the authority -- re-derive
+# it before trusting this comment, the counts have drifted before). 42 cells x
+# 3 bins is 129 renders instead of the full matrix's 511.
+#
+# What to look for. `grid` puts a family's three bins beside the valid twin in
+# one video, which is the view this config exists for:
+#
+#   - the three bins must be ORDERED and DISTINGUISHABLE. A ladder where weak
+#     and medium look the same is one bin with two names, and where medium
+#     looks milder than weak it is broken -- `global_gravity` shipped
+#     {0.45, 0.05, 1.2} as deviations, a V, and scored weak 0.000 / medium
+#     0.000 / strong 1.000 on four of its five scenarios.
+#   - `sev=` on each summary line should rise across the bins.
+#   - `audit` should report no cell with zero observable frames.
+#
+# Conditions are deliberately OFF here: one variant means every clip is
+# `standard`, so nothing but the magnitude changes between the three bins.
+# Use review_conditions for the other axis.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 777
+  tier: debug
+  complexity: L0
+  severity: all
+  variants: 1
+  # THE COVER, in `defaults` so `taxonomy --config review_severity` prices this
+  # run and not the full matrix. Change it only alongside
+  # `taxonomy.COMPATIBILITY`: the point of the list is that it reaches every
+  # family, and a smaller one silently stops doing that.
+  scenario: pour,shadow_track,drop
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_severity
+  outdir: out/review_severity

@@ -6,12 +6,13 @@
 #   python -m physloc.cli coverage out/review_L2
 #
 # L2 is + an HDRI environment, lit from a real capture.
-# STATUS: NOT BUILT.
+# STATUS: BUILT.
 #
-# Blocked on the dome-vs-cube collision geometry: the ground is a cube at
-# L0/L1 and a dome here, which is a real change of shape, so the same seed
-# does not yet roll identically at both. This file will raise until that
-# lands. An HDRI clip also costs ~44 s against a solid background's ~8 s.
+# It was blocked on the ground being a cube below this rung and a dome at it --
+# a real change of collision shape. The dome is now the ground at EVERY rung,
+# shaded flat below L2 and lit by an HDRI here, so the rungs differ only in
+# their own axis. An HDRI clip costs ~44 s against a solid background's ~8 s,
+# which is why the ladder's shares fall as realism rises.
 #
 # Naming a level explicitly is what overrides the ladder's share rule: a
 # one-variant run of `--complexity all` produces L0 only, whereas this file
@@ -24,8 +25,14 @@ defaults:
   seed: 777
   tier: debug
   complexity: L2
-  severity: all
+  severity: strong
   variants: 1
+  # ALL THIRTEEN SCENARIOS, three families. A per-rung check asks "does this
+  # rung render every scene correctly", so breadth of SCENARIO is what matters
+  # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
+  # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
+  # so the full matrix here would be over an hour.
+  family: solidity,support,continuity
 
 generate:
   keep_going: true

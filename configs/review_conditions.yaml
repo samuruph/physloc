@@ -1,0 +1,71 @@
+# ============================================================================
+# review_conditions -- do the difficulty conditions do what they claim?
+#
+#   python -m physloc.cli taxonomy --config review_conditions   # price it
+#   python -m physloc.cli generate --config review_conditions
+#   python -m physloc.cli validate out/review_conditions
+#
+# TEN VARIANTS, which is exactly one full turn of `CONDITION_CYCLE`, so this
+# run contains every condition at least once:
+#
+#   variants 0-5  standard       static camera, one culprit, nothing else
+#   variant  6    camera         the camera orbits, tracks or dollies
+#   variant  7    distractors    six inert bodies, clear of the action
+#   variant  8    multi          five actors, two of them violating
+#   variant  9    camera+multi   both
+#
+# Three families on two scenarios keeps it to about ten minutes. Breadth of
+# FAMILY is not what this config is for -- review_severity does that -- so it
+# spends its budget on variants instead, which is the only axis the conditions
+# live on.
+#
+# What to look for, per variant:
+#
+#   0-5  nothing moves that should not; one object in shot besides the floor
+#   6    the actor stays framed through the whole move, and the masks track it
+#   7    six distractors, in shot, clear of the action, none in front of the
+#        actor -- one lifted into the actor's sightline collapsed a severity
+#        map from 0.229 to empty while the residual was untouched
+#   8    five similar objects, and only TWO of them misbehaving. If every
+#        object misbehaves the clip reads as a render fault, not as physics
+#   9    both at once
+#
+# `n_actors`, `n_culprits`, `n_distractors` and `condition` are in every
+# meta.json and in the published index, so the check can be a query rather than
+# a viewing:
+#
+#   python - <<'PY'
+#   import glob, json, collections
+#   c = collections.Counter()
+#   for f in glob.glob("out/review_conditions/clips/**/meta.json", recursive=True):
+#       m = json.load(open(f))
+#       if m.get("label") == "invalid":
+#           c[(m["condition"], m["n_actors"], m["n_culprits"],
+#              m["n_distractors"])] += 1
+#   for k, n in sorted(c.items()): print(k, n)
+#   PY
+#
+# PHYSLOC_CAMERA_MOTION=orbit forces one kind of camera move onto every clip
+# that is allowed to move, for looking at one motion without hunting a seed.
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 777
+  tier: debug
+  complexity: L0
+  # One bin. The conditions are orthogonal to magnitude, and three bins would
+  # triple the render for a question review_severity already answers.
+  severity: strong
+  # A FULL TURN of the cycle. Nine or fewer misses `camera+multi`; five or
+  # fewer is entirely `standard`, which is correct behaviour and useless here.
+  variants: 10
+  scenario: drop,stack_topple
+  family: solidity,support,continuity
+
+generate:
+  keep_going: true
+  workers: 4
+  workdir: out/work_conditions
+  outdir: out/review_conditions

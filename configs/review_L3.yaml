@@ -22,8 +22,14 @@ defaults:
   seed: 777
   tier: debug
   complexity: L3
-  severity: all
+  severity: strong
   variants: 1
+  # ALL THIRTEEN SCENARIOS, three families. A per-rung check asks "does this
+  # rung render every scene correctly", so breadth of SCENARIO is what matters
+  # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
+  # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
+  # so the full matrix here would be over an hour.
+  family: solidity,support,continuity
 
 generate:
   keep_going: true

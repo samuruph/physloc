@@ -11,7 +11,7 @@ from physloc import scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios._common import (DISTRACTOR_SIZE, KEEP_CLEAR_RADII,
                                        MAX_ASPECT, SIGHTLINE_RADII)
-from physloc.scenarios.base import (COMPLEXITY, CONDITION_CYCLE,
+from physloc.scenarios.base import (CONDITION_CYCLE, EXTRA_OBJECTS,
                                     has_distractors)
 
 NAMES = sorted(scenarios.available())
@@ -104,12 +104,17 @@ def test_the_scene_gets_the_distractors_it_asks_for(name):
     sampler drew from a region where it could never succeed. `drop` and
     `pyramid_impact` placed ZERO on some seeds that way.
     """
-    want = COMPLEXITY[LEVEL].n_distractors
-    for sp in _specs(name):
-        got = sp.notes.get("n_distractors_placed")
-        assert got == want, (
-            "%s seed %d placed %s of %d distractors"
-            % (name, sp.seed, got, want))
+    lo, hi = EXTRA_OBJECTS
+    counts = set()
+    for sp in _specs(name, seeds=8):
+        got = int(sp.notes.get("n_distractors_placed") or 0)
+        assert lo <= got <= hi, (
+            "%s seed %d placed %d, outside %s -- placement gave up"
+            % (name, sp.seed, got, EXTRA_OBJECTS))
+        counts.add(got)
+    assert len(counts) >= 2, (
+        "%s placed the same count every time (%s) -- the draw is not varying"
+        % (name, sorted(counts)))
 
 
 @pytest.mark.parametrize("name", NAMES)

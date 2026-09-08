@@ -683,8 +683,8 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         # what the sampler actually built.
         "condition": _condition_of(spec_d),
         # What this clip ACTUALLY has, not what its level allows. The level's
-        # `n_distractors` is a capacity; placement can fall short of it, and
-        # only the `distractors` condition asks for any at all.
+        # What LANDED, not what was asked for: placement can fall short, and
+        # only the crowded conditions ask for any at all.
         "n_distractors": int((spec_d.get("notes") or {}).get(
             "n_distractors_placed") or 0),
         # How many actors are in shot, and how many of them the plan names as

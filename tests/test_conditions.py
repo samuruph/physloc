@@ -15,7 +15,8 @@ import pytest
 
 from physloc import injectors, scenarios
 from physloc.scenarios import TIERS
-from physloc.scenarios.base import (CONDITION_CYCLE, MULTI_ACTORS,
+from physloc.scenarios.base import (CONDITION_CYCLE, EXTRA_OBJECTS,
+                                    MULTI_ACTORS,
                                     MULTI_CULPRIT_RANGE, condition_for,
                                     condition_share, has_distractors,
                                     has_moving_camera, has_multi)
@@ -36,18 +37,18 @@ def _actors(spec):
 
 
 def test_the_cycle_is_the_agreed_shape():
-    """Marginals: camera 20%, distractors 10%, multi 30%.
+    """Six plain clips, then one of each condition.
 
-    `multi` carries two slots because it is the only RANDOMISED condition --
-    it redraws both its object count and its culprit count per clip, so one
-    sample in ten covers a far smaller share of what it can produce.
+    Marginals: camera 20%, distractors 10%, multi 20%.
     """
     assert PERIOD == 10
-    assert condition_share("standard") == pytest.approx(0.5)
+    assert condition_share("standard") == pytest.approx(0.6)
+    for c in ("camera", "distractors", "multi", "camera+multi"):
+        assert condition_share(c) == pytest.approx(0.1), c
     moving = sum(1 for c in CONDITION_CYCLE if "camera" in c)
     multi = sum(1 for c in CONDITION_CYCLE if "multi" in c)
     assert moving / PERIOD == pytest.approx(0.2), "camera marginal"
-    assert multi / PERIOD == pytest.approx(0.3), "multi marginal"
+    assert multi / PERIOD == pytest.approx(0.2), "multi marginal"
     assert condition_share("standard") > max(
         condition_share(c) for c in set(CONDITION_CYCLE) if c != "standard"), (
         "the baseline must stay the largest single stratum")
@@ -61,6 +62,79 @@ def test_the_plain_clips_come_first():
                      if condition_for(v) != "standard")
     assert all(condition_for(v) == "standard" for v in range(first_hard))
     assert first_hard >= 4, "too few plain clips before the first hard one"
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_the_two_crowded_conditions_differ_only_in_culprit_count(name):
+    """What actually separates `distractors` from `multi`.
+
+    Both put N extra objects in the scene, both draw N from the same range, and
+    both let some of them move. The ONE difference is how many bodies get
+    invalid physics: `distractors` has exactly one culprit -- the scenario's
+    own actor -- and its extras are scenery no family can target, while `multi`
+    makes the extras eligible and 2..N-1 of them violate.
+
+    That is the distinction worth drawing, because it is the one that changes
+    the question the clip asks. "Is anything wrong here" and "WHICH of these is
+    wrong" are different problems, and only `multi` poses the second.
+    """
+    lo, hi = EXTRA_OBJECTS
+    d_v = next(v for v in range(PERIOD) if condition_for(v) == "distractors")
+    m_v = next(v for v in range(PERIOD) if condition_for(v) == "multi")
+
+    d = _spec(name, d_v)
+    extras = [b for b in d.bodies if b.role == "distractor"]
+    assert lo <= len(extras) <= hi, (name, len(extras))
+    # A scenario may declare the WHOLE medium a culprit on purpose, whatever
+    # the condition: `pour`'s families act on all forty grains, because one
+    # hovering grain is perfectly annotated and impossible to see. The
+    # condition's one-culprit rule is about the bodies THIS code adds, and it
+    # adds none that can be targeted.
+    if not d.notes.get("group_fraction"):
+        assert not any(b.role == "actor" and b.name.startswith("peer_")
+                       for b in d.bodies), (
+            "%s: the distractors condition placed a targetable peer" % name)
+    assert all(b.role == "distractor" for b in extras), name
+
+    m = _spec(name, m_v)
+    peers = [b for b in m.bodies if b.name.startswith("peer_")]
+    n = len(_actors(m))
+    assert peers or n >= lo, name          # already a crowd, e.g. `pour`
+    assert m.notes.get("group_fraction"), name
+    assert int(round(m.notes["group_fraction"] * n)) >= 2, (
+        "%s: the multi condition must have at least two culprits" % name)
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_a_distractor_is_either_moving_or_genuinely_still(name):
+    """Moving or inert, decided per body -- not a speed that happens to be
+    small. Uniformly drifting clutter is as learnable as uniformly still
+    clutter; a mixture is neither, and a continuum of near-zero speeds is
+    really the still case wearing noise."""
+    import numpy as np
+
+    from physloc.scenarios._common import DISTRACTOR_SPEED
+
+    v = next(x for x in range(PERIOD) if condition_for(x) == "distractors")
+    moving = still = 0
+    for k in range(6):
+        spec = _spec(name, k * PERIOD + v)
+        for b in spec.bodies:
+            if b.role != "distractor":
+                continue
+            speed = float(np.linalg.norm(b.velocity))
+            if speed > 1e-9:
+                moving += 1
+                assert speed >= DISTRACTOR_SPEED[0] * 0.6 - 1e-9, (
+                    "%s: %s creeps at %.4f -- moving should mean moving"
+                    % (name, b.name, speed))
+            else:
+                still += 1
+                assert not any(abs(x) > 1e-9 for x in b.angular_velocity), (
+                    "%s: %s is inert but spinning" % (name, b.name))
+    assert moving and still, (
+        "%s: distractors were all %s over six clips"
+        % (name, "moving" if moving else "inert"))
 
 
 def test_distractors_and_multi_are_never_combined():

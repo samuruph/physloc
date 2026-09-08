@@ -226,9 +226,10 @@ class Complexity:
     #: identically at every level. This is only an off switch, for a rung whose
     #: framing cannot survive a moving camera.
     camera_moves: bool
-    #: How many distractors a clip gets WHEN its condition calls for them, and
-    #: how many actors a `multi` clip holds. Quantities, not axes.
-    n_distractors: int
+    #: How many extra objects a crowded clip holds is `EXTRA_OBJECTS`, drawn
+    #: per clip and identical at every rung -- it was a per-level field, and a
+    #: quantity of the same thing is not a step of realism.
+
     implemented: bool
 
     def to_dict(self) -> Dict[str, Any]:
@@ -237,8 +238,7 @@ class Complexity:
                 "materials": self.materials,
                 "motion_blur": self.motion_blur,
                 "share": self.share,
-                "camera_moves": self.camera_moves,
-                "n_distractors": self.n_distractors}
+                "camera_moves": self.camera_moves}
 
 
 #: THE LADDER IS SCENE REALISM. Four rungs, each the one below it plus one step
@@ -268,11 +268,11 @@ class Complexity:
 #: expensive levels are also the ones a fixed budget can afford least of.
 #: Normalised, the four come to 50% / 25% / 15% / 10% of a full generation.
 COMPLEXITY: Dict[str, Complexity] = {
-    #                  bg      actors      mat   blur  share  cam    n  built
-    "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, True,  6, True),
-    "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, True,  6, True),
-    "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, True,  6, True),
-    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, True, 12, True),
+    #                  bg      actors      mat   blur  share  cam   built
+    "L0": Complexity("L0", "solid", "primitive", False, 0.0, 1.00, True, True),
+    "L1": Complexity("L1", "solid", "primitive", True,  0.0, 0.50, True, True),
+    "L2": Complexity("L2", "hdri",  "primitive", True,  0.0, 0.30, True, True),
+    "L3": Complexity("L3", "hdri",  "gso",       True,  0.0, 0.20, True, True),
 }
 DEFAULT_COMPLEXITY = "L0"
 
@@ -870,8 +870,7 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
     from . import _common as C
 
     cx = COMPLEXITY[spec.complexity]
-    n = cx.n_distractors
-    if not n or not has_distractors(spec.variant):
+    if not has_distractors(spec.variant):
         # Recorded as zero rather than left absent: a clip with no distractors
         # is a fact about that clip, and a reader filtering on the axis needs
         # both sides of it.
@@ -880,6 +879,10 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xD157 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
+    # HOW MANY, drawn per clip, from the same range `multi` uses. It was a
+    # fixed six (twelve at the GSO rung), which is a count a model can learn
+    # instead of the physics -- the same reason `multi` draws its own.
+    n = int(rng.randint(EXTRA_OBJECTS[0], EXTRA_OBJECTS[1] + 1))
     floor = next((b for b in spec.bodies if b.role == "floor"), None)
     top = 0.0 if floor is None else (
         float(floor.position[2] + floor.scale[2]) if floor.kind == "cube"
@@ -887,7 +890,7 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
     placed = C.distractors(spec, n, rng, floor_top=top)
     spec.bodies.extend(placed)
     # What was actually placed, not what was asked for. The constraints can
-    # genuinely leave no room, and a clip that says `n_distractors: 6` while
+    # genuinely leave no room, and a clip that says `n_distractors: 8` while
     # containing four is a clip whose metadata lies.
     spec.notes["n_distractors_placed"] = len(placed)
 
@@ -958,26 +961,33 @@ def _flatten_materials(spec: SceneSpec) -> None:
 #: at all. A run spends clips on difficulty only once it is long enough to
 #: afford them.
 #:
-#: `multi` GETS TWO SLOTS, and the reason is variance rather than importance.
-#: The other conditions are deterministic -- a camera move is a camera move,
-#: six distractors are six distractors -- while `multi` redraws both its object
-#: count and its culprit count on every clip, so one sample in ten covers a far
-#: smaller share of what it can produce. Five plain clips still leave the
-#: baseline the largest stratum by a wide margin.
-#:
-#: Marginals over the cycle: camera 20%, distractors 10%, multi 30%.
+#: Six plain clips, then one of each condition. Marginals over the cycle:
+#: camera 20%, distractors 10%, multi 20%.
 #:
 #: This tuple IS the policy -- change it and everything follows, including the
-#: metadata, the card and the cost estimate. Nothing reads the shares from
-#: anywhere else.
+#: metadata, the card, the README's table and the cost estimate. Nothing reads
+#: the shares from anywhere else.
 CONDITION_CYCLE = ("standard", "standard", "standard", "standard", "standard",
-                   "camera", "distractors", "multi", "multi",
+                   "standard", "camera", "distractors", "multi",
                    "camera+multi")
 
-#: How many actors a `multi` scene holds, drawn per clip. Randomised rather
-#: than fixed, so the condition varies in the thing it is about: a five-object
-#: scene at every seed teaches a model the count.
-MULTI_ACTORS = (3, 10)
+#: How many EXTRA OBJECTS a scene holds, drawn per clip, for `distractors` and
+#: `multi` alike. Randomised rather than fixed, so neither condition varies in
+#: the thing it is about while holding a count a model could learn instead: a
+#: six-object scene at every seed teaches the count.
+#:
+#: **The two conditions differ in how many objects get INVALID PHYSICS, not in
+#: how many objects there are.** Under `distractors` exactly one body violates
+#: -- the scenario's own actor -- and the extras are scenery no family can
+#: target. Under `multi` the extras are eligible culprits and 2..N-1 of them
+#: violate. That is the whole distinction, and it is the one worth drawing:
+#: "which of these is wrong" is a different question from "is anything wrong",
+#: and only `multi` asks it.
+EXTRA_OBJECTS = (3, 10)
+
+#: Kept as the name the multi path reads, because the count means the same
+#: thing there: how many actors are in shot.
+MULTI_ACTORS = EXTRA_OBJECTS
 
 #: How many of them violate: at least two -- one culprit is what `standard`
 #: already is -- and at most all but one, so there is always a lawful object to
@@ -1062,7 +1072,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
 
     Deliberately NOT a rung on the ladder. Viewpoint is not realism, and a rung
     that fired on only some of its clips would stop the level above it from
-    isolating its own axis. See `COMPLEXITY` and `stratify`.
+    isolating its own axis. See `COMPLEXITY` and `CONDITION_CYCLE`.
 
     The aim point never moves; see `camera_end_position`.
     """

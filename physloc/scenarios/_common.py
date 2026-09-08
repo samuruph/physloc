@@ -309,12 +309,21 @@ PATH_SAMPLES = 6
 #: "distractors" should contain things that actually compete for attention.
 DISTRACTOR_SIZE = (0.35, 1.60)
 
-#: How fast a distractor may already be moving, as a fraction of the actor's
-#: own speed (or of a walking pace when the actor starts at rest). Static
-#: clutter is easy clutter: a model can learn "the thing that moves is the
-#: subject" and never look at the physics at all. Moving distractors take that
-#: shortcut away.
-DISTRACTOR_SPEED = (0.0, 0.85)
+#: How fast a MOVING distractor goes, as a fraction of the actor's own speed
+#: (or of a walking pace when the actor starts at rest). Static clutter is easy
+#: clutter: a model can learn "the thing that moves is the subject" and never
+#: look at the physics at all. Moving distractors take that shortcut away.
+#:
+#: The lower bound is no longer zero, because "moving" now means moving. It
+#: used to be a uniform draw from 0, so a distractor's speed was a continuum
+#: and roughly a third of them were near-stationary by accident rather than by
+#: choice; `DISTRACTOR_MOVING` decides that explicitly now.
+DISTRACTOR_SPEED = (0.25, 0.85)
+
+#: Share of distractors that move at all. The rest are inert -- genuinely
+#: still, not slow. A scene of uniformly drifting clutter is as learnable as a
+#: scene of uniformly still clutter; a mixture is neither.
+DISTRACTOR_MOVING = 0.5
 
 #: Share of distractors that start ABOVE the floor and fall into the scene,
 #: rather than resting on it. Another shortcut removed -- if only the actor
@@ -504,13 +513,19 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
             if any(float(np.linalg.norm(pos - np.asarray(o.position))) <
                    (r + float(o.bounding_radius)) * 1.15 for o in out):
                 continue
-            # AND MOVING SOMETIMES, for the same reason: static clutter lets a
-            # model find the subject by asking what moves.
-            ref = max(float(np.linalg.norm(actor_v)), 0.6)
-            speed = ref * float(rng.uniform(*DISTRACTOR_SPEED))
-            heading = float(rng.uniform(0.0, 2.0 * np.pi))
-            vel = (speed * np.cos(heading), speed * np.sin(heading), 0.0)
-            spin = tuple(float(rng.uniform(-2.5, 2.5)) for _ in range(3))
+            # MOVING OR INERT, decided per body rather than drawn as a speed
+            # that happens to be small. Static clutter lets a model find the
+            # subject by asking what moves; uniformly drifting clutter lets it
+            # ask the same question the other way round. A mixture answers
+            # neither.
+            if float(rng.uniform()) < DISTRACTOR_MOVING:
+                ref = max(float(np.linalg.norm(actor_v)), 0.6)
+                speed = ref * float(rng.uniform(*DISTRACTOR_SPEED))
+                heading = float(rng.uniform(0.0, 2.0 * np.pi))
+                vel = (speed * np.cos(heading), speed * np.sin(heading), 0.0)
+                spin = tuple(float(rng.uniform(-2.5, 2.5)) for _ in range(3))
+            else:
+                vel, spin = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
 
             peer = role == "actor"
             body = BodySpec(

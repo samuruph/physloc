@@ -182,6 +182,7 @@ def build_scene(spec: SceneSpec, scratch):
                                      look_at=l.look_at, intensity=l.intensity)
     scene += kb.PerspectiveCamera(name="camera", position=spec.camera_position,
                                   look_at=spec.camera_look_at)
+    _apply_rolling_friction(spec, simulator, objs)
     return scene, simulator, renderer, objs
 
 
@@ -274,6 +275,33 @@ def _set_visibility(renderer, obj, body) -> None:
 
 
 # --------------------------------------------------------------------------
+def _apply_rolling_friction(spec: SceneSpec, simulator, objs) -> None:
+    """Give the bodies that declare it a resistance to rolling.
+
+    Kubric's asset constructors take `friction` and `restitution` and nothing
+    else, so rolling and spinning friction were zero on every body in every
+    scene. For most scenarios that is exactly right -- a ball on a ramp should
+    roll. For a granular medium it is the difference between a pile and a
+    puddle: smooth spheres with no rolling resistance have no angle of repose,
+    and `pour` settled one grain deep however narrowly it was poured.
+
+    Set here rather than in the scenario because it needs the live PyBullet
+    body, and `changeDynamics` is the only way to reach it.
+    """
+    declared = [b for b in spec.bodies
+                if float(getattr(b, "rolling_friction", 0.0)) > 0.0]
+    if not declared:
+        return
+    import pybullet as pb
+
+    for body in declared:
+        idx = stepper.pybullet_index(simulator, objs, spec,
+                                     int(body.segmentation_id))
+        if idx is not None:
+            mu = float(body.rolling_friction)
+            pb.changeDynamics(idx, -1, rollingFriction=mu, spinningFriction=mu)
+
+
 def simulate(spec, scene, simulator, objs, hooks=()) -> Trajectory:
     """The valid rollout.
 
@@ -608,7 +636,14 @@ def main() -> int:
         resolution=a.resolution, fps=a.fps, num_frames=a.frames,
         samples_per_pixel=a.spp)
     if a.params:
-        from .. import params as _params
+        # ABSOLUTE, like every other import in this file. The worker is run as
+        # a SCRIPT inside the container -- `docker/kubric.sh
+        # physloc/render/worker.py` -- so it has no parent package and a
+        # relative import raises `attempted relative import with no known
+        # parent package` before a single clip is rendered. The `sys.path`
+        # shim at the top of the file is what makes `physloc` importable at
+        # all; nothing else here uses the dotted form.
+        from physloc import params as _params
 
         _params.apply(_params.read(a.params))
     spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity,

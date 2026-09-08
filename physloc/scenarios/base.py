@@ -300,6 +300,20 @@ class BodySpec:
     mass: float = 1.0
     friction: float = 0.5
     restitution: float = 0.5
+    #: Resistance to ROLLING and spinning, which Kubric's constructor has no
+    #: argument for and which therefore defaulted to zero on every body.
+    #:
+    #: Zero is right for a ball that is supposed to roll and wrong for a
+    #: granular medium, because it is the property that lets a pile stand up. A
+    #: perfectly smooth sphere with no rolling resistance does not have an angle
+    #: of repose: it rolls until something stops it. Measured on `pour`, forty
+    #: grains released down a narrow column still ended spread across a 1.4 m
+    #: circle exactly ONE GRAIN DEEP -- they rolled apart until they reached the
+    #: walls -- and a medium with no interior is one `newton2_mass` cannot
+    #: stratify and one `friction` cannot shape. Applied by
+    #: `render.worker.build_scene` through `changeDynamics`, since it has to be
+    #: set after the body exists.
+    rolling_friction: float = 0.0
     static: bool = False
     color: Tuple[float, float, float] = (0.7, 0.7, 0.75)
     segmentation_id: int = 0

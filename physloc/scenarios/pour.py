@@ -37,17 +37,34 @@ class Pour(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        # Grain count follows the tier, not taste: at the debug tier the clip is ~1 s
-        # and a hundred beads is render cost spent on pixels nobody inspects.
-        n_grains = 40 if tier.name == "debug" else 96
-        r = float(rng.uniform(0.070, 0.085))
+        # **The count and the box are one decision, and the quantity that
+        # matters is HOW MANY GRAINS DEEP the medium settles.**
+        #
+        # A 1.64 m box holds about 140 of these grains in a single layer, so
+        # forty of them covered under a third of the floor and the pour settled
+        # exactly ONE GRAIN DEEP -- measured, every grain in the lawful clip
+        # ended at z = 0.073, heavy and light alike. A medium with no interior
+        # is not a medium: `newton2_mass` made half the grains 25x heavier and
+        # they had nothing to sink through, so the clip differed from its twin
+        # while its three bins did not differ from each other (0.334 / 0.338 /
+        # 0.382 m), and `friction` had no heap whose angle it could change.
+        #
+        # Eighty grains in a 0.68 m box settle about three deep, which is the
+        # smallest pile with an inside. The count went up and the vessel came
+        # down together because only their ratio sets the depth -- grains alone
+        # would have had to triple again, and render cost here is dominated by
+        # how many bodies are in the frame.
+        n_grains = 80 if tier.name == "debug" else 176
+        r = float(rng.uniform(0.062, 0.076))
         hue = float(rng.uniform(0, 1))
 
         # Low walls, and a camera high enough to see over the near one.
         # At 0.34 the front wall hid the entire pile: a grain sinking
         # through the floor was behind it in both twins, so the violation
-        # was active, correctly scored and completely unobservable.
-        half, wall_t, wall_h = 0.82, 0.05, 0.24
+        # was active, correctly scored and completely unobservable. The wall
+        # came down with the box, for the same reason -- what matters is the
+        # wall against the PILE, and the pile is now about 0.45 m tall.
+        half, wall_t, wall_h = 0.34, 0.04, 0.20
         walls = []
         for i, (cx_, cy_, sx, sy) in enumerate([
                 (0.0, half, half + wall_t, wall_t),
@@ -61,11 +78,30 @@ class Pour(Scenario):
                 color=(0.34, 0.35, 0.40), segmentation_id=self.SEG_WALLS[i],
                 role="prop"))
 
+        # **A COLUMN, not a curtain.** The grains used to be released across
+        # +/-0.45 m -- a 0.9 m spread into a 1.64 m box -- so they arrived
+        # already spread out and settled ONE GRAIN DEEP: measured, every grain
+        # in the lawful clip ended at z = 0.073, heavy and light alike. A
+        # single layer has no interior, so two families had nothing to act on.
+        # `newton2_mass` made half the grains 25x heavier and they had nothing
+        # to sink through -- the clip differed from its twin (a mean 0.34 m per
+        # grain) but the three bins were indistinguishable at 0.334 / 0.338 /
+        # 0.382 m, because any mismatch past ~3x fully decorrelates a chaotic
+        # packing. `friction` had no heap whose angle it could change.
+        #
+        # Poured down a narrow column the medium piles up and then avalanches
+        # out to its angle of repose, which is the thing friction actually
+        # determines and the thing a dense grain actually sinks through.
         grains, heights = [], []
         for i in range(n_grains):
-            rad = float(rng.uniform(0.7, 1.0)) * 0.45
+            rad = float(rng.uniform(0.7, 1.0)) * 0.12
             ang = float(rng.uniform(0.0, 6.283185))
-            z0 = float(rng.uniform(0.55, 2.25))
+            # Lower than the 0.55--2.25 this poured from: a grain arriving at
+            # 6.6 m/s does not join a pile, it splashes one. Not much lower,
+            # though -- taken to 0.42 the medium was on the floor by frame 2,
+            # `before_medium_lands` returned frame 1, and every family here
+            # fired with a single frame of lawful prefix behind it.
+            z0 = float(rng.uniform(0.68, 1.90))
             heights.append((z0, SEG_GRAIN_BASE + i))
             grains.append(BodySpec(
                 name="grain_%03d" % i, kind="sphere",
@@ -74,6 +110,13 @@ class Pour(Scenario):
                 scale=(r,) * 3,
                 velocity=(0.0, 0.0, float(rng.uniform(-0.4, 0.0))),
                 mass=0.12, friction=0.5, restitution=0.2,
+                # What lets the medium HOLD A PILE. Without it the grains are
+                # frictionless rollers with no angle of repose, and the pour
+                # settled one grain deep across the whole box however narrowly
+                # it was poured -- see `BodySpec.rolling_friction`. Well under
+                # the 0.08-0.24 the `friction` family solves for, so that
+                # violation still has room to be a violation.
+                rolling_friction=0.12,
                 color=C.hue_rgb((hue + 0.03 * i) % 1.0, s=0.5, v=0.85),
                 segmentation_id=SEG_GRAIN_BASE + i, role="actor"))
             del ang
@@ -94,7 +137,15 @@ class Pour(Scenario):
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR)] + walls + grains,
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
-            camera_position=(1.7, -3.2, 3.0), camera_look_at=(0.0, 0.0, 0.15),
+            # Moved in AND up with the box. The old pose framed 1.66 m of
+            # world, which around a 0.68 m vessel is mostly empty floor. This
+            # frames 1.05 m -- enough for the grains that overflow the walls,
+            # measured at 0.96 m from the centre -- and looks down at 52
+            # degrees rather than 36, so the near wall hides 0.16 m of the box
+            # instead of 0.27. That is the trap the wall height already
+            # carries a comment about: at a shallow angle a wall tall enough to
+            # hold the pour is also tall enough to hide it.
+            camera_position=(0.85, -1.58, 2.50), camera_look_at=(0.0, 0.0, 0.20),
             floor_level=0.0, complexity=complexity, physics_medium="granular",
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,

@@ -174,16 +174,16 @@ Camera motion, distractors and multiple culprits are three ways to make a clip h
 clip carries **exactly one** condition:
 
 <!-- physloc:conditions -->
-| condition | share | camera | extra objects | culprits |
+| condition | share | camera | extra objects | objects with invalid physics |
 |---|---|---|---|---|
-| `standard` | 50% | static | — | 1 |
-| `camera` | 10% | **moves** | — | 1 |
-| `distractors` | 10% | static | **6 inert** | 1 |
-| `multi` | 20% | static | **3–10 live** | **2 … N−1** |
-| `camera+multi` | 10% | **moves** | **3–10 live** | **2 … N−1** |
+| `standard` | 60% | static | — | **1** |
+| `camera` | 10% | **moves** | — | **1** |
+| `distractors` | 10% | static | **3–10** | **1** |
+| `multi` | 10% | static | **3–10** | **2 … N−1** |
+| `camera+multi` | 10% | **moves** | **3–10** | **2 … N−1** |
 <!-- /physloc:conditions -->
 
-Marginals: the camera moves on **20%** of clips, **10%** carry distractors, **30%** have
+Marginals: the camera moves on **20%** of clips, **10%** carry distractors, **20%** have
 multiple culprits. Fields: `condition`, `camera_motion`, `n_distractors`, `n_actors`,
 `n_culprits`.
 
@@ -191,17 +191,27 @@ multiple culprits. Fields: `condition`, `camera_motion`, `n_distractors`, `n_act
 a benchmark reports — a "moving camera" clip that also carries clutter mixes two effects —
 so every count is exact and every comparison against `standard` isolates one change.
 
-**`multi` is the interesting one.** With a single actor, *which object is wrong* has a
-trivial answer: there is only one candidate, so a model can score by detecting that
-*something* is off. A `multi` clip holds **N ∈ [3,10]** objects of which **M ∈ [2, N−1]**
-violate, both drawn per clip, so the question is genuinely *which* — and a fixed count would
-itself be a cue.
+**`distractors` and `multi` differ in one thing: how many objects have invalid physics.**
+Both put **N ∈ [3,10]** extra objects in the scene, drawn per clip, and in both some of those
+objects move and some are still. What separates them:
 
-**Distractors are never combined with `multi`.** They are the same placement machinery
-differing only in whether the extra bodies take part in the physics: a distractor is inert
-scenery no family can target, a `multi` peer is an eligible culprit. A scene with both would
-ask you to separate inert clutter from lawful peers from culprits — three distinctions where
-the label makes one.
+| | `distractors` | `multi` |
+|---|---|---|
+| extra objects | 3–10 | 3–10 |
+| **objects violating** | **exactly 1** | **2 … N−1** |
+| what the extras are | scenery no family can target (`role="distractor"`) | eligible culprits (`role="actor"`) |
+| the question it asks | *is anything wrong?* | ***which** of these is wrong?* |
+
+That is the distinction worth drawing, because only the second is a localisation problem.
+With one culprit, *which object is wrong* has a trivial answer — there is one candidate — so
+a model can score by detecting that *something* is off and pointing at it. With 2 of 7
+violating among 5 that are fine, the spatial annotation has to be earned.
+
+The counts are drawn rather than fixed for the same reason in both cases: a scene that is
+always six objects with two wrong teaches the layout, not the physics.
+
+**They are never combined.** A scene with both would ask you to separate inert clutter from
+lawful peers from culprits — three distinctions where the label makes one.
 
 **Camera motion** is one of three kinds, never a pan: `track` (40%) slides across with the
 aim held, `orbit` (40%) swings around the subject at fixed radius, `dolly` (20%) approaches
@@ -322,13 +332,37 @@ a check you will not run is a check you do not have.
 | `review_L0` … `review_L3` | does **this rung** render every scene correctly? | ~3–18 min |
 | `review_ladder` | do the rungs come out in their **declared proportions**? | ~18 min |
 | `review` | does **every cell** build? | ~35 min |
-| `v0_release` | the published dataset | **price it first** |
+| `v0_release` | the published dataset, whole ladder | **price it first** |
+| `v0_L0` … `v0_L3` | one rung of that release, on its own | the four **sum to** `v0_release` |
 
 ```bash
 python -m physloc.cli generate --config review_severity
 python -m physloc.cli validate  out/review_severity      # must exit 0
 python -m physloc.cli audit     out/review_severity      # cells depicting nothing
+python -m physloc.cli viz       out/review_severity      # grids + sheets, one folder
 python -m physloc.cli coverage  out/review_severity      # every cell, one video
+```
+
+**`viz` is how you look at a finished run**, and it re-reads clips already on
+disk — nothing is rendered again, so it takes seconds and can be re-run after
+any change to the visualisers.
+
+```
+out/review_severity/viz/
+  L0_drop_0777_solidity.mp4        one family: the valid clip beside weak/medium/strong
+  L0_drop_0777_sheet_strong.mp4    one scene: every family, at one bin
+  L0_pour_0777_continuity.mp4
+```
+
+`grid` and `sheet` write beside the clips they came from, which is right for a
+single look and wrong for reviewing a sweep — a twenty-pair run scatters them
+four levels deep across twenty directories, putting the videos you most want to
+compare furthest apart. `viz` collects them and names them so the sort order is
+the reading order.
+
+```bash
+python -m physloc.cli viz out/review_conditions --outdir out/inspect
+python -m physloc.cli viz out/review_conditions --severity strong   # sheets: one bin
 ```
 
 `review_severity` reaches all 23 families in 41 cells rather than 166, because three
@@ -382,6 +416,22 @@ clips = 166 cells × bins × variants        invalid
 
 A variant is a **fresh seed**, not a re-roll: variant *N* uses `seed + N`, and each complexity
 rung draws from its own seed block, so no two rungs share a scene.
+
+### Generating one rung at a time
+
+`v0_L0` … `v0_L3` are `v0_release` split by rung, and they **partition** it: each carries the
+number of variants that rung would get in a full run, so generating all four produces exactly
+what `--complexity all` produces, and generating one produces exactly that rung's share.
+
+```bash
+python -m physloc.cli taxonomy --config v0_L0     # price the rung
+python -m physloc.cli generate --config v0_L0     # ...and only that rung
+```
+
+Useful for spreading a release across machines a rung at a time, regenerating one rung after
+a fix, or shipping a smaller dataset that is only ever L0. Nothing collides when the trees
+are merged: the clip path is keyed by rung already, and every rung draws from its own seed
+block.
 
 ## 15. Publishing
 

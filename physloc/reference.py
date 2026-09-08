@@ -79,19 +79,19 @@ def ladder() -> str:
 
 
 def conditions() -> str:
-    from .scenarios.base import CONDITION_CYCLE, MULTI_ACTORS
+    from .scenarios.base import CONDITION_CYCLE, EXTRA_OBJECTS
     order, seen = [], set()
     for c in CONDITION_CYCLE:
         if c not in seen:
             order.append(c)
             seen.add(c)
+    n_extra = "**%d–%d**" % EXTRA_OBJECTS
     what = {
-        "standard": ("static", "—", "1"),
-        "camera": ("**moves**", "—", "1"),
-        "distractors": ("static", "**6 inert**", "1"),
-        "multi": ("static", "**%d–%d live**" % MULTI_ACTORS, "**2 … N−1**"),
-        "camera+multi": ("**moves**", "**%d–%d live**" % MULTI_ACTORS,
-                         "**2 … N−1**"),
+        "standard": ("static", "—", "**1**"),
+        "camera": ("**moves**", "—", "**1**"),
+        "distractors": ("static", n_extra, "**1**"),
+        "multi": ("static", n_extra, "**2 … N−1**"),
+        "camera+multi": ("**moves**", n_extra, "**2 … N−1**"),
     }
     n = len(CONDITION_CYCLE)
     rows = []
@@ -100,7 +100,7 @@ def conditions() -> str:
         k = CONDITION_CYCLE.count(c)
         rows.append(["`%s`" % c, "%d%%" % round(100 * k / n), cam, extra, culp])
     return _table(["condition", "share", "camera", "extra objects",
-                   "culprits"], rows)
+                   "objects with invalid physics"], rows)
 
 
 def materials() -> str:
@@ -141,20 +141,38 @@ def splice(text: str) -> str:
     import re
 
     for name, fn in BLOCKS.items():
-        # `\s*?` rather than `\n.*?\n`, so an EMPTY block still matches. The
-        # first version required content between the markers, so a freshly
-        # written README with bare markers spliced nothing, `--write` reported
-        # success and `--current` passed by comparing two identical unfilled
-        # documents. A generator that silently does nothing is worse than no
-        # generator; `tests/test_reference.py` is what caught it.
+        # `(.*?)` with DOTALL, so it matches an empty block and a filled one
+        # alike. Both narrower forms have now failed, in opposite directions
+        # and both silently:
+        #
+        #   `\n.*?\n`  needed content, so a freshly written README with bare
+        #              markers spliced nothing and shipped empty tables;
+        #   `\s*?`     matched only whitespace, so once a block was filled it
+        #              could never be updated again -- `--write` did nothing
+        #              and `--current` reported CURRENT because there was no
+        #              match to compare.
+        #
+        # Neither was caught by comparing `splice(text)` to `text`: when
+        # nothing matches, that comparison is trivially equal. The test now
+        # checks each block's CONTENT against `render(name)` instead, which is
+        # the question actually being asked.
         pat = re.compile(
-            r"(<!-- physloc:%s -->)\s*?(<!-- /physloc:%s -->)" % (name, name),
+            r"(<!-- physloc:%s -->)(.*?)(<!-- /physloc:%s -->)" % (name, name),
             re.S)
         if pat.search(text):
             text = pat.sub(
-                lambda m, f=fn: "%s\n%s\n%s" % (m.group(1), f(), m.group(2)),
+                lambda m, f=fn: "%s\n%s\n%s" % (m.group(1), f(), m.group(3)),
                 text)
     return text
+
+
+def block_in(text: str, name: str):
+    """The content currently between `name`'s markers, or None if absent."""
+    import re
+
+    m = re.search(r"<!-- physloc:%s -->\n?(.*?)\n?<!-- /physloc:%s -->"
+                  % (name, name), text, re.S)
+    return None if m is None else m.group(1)
 
 
 def main(argv=None) -> int:

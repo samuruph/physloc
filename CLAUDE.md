@@ -36,13 +36,24 @@ publication. Nothing has been published yet.
   `meta.json`. **Debug at the debug tier; a bug found there is fixed for both.**
 - **The complexity ladder is SCENE REALISM, and nothing else.** Four rungs -- L0 baseline,
   L1 materials, L2 HDRI, L3 GSO -- each with a declared `share` of a full generation
-  (1.00/0.50/0.30/0.20). **Camera motion (20%) and distractors (30%) are ORTHOGONAL AXES
-  applied inside every rung**, stratified by variant index through `stratify()`, never rungs
-  of their own. They used to be rungs, firing on 1 variant in 5 *within* a level, which meant
+  (1.00/0.50/0.30/0.20). **Difficulty is FIVE NAMED CONDITIONS, one per clip**, applied
+  inside every rung and never rungs of their own -- `CONDITION_CYCLE`, a ten-variant cycle:
+  `standard` 60%, then `camera`, `distractors`, `multi` and `camera+multi` at 10% each
+  (marginals: camera 20%, distractors 10%, multi 20%). One condition per clip rather than
+  independent per-axis coin flips, so every count is exact and every comparison against
+  `standard` isolates one change.
+
+  **`distractors` and `multi` differ in how many objects get INVALID PHYSICS, not in how
+  many objects there are.** Both add `EXTRA_OBJECTS` = 3-10 extra bodies, some moving and
+  some inert. `distractors` leaves exactly one culprit and its extras are `role="distractor"`
+  scenery no family can target; `multi` makes them `role="actor"` peers and 2..N-1 violate.
+  Only the second asks "which of these is wrong". They are never combined.
+
+  Conditions used to be rungs, firing on 1 variant in 5 *within* a level, which meant
   "L2 minus L1" measured materials plus whichever variants happened to draw a camera move --
   a rung whose axis fires on only some of its clips is not a stratum. A level that does not
   buy a whole variant is SKIPPED, so a short run is all baseline; naming a level explicitly
-  is the override. `--complexity all` walks the ladder in one run, and **every rung draws its OWN scenes**
+  is the override, and `v0_L0`..`v0_L3` partition `v0_release` for exactly that. `--complexity all` walks the ladder in one run, and **every rung draws its OWN scenes**
   from its own seed block (`cli.LEVEL_SEED_STRIDE`) — an L1 clip is not an L0 clip in better
   materials. Reusing one seed block across rungs was tried and rejected: it pairs clips
   neatly and buys an ablation, at the cost of the breadth the dataset exists for. The rung is
@@ -52,6 +63,12 @@ publication. Nothing has been published yet.
 
   **"Twin" means the valid/invalid pair and nothing else** — one scene, bit-identical prefix
   up to `t_event`. Levels are not twins of each other and must not be described as such.
+- **The README's tables are GENERATED** by `physloc/reference.py`, from `taxonomy.py` and
+  `scenarios/base.py`, and the HuggingFace card calls the same functions. Run
+  `python -m physloc.reference --write` after changing any count; `tests/test_reference.py`
+  fails if the README is stale. This generator has silently done nothing twice, both times
+  a splice regex that matched neither the empty nor the filled form -- the test compares
+  each block's CONTENT against `render(name)` for that reason, not `splice(text) == text`.
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 13 scenarios x 23 families needs 13 + 8 files,
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.

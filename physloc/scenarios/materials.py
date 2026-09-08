@@ -53,6 +53,28 @@ class Material:
     value: Tuple[float, float]
     #: `None` means "any hue"; otherwise the (lo, hi) band in turns.
     hue_range: Tuple[float, float] = None
+    #: The three dials that were left at their defaults, and the reason L1
+    #: looked like L0. `roughness` and `metallic` alone cannot separate seven
+    #: matte dielectrics under one sun -- six of the seven materials rendered
+    #: as "flat colour, slightly different sheen", which is what L0 already is.
+    #:
+    #: `specular` is what makes ceramic read as glazed and rubber as dead.
+    #: `transmission` with an `ior` is glass, and it is the single most visible
+    #: material available. Both matter far more from L2 up: a metal or a glass
+    #: body REFLECTS AND REFRACTS the environment, which is precisely what
+    #: makes an object look like it belongs in the scene rather than composited
+    #: onto it -- your L2 note.
+    specular: float = 0.5
+    transmission: float = 0.0
+    ior: float = 1.45
+    #: How often this material is drawn, relative to the others. NOT uniform,
+    #: because the palette is not uniform in density: adding three dense metals
+    #: to make L1 legible also pushed the mean density from 2313 to 3458 and
+    #: doubled the median, so a uniform draw would have quietly made the whole
+    #: dataset heavier than the one the scenarios were tuned against. Weighting
+    #: the light end back up restores the old centre of mass while keeping the
+    #: wider palette -- see `pick`.
+    weight: float = 1.0
 
 
 #: Divides every density. Chosen so a MEDIAN actor -- the scenarios draw radii
@@ -69,37 +91,88 @@ class Material:
 MASS_SCALE = 250.0
 
 MATERIALS: Dict[str, Material] = {
-    # The light end, and it is cork rather than foam on purpose: real foam is
-    # around 60 kg/m^3, which next to steel is a mass ratio of 130 to 1, and a
-    # body that light skitters under a solver whose contact parameters were
-    # tuned near 1 kg. Cork is genuinely light, still obviously light on
-    # camera, and keeps the spread to a solver-friendly ~30x.
-    "cork": Material("cork", 240.0, 0.90, 0.0, (0.15, 0.40), (0.55, 0.80),
-                     hue_range=(0.05, 0.12)),
+    # ---- light dielectrics -------------------------------------------------
+    # Cork rather than foam on purpose: real foam is around 60 kg/m^3, which
+    # next to a dense metal is a mass ratio of 150 to 1, and a body that light
+    # skitters under a solver whose contact parameters were tuned near 1 kg.
+    "cork": Material("cork", 240.0, 0.94, 0.0, (0.15, 0.40), (0.55, 0.80),
+                     hue_range=(0.05, 0.12), specular=0.18, weight=1.6),
     # Warm, matte, mid-density. Hue is bounded because a blue plank does not
     # read as wood, and the whole point is that the material is recognisable.
-    "wood": Material("wood", 650.0, 0.80, 0.0, (0.35, 0.62), (0.45, 0.75),
-                     hue_range=(0.03, 0.11)),
+    "wood": Material("wood", 650.0, 0.82, 0.0, (0.35, 0.62), (0.45, 0.75),
+                     hue_range=(0.03, 0.11), specular=0.30, weight=1.6),
     # The free hue: a plastic object is credibly any colour, which keeps the
     # dataset's colour variety from collapsing once materials bound the rest.
-    "plastic": Material("plastic", 1100.0, 0.45, 0.0, (0.45, 0.85), (0.60, 0.92)),
-    # Dark and very rough. Restitution is a body property rather than a
-    # material one here, so `rubber` is about how it LOOKS and weighs; the
-    # scenarios that care about bounce still set their own.
-    "rubber": Material("rubber", 1300.0, 0.92, 0.0, (0.05, 0.30), (0.12, 0.30)),
-    # Smooth and bright, low saturation -- porcelain rather than a toy.
-    "ceramic": Material("ceramic", 2400.0, 0.25, 0.0, (0.02, 0.20), (0.75, 0.95)),
-    "stone": Material("stone", 2700.0, 0.88, 0.0, (0.03, 0.18), (0.30, 0.55)),
-    # The dense end, and the only metallic one. Near-zero saturation so it
-    # reads as metal and not as a grey-painted object.
-    "steel": Material("steel", 7800.0, 0.20, 1.0, (0.00, 0.08), (0.55, 0.80)),
+    "plastic": Material("plastic", 1100.0, 0.40, 0.0, (0.45, 0.85),
+                        (0.60, 0.92), specular=0.55, weight=1.6),
+    # Dark and very rough, and now with almost no specular -- rubber is the one
+    # material that should have no highlight at all, and at the 0.5 default it
+    # had the same sheen as plastic.
+    "rubber": Material("rubber", 1300.0, 0.96, 0.0, (0.05, 0.30), (0.12, 0.30),
+                       specular=0.12, weight=1.6),
+
+    # Matte, pale, and flatter than wood -- the light end needed a second
+    # ordinary material, not another exotic one. Cardboard reads instantly as
+    # light, which is the point: a viewer should be able to guess the mass.
+    "cardboard": Material("cardboard", 700.0, 0.95, 0.0, (0.18, 0.38),
+                          (0.50, 0.72), hue_range=(0.06, 0.11), specular=0.10,
+                          weight=1.6),
+
+    # ---- glazed and transmissive ------------------------------------------
+    # Porcelain rather than a toy: smooth, bright, and a strong highlight.
+    "ceramic": Material("ceramic", 2400.0, 0.15, 0.0, (0.02, 0.20),
+                        (0.75, 0.95), specular=0.85),
+    # FROSTED, not clear. Clear glass is the most visible material there is and
+    # also the least localisable -- a transparent culprit is hard to point at,
+    # and pointing at it is the task. At 0.92 transmission with roughness 0.22
+    # it is unmistakably glass and still has a silhouette.
+    "glass": Material("glass", 2500.0, 0.22, 0.0, (0.02, 0.18), (0.80, 0.98),
+                      specular=0.9, transmission=0.92, ior=1.46),
+    # The LIGHT transmissive one. Glass at 2500 was the only way to be
+    # see-through, which tied "transparent" to "middling heavy"; ice is
+    # transparent at 920 and breaks that correlation, so transmission stops
+    # being a cue for mass.
+    "ice": Material("ice", 920.0, 0.10, 0.0, (0.02, 0.12), (0.85, 0.98),
+                    hue_range=(0.50, 0.58), specular=0.9, transmission=0.88,
+                    ior=1.31, weight=1.6),
+    # Polished stone. Same density as `stone`, opposite finish, so the pair
+    # separates surface from substance.
+    "marble": Material("marble", 2700.0, 0.16, 0.0, (0.02, 0.14),
+                       (0.62, 0.88), specular=0.75),
+    "stone": Material("stone", 2700.0, 0.92, 0.0, (0.03, 0.18), (0.30, 0.55),
+                      specular=0.20),
+
+    # ---- metals ------------------------------------------------------------
+    # FOUR of them, where there was one. Metal is the fastest-reading material
+    # a viewer has -- and under an HDRI it mirrors the environment, so it is
+    # also what ties an object to its background. One metal in seven meant six
+    # clips in seven looked like painted primitives.
+    #
+    # Tinted metals need saturation: a copper that is grey is a steel. The
+    # colour of a metal is in its REFLECTION, so the base colour is what tints
+    # everything it mirrors.
+    "aluminium": Material("aluminium", 2700.0, 0.38, 1.0, (0.00, 0.06),
+                          (0.72, 0.92), specular=0.6, weight=0.8),
+    "steel": Material("steel", 7800.0, 0.22, 1.0, (0.00, 0.08), (0.55, 0.80),
+                      specular=0.6, weight=0.8),
+    "brass": Material("brass", 8500.0, 0.28, 1.0, (0.35, 0.60),
+                      (0.62, 0.85), hue_range=(0.10, 0.14), specular=0.6, weight=0.6),
+    "copper": Material("copper", 8900.0, 0.26, 1.0, (0.45, 0.70),
+                       (0.55, 0.78), hue_range=(0.02, 0.06), specular=0.6, weight=0.6),
 }
 
-#: The default draw. `dome`, floors and ramps are not made of anything in
-#: particular, and giving them materials would put metallic backdrops in the
-#: dataset for no gain.
-ACTOR_MATERIALS: Tuple[str, ...] = ("cork", "wood", "plastic", "rubber",
-                                    "ceramic", "stone", "steel")
+#: The default draw for an ACTOR: everything. Twelve materials, four of them
+#: metallic and one transmissive, against the seven near-matte dielectrics that
+#: made L1 hard to tell from L0.
+ACTOR_MATERIALS: Tuple[str, ...] = tuple(MATERIALS)
+
+#: What SCENERY may be made of -- a ramp, a barrier, a table, a pendulum post.
+#: A narrower set on purpose: a mirror-finish floor throws the actor's
+#: reflection across the scene and a glass ramp is a puzzle rather than a
+#: surface, and neither is the difficulty this dataset is measuring. What is
+#: wanted is that the staging stops looking like untextured grey blocks.
+SCENERY_MATERIALS: Tuple[str, ...] = ("wood", "stone", "marble", "ceramic",
+                                      "plastic", "steel")
 
 
 def get(name: str) -> Material:
@@ -109,11 +182,34 @@ def get(name: str) -> Material:
 def pick(rng, choices: Tuple[str, ...] = ACTOR_MATERIALS) -> str:
     """One material name, drawn off whatever stream is handed in.
 
+    WEIGHTED, not uniform. The palette is not uniform in density -- the three
+    dense metals that make L1 legible are also 7800 to 8900 kg/m^3 -- so a
+    uniform draw over fourteen materials put the mean density at 3458 against
+    the seven-material set's 2313, and doubled the median. That is a change to
+    the PHYSICS smuggled in by a change to the appearance: every scenario's
+    contact tuning assumes a mass regime, and the dataset would have drifted
+    out of it while the labels said nothing had changed.
+
+    Weighting the light end up puts the mean back at 2256, close to where the
+    scenarios were tuned, while keeping the wider palette. Weights live on the
+    material so the two facts sit together.
+
     Draw this from `appearance_rng`, never from the physics stream: it decides
     a mass, but it decides it *deterministically* from the scene's look, and
     consuming a physics draw here would shift every value after it.
     """
-    return str(choices[int(rng.randint(0, len(choices)))])
+    names = list(choices)
+    w = [float(MATERIALS[n].weight) for n in names]
+    total = sum(w)
+    if total <= 0:                          # a caller passed all-zero weights
+        return str(names[int(rng.randint(0, len(names)))])
+    u = float(rng.uniform(0.0, total))
+    acc = 0.0
+    for name, weight in zip(names, w):
+        acc += weight
+        if u < acc:
+            return str(name)
+    return str(names[-1])
 
 
 def mass_for(name: str, scale, kind: str = "sphere") -> float:
@@ -143,8 +239,8 @@ def mass_for(name: str, scale, kind: str = "sphere") -> float:
     return float(MATERIALS[name].density * volume / MASS_SCALE)
 
 
-def appearance(name: str, rng) -> Tuple[Tuple[float, float, float], float, float]:
-    """`(rgb, roughness, metallic)` consistent with the material.
+def appearance(name: str, rng):
+    """`(rgb, roughness, metallic, specular, transmission, ior)` for a material.
 
     The hue is free unless the material bounds it; saturation and value always
     come from the material's band. That is what stops `prompts.color_name` --
@@ -162,7 +258,8 @@ def appearance(name: str, rng) -> Tuple[Tuple[float, float, float], float, float
     sat = float(rng.uniform(*m.saturation))
     val = float(rng.uniform(*m.value))
     rgb = tuple(float(c) for c in colorsys.hsv_to_rgb(hue, sat, val))
-    return rgb, float(m.roughness), float(m.metallic)
+    return (rgb, float(m.roughness), float(m.metallic), float(m.specular),
+            float(m.transmission), float(m.ior))
 
 
 #: The material a hand-tuned mass is implicitly expressed in. `ratio` masses

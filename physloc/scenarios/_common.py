@@ -181,7 +181,8 @@ def with_material(body: BodySpec, name: str, rng, look=None,
     # must be INDISTINGUISHABLE for `newton2_mass` to mean anything, and giving
     # them the same material off the same stream is not enough -- the second
     # call advances the stream and comes back a different colour.
-    rgb, roughness, metallic = M.appearance(name, rng) if look is None else look
+    look = M.appearance(name, rng) if look is None else look
+    rgb, roughness, metallic, specular, transmission, ior = look
     # `mass_from`:
     #   "volume" -- density x volume, the honest default.
     #   "ratio"  -- scale the mass the scenario already chose by how much
@@ -197,6 +198,7 @@ def with_material(body: BodySpec, name: str, rng, look=None,
         mass = M.mass_for(name, body.scale, body.kind)
     return dataclasses.replace(
         body, material=name, color=rgb, roughness=roughness, metallic=metallic,
+        specular=specular, transmission=transmission, ior=ior,
         mass=mass)
 
 
@@ -430,9 +432,18 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
         for k in range(PATH_SAMPLES):
             t = duration * k / float(PATH_SAMPLES - 1)
             p = p0 + v0 * t + 0.5 * g * t * t
-            # It cannot go below the floor, and a body resting on it is
-            # exactly where a distractor must not stand.
-            p[2] = max(float(p[2]), floor_top + float(a.bounding_radius))
+            # A PREDICTED sample cannot go below the floor, and a body resting
+            # on it is exactly where a distractor must not stand -- so the
+            # ballistic guess is lifted to resting height.
+            #
+            # The FIRST sample is not a guess. It is where the body actually
+            # is, and clamping it protected a point the actor was not at:
+            # `toss` starts its ball at z = 0.558 with a 0.652 radius, so the
+            # clamp moved the protected point 9 cm up and a distractor was
+            # admitted into the gap -- 0.137 rad from the ball against the
+            # 0.139 it needed. Marginal, and marginal is what a guard is for.
+            if k:
+                p[2] = max(float(p[2]), floor_top + float(a.bounding_radius))
             keep_clear.append((p, keep))
             # TWO DIFFERENT MARGINS, because they answer different questions.
             # Physical clearance wants room for a body to move without meeting

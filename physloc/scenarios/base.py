@@ -318,6 +318,12 @@ class BodySpec:
     material: Optional[str] = None
     roughness: float = 0.55
     metallic: float = 0.0
+    #: The rest of the PrincipledBSDF surface. Defaults are Blender's, so a
+    #: body that never asked for a material renders exactly as it did before.
+    #: `transmission` above zero is glass, and `ior` is what bends through it.
+    specular: float = 0.5
+    transmission: float = 0.0
+    ior: float = 1.45
 
     # Motion is written by the scenario rather than solved by the simulator --
     # a pendulum bob on a rigid rod, say, which PyBullet would need a joint for
@@ -633,6 +639,7 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     _add_peers(spec, seed)
     _match_understudies(spec)
     _recolour_scenery(spec, seed)
+    _material_scenery(spec, seed)
     _swap_in_gso(spec, seed)
     _pick_hdri(spec, seed)
     _maybe_move_camera(spec, seed)
@@ -669,7 +676,69 @@ def _match_understudies(spec: SceneSpec) -> None:
         body.color = parent.color
         body.roughness = parent.roughness
         body.metallic = parent.metallic
+        body.specular = parent.specular
+        body.transmission = parent.transmission
+        body.ior = parent.ior
         body.material = parent.material
+
+
+def _material_scenery(spec: SceneSpec, seed: int) -> None:
+    """From L1 up, the STAGING is made of something too.
+
+    Materials arrived on actors alone, and you reported the consequence: L1
+    looked like L0. Half of what is on screen is a ramp, a barrier, a table, a
+    pendulum post and a floor -- and every one of them stayed an untextured
+    block of flat colour while one object in the middle got a material. The
+    rung changed a fraction of the frame.
+
+    Two different treatments, because the two kinds of scenery answer to
+    different constraints:
+
+    * **Props and occluders take a whole material.** A wooden ramp, a stone
+      barrier, a steel post. Drawn from `SCENERY_MATERIALS`, which is narrower
+      than the actor set on purpose -- a glass ramp is a puzzle rather than a
+      surface, and a mirror-finish table throws the actor's reflection across
+      the scene. Neither is the difficulty being measured.
+    * **The floor keeps its COLOUR and takes only the surface.** Its colour is
+      chosen by `_recolour_scenery` with a contrast guard against every actor,
+      measured and re-measured -- a material's own colour band would throw that
+      away. What it gains is roughness, specular and the rest, so the ground
+      reads as stone or wood rather than as matte nothing.
+
+    Mass is untouched throughout: scenery is static or scenario-tuned, and
+    `density x volume` on a six-metre floor slab is a number nobody wants.
+
+    Its own salted stream, so dressing the staging cannot shift a physics draw
+    a scenario already made.
+    """
+    import zlib
+
+    from . import materials as M
+
+    if not COMPLEXITY[spec.complexity].materials:
+        return
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0x57A6E + zlib.crc32(spec.scenario.encode()))
+        % (2 ** 31 - 1))
+    for body in spec.bodies:
+        if body.role in ("actor", "distractor") or body.material:
+            continue
+        # The shadow stand-in is a picture of an absence -- see
+        # `shadow_track`. Giving it a surface would make it an object.
+        if body.role == "shadow":
+            continue
+        name = M.pick(rng, M.SCENERY_MATERIALS)
+        m = M.get(name)
+        rgb, rough, metal, spec_, trans, ior = M.appearance(name, rng)
+        keep = body.role == "floor"
+        body.material = name
+        body.roughness = rough
+        body.metallic = metal
+        body.specular = spec_
+        body.transmission = trans
+        body.ior = ior
+        if not keep:
+            body.color = rgb
 
 
 def _swap_in_gso(spec: SceneSpec, seed: int) -> None:

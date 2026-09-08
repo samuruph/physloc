@@ -85,7 +85,10 @@ def build_scene(spec: SceneSpec, scratch):
         # Scenery leaves the defaults.
         material = kb.PrincipledBSDFMaterial(color=kb.Color(*b.color),
                                              roughness=b.roughness,
-                                             metallic=b.metallic)
+                                             metallic=b.metallic,
+                                             specular=b.specular,
+                                             transmission=b.transmission,
+                                             ior=b.ior)
         # `sim_static`, not `static`: a scripted body is pinned in the
         # simulator so it neither falls nor generates contacts, and its motion
         # arrives from the trajectory instead. Downstream it is still dynamic.

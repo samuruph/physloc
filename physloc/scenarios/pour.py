@@ -87,7 +87,7 @@ class Pour(Scenario):
         grain_mat = M.pick(arng)
         grain_look = M.appearance(grain_mat, arng)
         grains = [C.with_material(g, grain_mat, arng, mass_from="ratio",
-                                  look=(g.color, grain_look[1], grain_look[2]))
+                                  look=(g.color,) + tuple(grain_look[1:]))
                   for g in grains]
 
         return SceneSpec(

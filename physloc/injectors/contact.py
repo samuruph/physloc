@@ -219,6 +219,41 @@ class Solidity(Injector):
     family = "solidity"
 
     DEPTH_BY_BIN = {"weak": 0.30, "medium": 0.80, "strong": 2.50}
+    #: **The severity axis is the depth, and it is now actually delivered.**
+    #:
+    #: Staging used to do one thing -- switch the collision pair off -- and a
+    #: body with no floor under it free-falls out of the world at the same rate
+    #: whatever the bin claims. Measured on the review sweep, weak, medium and
+    #: strong were BIT-IDENTICAL on both `drop` and `pour`, all three ending at
+    #: z = -17 m, while advertising depths of 0.11 / 0.30 / 0.95 m. The
+    #: `frames_disabled` clock could not separate them either: restoring a pair
+    #: does nothing once the body is metres past a floor it can no longer touch.
+    #:
+    #: So the two bins that claim to be *recovered* now settle at the depth they
+    #: declare. The surface stops being solid without ceasing to be there: while
+    #: the body is inside it, it is arrested and then held at `target_depth`.
+    #: That also restores the one property the family cannot do without -- the
+    #: culprit stays VISIBLE. A body under an opaque floor has no pixels, so it
+    #: gets no `severity_map` and no `mask_invalid`; measured, all three bins
+    #: painted 24 pixels on a single frame and nothing afterwards, which is the
+    #: "severity is 0" you reported. Half-embedded, there is something to
+    #: annotate on every frame of the window.
+    #:
+    #: `strong` is unchanged and must be: past one radius there is nothing left
+    #: to push against, and "through, for good" is the whole point of the bin.
+    #: It keeps the empty mask, and `reference_mask` carries where the body
+    #: should have been -- the same bargain `permanence` and `dissolve` make.
+    #:
+    #: Arrest rate, in 1/s: the deceleration applied per unit of downward speed
+    #: while the body is inside the surface. A `drop` ball arrives at 6.5 m/s,
+    #: so 25 stops it within about a quarter of a metre and the declared depth
+    #: is reached from below rather than blown past.
+    ARREST = 25.0
+    #: Ceiling on the restoring force, in multiples of the body's weight. It has
+    #: to exceed 1 -- at exactly 1 the surface could support the body but never
+    #: push it back up to the depth it overshot -- and stay modest, because this
+    #: is a surface yielding, not a trampoline.
+    SPRING_MAX = 4.0
     #: How long the collision pair stays suppressed, in SECONDS. This IS the
     #: severity axis once the violation is staged: the pair is either enforced
     #: or it is not, so "how deep" is not a dial the simulator has -- but "for
@@ -237,9 +272,42 @@ class Solidity(Injector):
     SECONDS_BY_BIN = {"weak": 0.17, "medium": 0.34, "strong": 0.85}
 
     def strong_residual_reference(self, spec) -> float:
-        # The penetration law reports depth in radii, which is exactly the unit
-        # DEPTH_BY_BIN is expressed in -- so the reference is the bin value.
+        """The penetration law reports depth in radii, which is exactly the unit
+        `DEPTH_BY_BIN` is expressed in -- so the reference is the bin value.
+
+        Measuring it instead was tried and is wrong here. `strong` has no floor
+        under it and keeps going, so its depth is a fact about how many frames
+        the clip has left rather than about the family: measured on `drop` it
+        reached 45 radii, and dividing the recovered bins by that put weak at
+        0.015 and medium at 0.019 -- the "severity is 0" you reported, arriving
+        the second way. The declared depth is the claim the family makes and the
+        one all three bins are comparable against; `strong` simply saturates,
+        which is the honest reading of a body that went through and kept going.
+        """
         return float(self.DEPTH_BY_BIN["strong"])
+
+    def _contact_heights(self, traj, bodies) -> Dict[str, float]:
+        """Each body's z when its lowest point is ON the surface, measured.
+
+        The obvious datum -- `bounding_radius` -- is a MESH SCALE FACTOR, not a
+        half-height, and no KuBasic mesh reaches 1.0 in its own coordinates. On
+        the review sweep's `drop` seed the actor's `radius` reads 0.381 while it
+        comes to rest at z = 0.163, so a depth computed as `top - (z - radius)`
+        said the ball was 0.22 m inside a floor it was resting on. The settle
+        hook believed it and held the `weak` bin at z = 0.271 -- a tenth of a
+        metre ABOVE the floor. A floating ball is `support`, not `solidity`:
+        the clip depicted the wrong family.
+
+        The lawful rollout already knows the answer. The lowest the body gets
+        while behaving is the height at which it is touching, whatever its
+        shape, so that is the datum and it needs no geometry at all.
+        """
+        out = {}
+        for body in bodies:
+            bi = traj.index_of(int(body.segmentation_id))
+            out[str(int(body.segmentation_id))] = float(
+                np.min(np.asarray(traj.pos[:, bi, 2], np.float64)))
+        return out
 
     # ------------------------------------------------------------------ #
     def plan(self, spec, traj: Trajectory, rng: np.random.RandomState,
@@ -278,6 +346,7 @@ class Solidity(Injector):
             self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]),
             t_fire, traj.num_frames)
         t_end = t_fire + n_window - 1
+        settles = bool(depth_r < 1.0)
 
         # The mode follows the contact *geometry*, not whether the partner is
         # static. Landing on something (near-vertical normal) can be expressed
@@ -309,6 +378,9 @@ class Solidity(Injector):
                  "pass_through": bool(mode == "pass_through"),
                  "partner_extent": _extent_along(spec, partner_id, normal),
                  "t_contact": int(t_contact),
+                 "settles": settles,
+                 "contact_z": self._contact_heights(traj, [actor]),
+                 "target_depth_radii": depth_r,
                  "passes_through": bool(depth_r >= 1.0)}
         if extra_ids:
             # Every surface beneath the body is suppressed, so it falls out of
@@ -333,6 +405,12 @@ class Solidity(Injector):
             notes["r_strong"] = self._measure(
                 strong, int(actor.segmentation_id), "penetration", notes)
 
+        # A body that went through the floor is still through the floor on the
+        # last frame of the clip, so `sink` runs to the end like the group mode
+        # does. Only `pass_through` has a geometric end -- the far side of the
+        # wall -- and `refine_windows` measures that one.
+        if mode != "pass_through":
+            t_end = traj.num_frames - 1
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t_fire,
             windows=[(t_fire, t_end)],
@@ -354,7 +432,15 @@ class Solidity(Injector):
                     # geometrically clear of each other, which is a fact about
                     # the run rather than a guess made before it.
                     "restore_when_clear": bool(depth_r >= 1.0),
+                    "settles": settles,
                     "target_depth_radii": depth_r},
+            # WHAT WAS TURNED OFF, not how deep the body ended up. The depth is
+            # an outcome -- it depends on how fast the body arrived and how long
+            # the clip has left -- and reporting it as the knob made the three
+            # bins advertise 0.11 / 0.30 / 0.95 m while producing one identical
+            # trajectory. The support removed is exact, known before anything is
+            # simulated, and monotone; `severity_map` still measures the depth
+            # that resulted, through the penetration law.
             magnitude=float(depth_r * radius),
             magnitude_unit="m_penetration_depth",
             severity_bin=severity_bin,
@@ -388,21 +474,28 @@ class Solidity(Injector):
         if t0 is None:
             return None
         depth_r = self.DEPTH_BY_BIN[severity_bin]
-        n_win = self._window_len(
-            self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]), t0, T)
-        t_end = min(T - 1, t0 + n_win - 1)
+        settles = bool(depth_r < 1.0)
         lead = bodies[0]
+        # A FLOOR THAT HAS STOPPED HOLDING THINGS UP HAS STOPPED, and the clip
+        # ends with the pour still going through it. The window used to be a
+        # per-bin frame count that expired two frames after `t_event` -- before
+        # the first grain had even reached the floor -- so the severity field
+        # was gated to frames where nothing had happened yet and every bin
+        # scored exactly 0.000. Everything from the event on is the violation.
+        t_end = T - 1
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, t_end)],
             causal_body_ids=[int(b.segmentation_id) for b in bodies],
             params={"type": "disable_collision_pair", "mode": "sink_group",
-                    "frames_disabled": int(n_win),
+                    "settles": settles,
                     "target_depth_radii": depth_r},
             magnitude=float(depth_r * lead.bounding_radius),
             magnitude_unit="m_penetration_depth", severity_bin=severity_bin,
             notes={"radius": float(lead.bounding_radius),
                    "surface_top": _geom.surface_top(spec, lead),
+                   "settles": settles,
+                   "contact_z": self._contact_heights(traj, bodies),
                    "t_contact": int(t0), "group": True,
                    "passes_through": bool(depth_r >= 1.0)})
 
@@ -442,13 +535,31 @@ class Solidity(Injector):
         """
         out = self._clone(traj)
         t0 = plan.windows[0][0]
+        # The bins that SETTLE stop at their declared depth, so the host
+        # approximation clamps them there rather than integrating a soft
+        # contact it has no substeps for; only `strong` genuinely free-falls.
+        # Approximate on purpose -- this path exists for the mock rollout the
+        # tests run on, and `stage` is what ships.
+        settles = bool(plan.params.get("settles"))
+        n = traj.num_frames - t0
+        g_seq = np.tile(traj.gravity.astype(np.float64)[None, :], (n, 1))
         for bid in plan.causal_body_ids:
             body = next(b for b in spec.bodies
                         if int(b.segmentation_id) == int(bid))
             # `solid=False` for the obstacles and a floor far below: nothing to
             # land on, everything else unchanged.
             self._rewrite_from(spec, traj, out, body, t0,
+                               g_per_frame=g_seq,
                                obstacles=None, solid=False, floorless=True)
+            if settles:
+                bi = traj.index_of(int(bid))
+                top = float(plan.notes["surface_top"])
+                rest = float((plan.notes.get("contact_z") or {}).get(
+                    str(int(bid)), top + float(traj.radius[bi])))
+                floor = rest - float(plan.params["target_depth_radii"]) * max(
+                    rest - top, 1e-3)
+                out.pos[t0:, bi, 2] = np.maximum(out.pos[t0:, bi, 2], floor)
+                self._sync_velocity(traj, out, bi, t0)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -524,6 +635,8 @@ class Solidity(Injector):
         window -- went with it. Overlap is a geometric fact about the finished
         trajectory, so it is measured here rather than guessed in `plan()`.
         """
+        if plan.params.get("mode") != "pass_through":
+            return          # `sink` and `sink_group` persist to the last frame
         pair = plan.params.get("pair")
         if not pair or len(pair) != 2:
             return
@@ -610,13 +723,14 @@ class Solidity(Injector):
         for ia, ib in pairs:
             pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
 
+        hooks = list(self._settle_hooks(spec, simulator, objs, plan))
         # Restore the pair once the window closes, so the bins differ. Without
         # this the suppression lasted the whole clip and weak, medium and strong
         # were the same clip three times.
         t_end = plan.t_event + int(plan.params.get("frames_disabled", 4))
         when_clear = bool(plan.params.get("restore_when_clear"))
         if plan.params.get("mode") == "sink_group":
-            return ()          # the floor stays gone -- see `_stageable`
+            return tuple(hooks)      # the floor stays gone -- see `_stageable`
         state = {"restored": False}
 
         def clear() -> bool:
@@ -639,7 +753,90 @@ class Solidity(Injector):
                 pb.setCollisionFilterPair(ia, ib, -1, -1, 1)
             state["restored"] = True
 
-        return (restore,)
+        return tuple(hooks) + (restore,)
+
+    def _settle_hooks(self, spec, simulator, objs, plan):
+        """Hold the body at the depth its bin declares, instead of losing it.
+
+        The bins that claim to be *recovered* -- `weak` dips in, `medium` is
+        deeply swallowed -- only mean anything if the body stops somewhere. Off
+        the collision pair alone it does not: it free-falls, every bin lands at
+        the same place, and within one frame it is under an opaque floor with
+        no pixels, hence no mask and no severity. Measured, all three bins
+        painted 24 pixels on one frame and nothing after.
+
+        Two terms, and each answers one half of that:
+
+        * **arrest** -- a deceleration proportional to how fast the body is
+          still going down, which is what stops a 6.5 m/s impact inside a
+          quarter of a metre instead of letting it accelerate away.
+        * **hold** -- the surface carries the body's weight exactly at the
+          declared depth, less above it and more below, so `target_depth` is a
+          stable equilibrium rather than a moment in passing. Capped at
+          `SPRING_MAX` weights: a surface that yields, not a trampoline.
+
+        `strong` declares a depth past one radius and takes neither: there is
+        nothing left to push against once the centre is through, and going all
+        the way is what the bin means.
+        """
+        if not plan.params.get("settles"):
+            return ()
+        # Only where the body goes DOWN through something. A head-on
+        # pass-through travels sideways into a wall with its centre below the
+        # wall's top face, so a depth test written against that face would fire
+        # on every frame and lift the ball over the wall instead of sending it
+        # through -- a support violation inside a solidity clip. That mode is
+        # already separated by how long the pair stays off.
+        if plan.params.get("mode") == "pass_through":
+            return ()
+        import pybullet as pb
+
+        from ..render import stepper
+
+        g = float(np.linalg.norm(np.asarray(spec.gravity, np.float64))) or 9.81
+        top = float(plan.notes.get("surface_top", 0.0))
+        depth_r = float(plan.params.get("target_depth_radii", 0.3))
+        contact_z = dict(plan.notes.get("contact_z") or {})
+        bodies = []
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is None:
+                continue
+            # Measured, not derived from the mesh -- see `_contact_heights`.
+            rest = contact_z.get(str(int(bid)))
+            if rest is None:
+                rest = top + float(body.bounding_radius)
+            # How tall the body stands on the surface, which is the length the
+            # declared depth is written in. Floored so a body that is already
+            # below its datum cannot produce a zero or negative target.
+            stand = max(float(rest) - top, 1e-3)
+            bodies.append((idx, float(getattr(body, "mass", 1.0)),
+                           float(rest), max(depth_r * stand, 1e-4)))
+        if not bodies:
+            return ()
+        t0 = plan.t_event
+
+        def settle(_client, _step, frame):
+            if frame < t0:
+                return
+            for idx, mass, rest, sink in bodies:
+                z = float(pb.getBasePositionAndOrientation(idx)[0][2])
+                # How far below its own lawful resting height the body has got.
+                below = rest - z
+                if below <= 0.0:
+                    continue
+                vz = float(pb.getBaseVelocity(idx)[0][2])
+                hold = min(below / sink, self.SPRING_MAX)
+                fz = mass * (g * hold - self.ARREST * min(vz, 0.0))
+                pb.applyExternalForce(idx, -1, (0.0, 0.0, fz),
+                                      list(pb.getBasePositionAndOrientation(idx)[0]),
+                                      pb.WORLD_FRAME)
+
+        return (settle,)
 
     def _filter_pairs(self, spec, simulator, objs, plan):
         """Every (actor, surface) pair this violation suppresses."""
@@ -977,6 +1174,17 @@ class SuperElastic(Injector):
                                        1.0 + excess * fit, normal)
         r_strong = self._measure(strong_preview, int(actor.segmentation_id),
                                  "energy_at_contact", {"surface_top": top})
+        # NEVER BELOW WHAT THE BIN DECLARES. `_boosted` steps a medium with
+        # `_rewrite_group`, which resolves the grains against each other
+        # approximately and badly under-reports what the staged rollout does:
+        # measured on `pour`, the preview gave `r_strong = 0.12` against
+        # residuals of 1.5 to 18, so every bin divided by a hundredth of its
+        # own effect and all three saturated at 1.000. A speed gain of k
+        # multiplies kinetic energy by k^2, so `k^2 - 1` is the floor the
+        # family can always defend, and the measurement is only allowed to
+        # raise it -- which is what it is for on a scene where much of the
+        # body's energy is potential at the moment of impact.
+        r_strong = max(r_strong, float((1.0 + excess * fit) ** 2 - 1.0))
 
         return InterventionPlan(
             family=self.family, kind="repeated", t_event=windows[0][0],
@@ -1001,6 +1209,14 @@ class SuperElastic(Injector):
                    # one, records an approach of zero, and boosts by nothing.
                    "approach_speed": float(_approach_speed(
                        traj, int(actor.segmentation_id), int(partner_id), t0)),
+                   # THE CEILING ON A RUNAWAY. See `stage`: nothing may leave a
+                   # contact faster than `gain` times the fastest speed the
+                   # LAWFUL rollout ever reaches. A fact about the scene, so it
+                   # bounds the intervention without tuning.
+                   "max_lawful_speed": float(max(
+                       (np.linalg.norm(
+                           traj.lin_vel[:, traj.index_of(int(b.segmentation_id))],
+                           axis=1).max() for b in targets), default=0.0)),
                    "surface_top": top,
                    "speed_gain": gain, "n_bounces": len(windows),
                    "r_strong": float(r_strong),
@@ -1056,97 +1272,186 @@ class SuperElastic(Injector):
 
         Superelastic means the coefficient of restitution exceeds one: the pair
         separates faster than it met, so the contact gives back more than it
-        took. Two shapes, because the quantity differs:
+        took. PyBullet clamps `restitution` to 1, so the extra speed is handed
+        to the bodies directly.
 
-        * against a STATIC partner it is the body's outgoing speed over its
-          incoming speed;
-        * against a MOVING partner it is the pair's RELATIVE separation speed
-          over their relative approach speed, and the correction is split evenly
-          so momentum stays conserved. The violation is that the collision
-          returned more energy than it took, not that momentum appeared.
+        **The first bounce is PRESCRIBED, every later one is observed**, and
+        the split is the whole correctness argument here.
 
-        The contact lasts a single substep -- measured with
-        `probe_superelastic.py`: the balls approach at 1.292 m/s, and by the one
-        step where PyBullet reports a contact the solver has already resolved it
-        to 0.727. So the boost cannot be applied "during" the collision; it is
-        applied on the step after contact ends, against the approach speed
-        recorded while the bodies were still free.
+        The world is reset to `t_event`, and `t_event` is the frame the impact
+        was *reported* on -- by which time the solver has already resolved it.
+        Measured on `drop`: the ball arrives at 6.54 m/s and the state the
+        world is reset to already has it leaving at 1.29. So there is no
+        approach speed left to observe, and the hook that tried to observe one
+        read whatever `getContactPoints` happened to be holding -- which, on
+        the first substep, is the manifold left over from the PREVIOUS
+        variant's run, because `reset_to` moves the bodies without recomputing
+        it. The bin that ran after a variant leaving the ball in contact caught
+        the real 6.54; the bins that did not fell through to a later,
+        much slower bounce. That is the ordering failure you reported: measured
+        on `drop x 0777`, medium left the floor at 11.3 m/s and reached
+        z = 6.6 while strong left at 2.9 and reached 1.6 -- the strongest bin
+        rebounding a quarter as high as the middle one, from a run-order
+        accident.
+
+        So the first bounce uses `approach_speed` and `impact_normal` from the
+        plan, both measured on the lawful rollout, and is applied on the first
+        substep with no reference to the manifold at all. It is then exactly
+        the bounce the plan was fitted to and the annotation describes.
+
+        **Every target bounces, not just the first.** `causal_body_ids` is the
+        whole medium on a granular scene, and this boosted `[0]` and its
+        partner -- one grain in forty. That is why `pour x superelastic` was
+        indistinguishable from its valid twin at all three bins.
         """
         import pybullet as pb
 
         from ..render import stepper
 
         gain = float(plan.params["speed_gain"])
-        actor_id = int(plan.causal_body_ids[0])
-        idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
-        if idx is None:
+        seg_ids = [int(i) for i in (plan.notes.get("targets")
+                                    or plan.causal_body_ids)]
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        movers = []
+        for sid in seg_ids:
+            body = by_id.get(sid)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, sid)
+            if idx is not None:
+                movers.append((sid, idx))
+        if not movers:
             return ()
 
         partner_seg = plan.notes.get("partner_id")
-        partner_body = next((b for b in spec.bodies
-                             if int(b.segmentation_id) == int(partner_seg)),
-                            None) if partner_seg is not None else None
-        partner = (stepper.pybullet_index(simulator, objs, spec,
-                                          int(partner_seg))
-                   if partner_seg is not None else None)
-        moving = bool(partner is not None and partner_body is not None
-                      and not partner_body.static)
-        state = {"ready": True, "touching": False,
-                 "approach": float(plan.notes.get("approach_speed", 0.0))}
-        def _points():
-            pts = pb.getContactPoints(bodyA=idx)
-            if partner is None:
-                return pts
-            return [c for c in pts if partner in (c[1], c[2])]
+        partner_body = by_id.get(int(partner_seg)) if partner_seg is not None else None
+        partner = (stepper.pybullet_index(simulator, objs, spec, int(partner_seg))
+                   if partner_seg is not None and partner_body is not None
+                   and not partner_body.static else None)
+        # A pair, not a medium: the partner moves, so the restitution is on the
+        # RELATIVE speed and the correction is split evenly between them --
+        # otherwise the clip gains momentum as well as energy and annotates
+        # only one of the two.
+        paired = partner is not None and len(movers) <= 2
+        approach0 = float(plan.notes.get("approach_speed", 0.0))
+        normal0 = np.asarray(plan.notes.get("impact_normal", (0.0, 0.0, 1.0)),
+                             np.float64)
+        n0 = float(np.linalg.norm(normal0))
+        normal0 = normal0 / n0 if n0 > 1e-9 else np.array([0.0, 0.0, 1.0])
 
-        def boost(_client, _step, _frame):
-            points = _points()
-            va = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
-            wa = pb.getBaseVelocity(idx)[1]
+        # Per body, because each grain of a pour arrives and rebounds on its
+        # own schedule.
+        watch = {sid: {"approach": approach0, "ready": True, "touched": -99}
+                 for sid, _ in movers}
+        state = {"fired": False}
+        # **A HARD CEILING, because the observational boost otherwise compounds.**
+        # `approach` is re-read on every contact-free substep, which is right
+        # for a ball that leaves the floor and flies for half a second and
+        # catastrophic for a grain in a pile: it separates, is boosted, is free
+        # for one substep -- so its *boosted* speed is recorded as the next
+        # approach -- and touches its neighbour again immediately. Each contact
+        # then multiplies the last, and the medium detonates. Measured on
+        # `pour` before this existed: grains reached z = 778 m at the weak bin
+        # and z = 1016 m at medium, from a box 0.24 m deep.
+        #
+        # The bound is a fact about the scene rather than a tuned constant:
+        # nothing may leave a contact faster than `gain` times the fastest
+        # speed anything reaches in the LAWFUL rollout. A single bounce is
+        # unaffected -- a dropped ball's fastest lawful speed IS its impact
+        # speed, so the ceiling sits exactly at the boost the plan asked for --
+        # and a cascade cannot climb past one bounce's worth of gain.
+        ceiling = float(plan.notes.get("max_lawful_speed", 0.0)) * gain
+        if ceiling <= 1e-6:
+            ceiling = float("inf")
 
-            if moving:
-                vb = np.asarray(pb.getBaseVelocity(partner)[0], np.float64)
-                wb = pb.getBaseVelocity(partner)[1]
-                rel = va - vb
-                if points:
-                    state["touching"] = True
-                    return
-                if not state["touching"]:
-                    state["approach"] = float(np.linalg.norm(rel))
-                    return
-                state["touching"] = False
-                mag = float(np.linalg.norm(rel))
-                extra = state["approach"] * gain - mag
-                if not state["ready"]:
-                    return
-                if mag < 1e-6 or extra <= 0.0:
-                    return
-                n = rel / mag
-                pb.resetBaseVelocity(idx, (va + n * extra * 0.5).tolist(),
-                                     list(wa))
-                pb.resetBaseVelocity(partner, (vb - n * extra * 0.5).tolist(),
-                                     list(wb))
-                state["ready"] = False
-                return
+        def _free_speed(idx):
+            return float(np.linalg.norm(
+                np.asarray(pb.getBaseVelocity(idx)[0], np.float64)))
 
-            if not points:
-                state["ready"] = True
-                state["approach"] = float(np.linalg.norm(va))
+        def _first_bounce():
+            """The planned impact, applied once, from the plan's own numbers."""
+            if paired:
+                (sa, ia), (sb, ib) = movers[0], (
+                    (int(partner_seg), partner) if len(movers) == 1
+                    else movers[1])
+                va = np.asarray(pb.getBaseVelocity(ia)[0], np.float64)
+                vb = np.asarray(pb.getBaseVelocity(ib)[0], np.float64)
+                n = normal0
+                rel = float((va - vb) @ n)
+                # `n` points from one body to the other; orient it along the
+                # separation so "faster than it arrived" is unambiguous.
+                if rel < 0.0:
+                    n, rel = -n, -rel
+                extra = approach0 * gain - rel
+                if extra <= 0.0:
+                    return
+                pb.resetBaseVelocity(ia, (va + n * extra * 0.5).tolist(),
+                                     list(pb.getBaseVelocity(ia)[1]))
+                pb.resetBaseVelocity(ib, (vb - n * extra * 0.5).tolist(),
+                                     list(pb.getBaseVelocity(ib)[1]))
+                del sa, sb
                 return
-            if not state["ready"]:
+            for _sid, idx in movers:
+                v = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
+                n = normal0 if float(v @ normal0) >= 0.0 else -normal0
+                # Tangential motion is untouched: restitution is a statement
+                # about the normal component and nothing else.
+                v_out = v - float(v @ n) * n + n * (approach0 * gain)
+                pb.resetBaseVelocity(idx, v_out.tolist(),
+                                     list(pb.getBaseVelocity(idx)[1]))
+
+        def boost(_client, step, frame):
+            if not state["fired"]:
+                state["fired"] = True
+                # Only where the plan HAS a first impact to prescribe. A whole
+                # medium is boosted when it arrives, which has not happened at
+                # `t_event`, so a granular scene skips straight to observing.
+                if approach0 > 1e-6 and len(movers) <= 2:
+                    _first_bounce()
+                    for w in watch.values():
+                        w["ready"] = False
                 return
-            n = np.mean([np.asarray(c[7], np.float64) for c in points], axis=0)
-            mag = float(np.linalg.norm(n))
-            if mag < 1e-9:
+            # `getContactPoints` reports the manifold of the LAST step, so it
+            # is only meaningful once this run has taken one.
+            if step < 1:
                 return
-            n /= mag
-            out_speed = float(va @ n)
-            if out_speed <= 1e-3:
-                return
-            pb.resetBaseVelocity(
-                idx, (va + n * (state["approach"] * gain - out_speed)).tolist(),
-                list(wa))
-            state["ready"] = False
+            for sid, idx in movers:
+                w = watch[sid]
+                points = [c for c in pb.getContactPoints(bodyA=idx)
+                          if float(c[9]) > 1e-6]
+                if not points:
+                    # ONE BOOST PER FRAME OF GENUINE FLIGHT. Re-arming on the
+                    # first free substep is what let the cascade run: a grain
+                    # separates, is boosted, spends one substep free -- so its
+                    # *boosted* speed is recorded as the next approach -- and
+                    # touches its neighbour again immediately. Requiring a
+                    # whole frame clear of contact leaves a dropped ball
+                    # bouncing repeatedly, which is what `repeated` means, and
+                    # gives a grain in a pile exactly one bounce, which is what
+                    # a medium arriving looks like.
+                    if frame > w["touched"]:
+                        w["ready"] = True
+                        w["approach"] = _free_speed(idx)
+                    continue
+                w["touched"] = frame
+                if not w["ready"]:
+                    continue
+                n = np.mean([np.asarray(c[7], np.float64) for c in points],
+                            axis=0)
+                mag = float(np.linalg.norm(n))
+                if mag < 1e-9:
+                    continue
+                n /= mag
+                v = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
+                out_speed = float(v @ n)
+                if out_speed <= 1e-3:
+                    continue          # still arriving: wait for the rebound
+                target = min(w["approach"] * gain, ceiling)
+                if target <= out_speed:
+                    continue
+                pb.resetBaseVelocity(idx, (v + n * (target - out_speed)).tolist(),
+                                     list(pb.getBaseVelocity(idx)[1]))
+                w["ready"] = False
 
         return (boost,)
 
@@ -1198,6 +1503,23 @@ class _CollisionEdit(Injector):
             actor_id = id_a
         other_id = id_b if actor_id == id_a else id_a
 
+        # On a MEDIUM, every other grain is the heavy one -- see
+        # `_staged_masses`. One wrong pair in forty is invisible; alternating
+        # makes every collision in the pile a collision between bodies whose
+        # apparent masses do not match their behaviour.
+        #
+        # And it fires BEFORE THE MEDIUM ARRIVES.
+        # `first_dynamic_pair_contact` is the first grain-grain touch, which on
+        # `pour` is frame 8 -- after the pile has landed. Staged there, the
+        # masses were wrong for two bodies already at rest, and the two-frame
+        # window covered a collision nobody could see. Chosen here rather than
+        # after the previews, so `r_strong` is measured on the frame the clip
+        # actually fires on.
+        group = self._group(spec)
+        medium = len(group) > 2
+        if medium:
+            t0 = self._medium_event_frame(spec, traj, group, t0)
+
         ia, ib = traj.index_of(actor_id), traj.index_of(other_id)
         normal = traj.pos[t0, ib] - traj.pos[t0, ia]
         mag = float(np.linalg.norm(normal))
@@ -1216,13 +1538,12 @@ class _CollisionEdit(Injector):
 
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         dv = float(np.linalg.norm(traj.lin_vel[t0, ib] - traj.lin_vel[t0 - 1, ib]))
-        t1 = min(traj.num_frames - 1, t0 + 1)
-        # On a MEDIUM, every other grain is the heavy one -- see
-        # `_staged_masses`. One wrong pair in forty is invisible; alternating
-        # makes every collision in the pile a collision between bodies whose
-        # apparent masses do not match their behaviour.
-        group = self._group(spec)
-        if len(group) > 2:
+        # The mismatch holds for the rest of the clip on a medium, because that
+        # is how long the masses stay changed -- every impact in the pile is
+        # between bodies whose apparent masses contradict their motion.
+        t1 = (traj.num_frames - 1 if medium
+              else min(traj.num_frames - 1, t0 + 1))
+        if medium:
             heavy = [int(b.segmentation_id) for b in group[1::2]]
             light = [int(b.segmentation_id) for b in group[0::2]]
         else:

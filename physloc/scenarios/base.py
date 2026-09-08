@@ -454,6 +454,10 @@ class SceneSpec:
     physics_medium: str = "rigid"
     complexity: str = DEFAULT_COMPLEXITY
     hdri_id: Optional[str] = None
+    #: How many variants this rung was allocated, and which difficulty
+    #: condition this clip therefore carries. See `condition_for`.
+    n_variants: Optional[int] = None
+    condition: str = "standard"
     notes: Dict[str, Any] = field(default_factory=dict)
     #: (azimuth, elevation) degrees the camera may swing around its hand-framed
     #: position -- see `_vary`. The default suits a grounded scenario, where the
@@ -563,6 +567,8 @@ class SceneSpec:
             "physics_medium": self.physics_medium,
             "complexity": COMPLEXITY[self.complexity].to_dict(),
             "hdri_id": self.hdri_id,
+            "n_variants": self.n_variants,
+            "condition": self.condition,
             "camera_position": list(self.camera_position),
         "camera_end_position": (list(self.camera_end_position)
                                 if self.camera_end_position else None),
@@ -801,7 +807,7 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
 
     from . import _common as C
 
-    if not has_multi(spec.variant):
+    if not has_multi(spec.condition):
         spec.notes["n_peers_placed"] = 0
         return
     live = [b for b in spec.bodies if b.role == "actor" and not b.dormant]
@@ -870,7 +876,7 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
     from . import _common as C
 
     cx = COMPLEXITY[spec.complexity]
-    if not has_distractors(spec.variant):
+    if not has_distractors(spec.condition):
         # Recorded as zero rather than left absent: a clip with no distractors
         # is a fact about that clip, and a reader filtering on the axis needs
         # both sides of it.
@@ -1000,9 +1006,45 @@ MULTI_ACTORS = EXTRA_OBJECTS
 MULTI_CULPRIT_RANGE = (2, 1)   # (minimum, how many lawful bodies to keep)
 
 
-def condition_for(variant: int) -> str:
-    """Which condition variant `variant` carries. See `CONDITION_CYCLE`."""
-    return CONDITION_CYCLE[int(variant) % len(CONDITION_CYCLE)]
+def condition_for(variant: int, n_variants: Optional[int] = None,
+                  level: Optional[str] = None) -> str:
+    """Which condition this clip carries. See `CONDITION_CYCLE`.
+
+    **SPREAD ACROSS WHATEVER A RUNG WAS GIVEN, not indexed from zero.** A rung
+    high on the ladder gets few variants -- at ten, L3 gets two -- and the six
+    `standard` slots come first, so indexing the cycle directly gave every
+    upper rung nothing but `standard`. Measured on a real ladder run: L1, L2
+    and L3 were 100% standard, so the dataset would have shipped its three
+    hardest rungs with no camera motion, no clutter and no multi-culprit clips
+    at all, and the conditions would have existed only at L0.
+
+    So a rung's `n` variants are spread over the cycle's `P` slots --
+    `slot = v*P // n` -- which keeps each rung's mix close to the declared
+    shares whatever it was allocated. A per-rung PHASE then rotates the result,
+    so the rungs do not all sample the same few slots and the ladder as a whole
+    covers every condition:
+
+        L0 (10 var)  standard x6, camera, distractors, multi, camera+multi
+        L1 ( 5 var)  standard x3, distractors, camera+multi
+        L2 ( 3 var)  standard x2, multi
+        L3 ( 2 var)  standard, multi
+
+    `n_variants` unknown or at least `P` means index directly, which is the
+    L0 case and every single-rung run -- so `--complexity L3 --variants 10`
+    still walks the cycle in order, and a short run still starts on `standard`.
+    """
+    P = len(CONDITION_CYCLE)
+    v = int(variant)
+    n = int(n_variants or 0)
+    if n <= 0 or n >= P:
+        return CONDITION_CYCLE[v % P]
+    phase = LEVEL_PHASE.get(str(level), 0)
+    return CONDITION_CYCLE[((v % n) * P // n + phase) % P]
+
+
+#: How far each rung rotates the cycle. Its position in the ladder, so the
+#: rungs sample different slots and no condition is confined to one rung.
+LEVEL_PHASE = {name: i for i, name in enumerate(COMPLEXITY)}
 
 
 def condition_share(name: str) -> float:
@@ -1010,16 +1052,16 @@ def condition_share(name: str) -> float:
     return CONDITION_CYCLE.count(name) / float(len(CONDITION_CYCLE))
 
 
-def has_moving_camera(variant: int) -> bool:
-    return "camera" in condition_for(variant)
+def has_moving_camera(condition: str) -> bool:
+    return "camera" in str(condition)
 
 
-def has_distractors(variant: int) -> bool:
-    return condition_for(variant) == "distractors"
+def has_distractors(condition: str) -> bool:
+    return str(condition) == "distractors"
 
 
-def has_multi(variant: int) -> bool:
-    return "multi" in condition_for(variant)
+def has_multi(condition: str) -> bool:
+    return "multi" in str(condition)
 
 
 def variants_at(level: str, variants: int) -> int:
@@ -1105,7 +1147,7 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (int(seed) * 2654435761 + 0xCA31 + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
-    if not forced and not has_moving_camera(spec.variant):
+    if not forced and not has_moving_camera(spec.condition):
         return
 
     eye = np.asarray(spec.camera_position, np.float64)
@@ -1265,7 +1307,7 @@ class Scenario:
 
     def sample(self, seed: int, tier: Tier,
                complexity: str = DEFAULT_COMPLEXITY,
-               variant: int = 0) -> SceneSpec:
+               variant: int = 0, n_variants: Optional[int] = None) -> SceneSpec:
         """Sample one instance, then vary how it looks. Do not override.
 
         Level 4 of the taxonomy is the *instance*, and two instances of one
@@ -1290,6 +1332,11 @@ class Scenario:
                 % (complexity, implemented_complexities()))
         spec = self._sample(seed, tier, complexity)
         spec.variant = int(variant)
+        spec.n_variants = None if n_variants is None else int(n_variants)
+        # RESOLVED ONCE, here, and carried on the spec. Three gates and the
+        # metadata all need it, and deriving it separately in each was how the
+        # scene and its label could have disagreed.
+        spec.condition = condition_for(spec.variant, spec.n_variants, complexity)
         return _vary(spec, seed)
 
     def _sample(self, seed: int, tier: Tier,

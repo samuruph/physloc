@@ -28,8 +28,15 @@ SEED = 777
 
 
 def _spec(name, variant, level=LEVEL):
+    """A spec at the FULL cycle length, so `variant` indexes the cycle directly.
+
+    `condition_for` spreads a rung's conditions over the cycle when the rung was
+    given fewer variants than the cycle has slots -- which is what stops L3
+    being 100% `standard`. Passing `n_variants=PERIOD` here asks for the
+    unspread form, so these tests keep addressing conditions by index.
+    """
     return scenarios.get(name).sample(SEED + variant, TIERS["debug"], level,
-                                      variant=variant)
+                                      variant=variant, n_variants=PERIOD)
 
 
 def _actors(spec):
@@ -143,7 +150,7 @@ def test_distractors_and_multi_are_never_combined():
     lawful peers from culprits -- three distinctions where the family makes
     one."""
     for v in range(PERIOD):
-        assert not (has_distractors(v) and has_multi(v)), condition_for(v)
+        assert not (has_distractors(condition_for(v)) and has_multi(condition_for(v))), condition_for(v)
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -165,14 +172,14 @@ def test_each_condition_builds_what_it_claims(name):
         if name == "occluder_pass":
             assert not moving, (name, v, cond)
         else:
-            assert moving == has_moving_camera(v), (name, v, cond, "camera")
-        assert clutter == has_distractors(v), (name, v, cond, "distractors")
+            assert moving == has_moving_camera(condition_for(v)), (name, v, cond, "camera")
+        assert clutter == has_distractors(condition_for(v)), (name, v, cond, "distractors")
         # A scenario that is ALREADY a crowd needs no peers -- `pour` stages
         # forty grains and declares its own `group_fraction`. What `multi`
         # promises is several actors with a minority violating, not that this
         # particular helper placed them.
         crowd = len(_actors(spec)) >= MULTI_ACTORS[0]
-        if has_multi(v):
+        if has_multi(condition_for(v)):
             assert crowd, (name, v, cond, "too few actors")
         else:
             assert peers == 0, (name, v, cond, "peers outside multi")
@@ -191,7 +198,7 @@ def test_multi_draws_both_of_its_counts(name):
     lo_n, hi_n = MULTI_ACTORS
     seen_n, seen_m = set(), set()
     for k in range(6):
-        for v in (x for x in range(PERIOD) if has_multi(x)):
+        for v in (x for x in range(PERIOD) if has_multi(condition_for(x))):
             spec = _spec(name, k * PERIOD + v)
             n = len(_actors(spec))
             frac = spec.notes.get("group_fraction")

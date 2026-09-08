@@ -367,7 +367,8 @@ def cmd_generate(a) -> int:
     #
     # The stride is far wider than any run's variant count, so blocks cannot
     # overlap and a level's seeds are reproducible from its name alone.
-    jobs = [(a.seed + v + LEVEL_SEED_STRIDE * i, scenario, families, v, level)
+    jobs = [(a.seed + v + LEVEL_SEED_STRIDE * i, scenario, families, v, level,
+             n_v)
             for i, (level, n_v) in enumerate(levels)
             for v in range(n_v)
             for scenario, families in sorted(by_scenario.items())]
@@ -375,7 +376,7 @@ def cmd_generate(a) -> int:
         print("-- ladder: " + ", ".join("%s x%d" % lv for lv in levels))
 
     def run_one(job):
-        seed, scenario, families, variant, level = job
+        seed, scenario, families, variant, level, n_v = job
         # A level of its own in the work tree when the ladder is walked. Not
         # required for correctness any more -- the seed blocks are disjoint, so
         # the scratch paths cannot collide -- but a ladder run's scratch is
@@ -384,6 +385,7 @@ def cmd_generate(a) -> int:
         rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                a.severity, here, complexity=level,
                                window=a.window, variant=variant,
+                               n_variants=n_v,
                                dials={"resolution": a.resolution, "fps": a.fps,
                                       "frames": a.frames, "spp": a.spp})
         if rc != 0:
@@ -560,12 +562,15 @@ def _levels_for(spec: str, variants: int):
 
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
-                complexity="L0", window=None, dials=None, variant=0):
+                complexity="L0", window=None, dials=None, variant=0,
+                n_variants=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
            "--severity", severity, "--complexity", complexity,
            "--variant", str(variant), "--outdir", workdir]
+    if n_variants:
+        cmd += ["--n-variants", str(int(n_variants))]
     if window:
         cmd += ["--window", str(window)]
     for flag, value in (dials or {}).items():
@@ -626,6 +631,25 @@ def cmd_sheet(a) -> int:
     return 0
 
 
+def _condition_in(pair_dir) -> Optional[str]:
+    """The condition a clip pair carries, read from any `meta.json` it has.
+
+    Only needed for runs generated before the condition joined the clip path;
+    a current one carries it in the directory name.
+    """
+    import glob
+
+    for mp in glob.glob(os.path.join(pair_dir, "*", "meta.json")):
+        try:
+            with open(mp) as fh:
+                got = json.load(fh).get("condition")
+        except Exception:                                      # noqa: BLE001
+            continue
+        if got:
+            return str(got).replace("+", "-")
+    return None
+
+
 def cmd_viz(a) -> int:
     """Every grid and sheet for a finished release, in ONE flat directory.
 
@@ -637,8 +661,14 @@ def cmd_viz(a) -> int:
     This walks the release and collects them under one directory, named so the
     sort order is the reading order:
 
-        <level>_<scenario>_<seed>_<family>.mp4      one family, all severities
-        <level>_<scenario>_<seed>_sheet_<bin>.mp4   one scene, all families
+        <level>_<condition>_<scenario>_<seed>_<family>.mp4
+        <level>_<condition>_<scenario>_<seed>_sheet_<bin>.mp4
+
+    THE CONDITION IS IN THE NAME, and early enough to sort on. Comparing a
+    family across conditions is the comparison this axis exists for, and with
+    the condition buried -- or absent, as it was -- that means opening
+    `meta.json` per file or memorising which variant index is which. Sorted,
+    every `camera` clip is now adjacent to every other.
 
     Nothing is re-rendered -- it reads the clips already on disk, so it costs
     seconds and can be run again after any change to the visualisers.
@@ -660,10 +690,17 @@ def cmd_viz(a) -> int:
     want = {x.strip() for x in (a.severity or "").split(",") if x.strip()}
     made, failed = [], []
     for pair in pairs:
-        seed = os.path.basename(pair)
+        leaf = os.path.basename(pair)
         scenario = os.path.basename(os.path.dirname(pair))
         level = os.path.basename(os.path.dirname(os.path.dirname(pair)))
-        stem = "%s_%s_%s" % (level, scenario, seed)
+        # `0783_distractors` on a current run, a bare `0783` on one generated
+        # before the condition joined the path. Read it from the clip's own
+        # metadata when the directory does not carry it, so `viz` still names
+        # things properly on a run you already have.
+        seed, _, cond = leaf.partition("_")
+        if not cond:
+            cond = _condition_in(pair) or "?"
+        stem = "%s_%s_%s_%s" % (level, cond, scenario, seed)
         cells = sorted(os.path.basename(d)
                        for d in glob.glob(os.path.join(pair, "invalid_*")))
         fams, bins = set(), set()

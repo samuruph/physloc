@@ -570,6 +570,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="drop")
     ap.add_argument("--seed", type=int, default=91731)
+    ap.add_argument("--n-variants", type=int, default=None,
+                    help="how many variants this RUNG was allocated. The "
+                         "difficulty condition is spread across them, so a "
+                         "rung given two still sees more than `standard` -- "
+                         "see `scenarios.base.condition_for`.")
     ap.add_argument("--variant", type=int, default=0,
                     help="which randomisation of this cell this is. Some "
                          "choices are spread ACROSS a scenario's variants "
@@ -596,7 +601,8 @@ def main() -> int:
         resolution=a.resolution, fps=a.fps, num_frames=a.frames,
         samples_per_pixel=a.spp)
     spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity,
-                                           variant=a.variant)
+                                           variant=a.variant,
+                                           n_variants=a.n_variants)
 
     pair_uid = "%s/%04d" % (a.scenario, a.seed)
     outdir = os.path.join(a.outdir, a.scenario, "%04d" % a.seed)
@@ -716,6 +722,13 @@ def main() -> int:
                                                  plan)
             else:
                 traj_invalid = inj.apply(spec, traj_valid, plan)
+
+            # The scenario's own driven bodies, re-derived from the trajectory
+            # the intervention actually produced. `shadow_track`'s cast shadow
+            # is a projection of the actor, so every family that moves, resizes
+            # or removes the actor moves, resizes or removes the shadow too --
+            # and before this ran, none of them did. See `Scenario.rescript`.
+            scenarios.get(a.scenario).rescript(spec, traj_invalid, plan)
 
             ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
             if not ok:

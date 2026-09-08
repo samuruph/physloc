@@ -12,7 +12,8 @@ import pytest
 from physloc import scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios.base import (CAMERA_MOTION_KINDS, CONDITION_CYCLE,
-                                    DOLLY_RANGE, has_moving_camera)
+                                    DOLLY_RANGE, condition_for,
+                                    has_moving_camera)
 
 NAMES = sorted(scenarios.available())
 BASE = 777
@@ -30,7 +31,8 @@ PERIOD = len(CONDITION_CYCLE)
 def _specs(name, complexity=CAMERA_LEVEL, n=N_VARIANTS):
     """One spec per VARIANT, which is what the camera rule is defined over."""
     sc = scenarios.get(name)
-    return [sc.sample(BASE + v, TIERS["debug"], complexity, variant=v)
+    return [sc.sample(BASE + v, TIERS["debug"], complexity, variant=v,
+                      n_variants=PERIOD)
             for v in range(n)]
 
 
@@ -42,7 +44,7 @@ def test_every_scenario_moves_the_camera_on_the_same_share_of_variants():
     some scenarios had moving cameras and others effectively did not, and any
     per-scenario comparison inherited that as a confound.
     """
-    expected = sum(has_moving_camera(v) for v in range(N_VARIANTS))
+    expected = sum(has_moving_camera(condition_for(v)) for v in range(N_VARIANTS))
     assert expected == N_VARIANTS // PERIOD * sum(
         1 for c in CONDITION_CYCLE if "camera" in c), (
         "the cycle must deliver its declared count exactly")
@@ -75,7 +77,7 @@ def test_a_short_run_is_entirely_static():
     shorter than the first `camera` index never reaches one -- a run only
     spends clips on camera motion once it is long enough to afford them.
     """
-    first = min(v for v in range(PERIOD) if has_moving_camera(v))
+    first = min(v for v in range(PERIOD) if has_moving_camera(condition_for(v)))
     for n in range(1, first + 1):
         for name in NAMES:
             assert not any(sp.camera_moves for sp in _specs(name, n=n)), (

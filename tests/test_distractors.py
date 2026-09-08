@@ -12,7 +12,7 @@ from physloc.scenarios import TIERS
 from physloc.scenarios._common import (DISTRACTOR_SIZE, KEEP_CLEAR_RADII,
                                        MAX_ASPECT, SIGHTLINE_RADII)
 from physloc.scenarios.base import (CONDITION_CYCLE, EXTRA_OBJECTS,
-                                    has_distractors)
+                                    condition_for, has_distractors)
 
 NAMES = sorted(scenarios.available())
 
@@ -29,8 +29,8 @@ SEEDS = range(6)
 #: five times out of six. `test_distractors_land_only_on_their_declared_share`
 #: is what pins the ratio itself.
 PERIOD = len(CONDITION_CYCLE)
-CLUTTERED = [v for v in range(PERIOD) if has_distractors(v)]
-CLEAN = [v for v in range(PERIOD) if not has_distractors(v)]
+CLUTTERED = [v for v in range(PERIOD) if has_distractors(condition_for(v))]
+CLEAN = [v for v in range(PERIOD) if not has_distractors(condition_for(v))]
 
 
 def _specs(name, level=LEVEL, seeds=None, cluttered=True):
@@ -45,7 +45,8 @@ def _specs(name, level=LEVEL, seeds=None, cluttered=True):
     want = CLUTTERED if cluttered else CLEAN
     picks = [PERIOD * k + want[k % len(want)]
              for k in range(len(SEEDS) if seeds is None else seeds)]
-    return [sc.sample(777 + v, TIERS["debug"], level, variant=v) for v in picks]
+    return [sc.sample(777 + v, TIERS["debug"], level, variant=v,
+                      n_variants=PERIOD) for v in picks]
 
 
 def _split(spec):
@@ -64,14 +65,14 @@ def test_distractors_land_only_on_their_declared_share():
     per-scenario comparison inherited that as a confound.
     """
     n = 2 * PERIOD
-    want = [v for v in range(n) if has_distractors(v)]
+    want = [v for v in range(n) if has_distractors(condition_for(v))]
     assert len(want) == 2 * len(CLUTTERED), "the cycle owes its declared count"
     for name in NAMES:
         sc = scenarios.get(name)
         got = [v for v in range(n)
                if any(b.role == "distractor" for b in
                       sc.sample(777 + v, TIERS["debug"], LEVEL,
-                                variant=v).bodies)]
+                                variant=v, n_variants=PERIOD).bodies)]
         assert got == want, "%s cluttered variants %s, expected %s" % (
             name, got, want)
 

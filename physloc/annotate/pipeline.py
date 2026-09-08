@@ -404,7 +404,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # loader at one -- without filtering a flat tree. It also cannot collide:
     # each rung draws its own seed block.
     level = (spec_d.get("complexity") or {}).get("name") or "L0"
-    pair_uid = "%s/%s/%s/%04d" % (release, level, scenario, seed)
+    # THE CONDITION IS IN THE PATH, because a seed is opaque. Browsing a run,
+    # `0783_distractors` says what the clip is and `0783` says nothing -- and
+    # the condition is the axis you most often want to compare along, so it
+    # should not require opening `meta.json` to find. It sorts after the seed
+    # so a scenario's variants stay in generation order.
+    pair_uid = "%s/%s/%s/%04d_%s" % (release, level, scenario, seed,
+                                     _condition_of(spec_d).replace("+", "-"))
     written = {}
     for label in ("valid", "invalid"):
         uid = "%s/%s" % (pair_uid, "valid" if label == "valid"
@@ -627,13 +633,18 @@ def _camera_block(spec, spec_d: Dict, num_frames: int) -> Dict[str, Any]:
 
 
 def _condition_of(spec_d) -> str:
-    """The condition a clip carries, from its variant index.
+    """The condition a clip carries.
 
-    Read back rather than stored on the spec, so a clip cannot claim a
-    condition the sampler did not build: the same function decides what the
-    scene gets and what the metadata says it got.
+    Read off the SPEC, which resolved it once. It used to be recomputed here
+    from the variant index alone, and that stopped being enough the moment the
+    condition began depending on how many variants the rung was given -- the
+    metadata would have said `standard` for clips that were built with
+    distractors. One decider, recorded, and everything else reads it.
     """
-    from ..scenarios.base import condition_for
+    got = spec_d.get("condition")
+    if got:
+        return str(got)
+    from ..scenarios.base import condition_for      # pre-condition releases
 
     return condition_for(int(spec_d.get("variant") or 0))
 

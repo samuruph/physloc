@@ -346,9 +346,25 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
     lx = PAD + 2 + _w(left, 0.52) + 22
     sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
-    mid = "seed %s   tier %s   %s" % (meta.get("seed"), meta.get("tier"), sev_bin)
-    if lx + _w(mid, 0.46) < right_limit:
-        _text(f, mid, (lx, 22), C_DIM, 0.46, 1)
+    # THE CONDITION AND THE RUNG, on the frame. A clip's difficulty is not
+    # readable from the picture -- a static camera looks like a moving one that
+    # has not moved yet, and five lawful peers look like five distractors --
+    # so watching a run meant remembering which seed was which. It is written
+    # here, in the video, and it degrades gracefully: the pieces are dropped
+    # right to left as the width runs out, identity first.
+    cond = meta.get("condition")
+    cam = (meta.get("camera") or {}).get("motion")
+    if cam and cam != "static":
+        cond = "%s:%s" % (cond or "?", cam)
+    bits = [str(meta.get("complexity", {}).get("name") or ""), sev_bin]
+    if cond:
+        bits.append(cond)
+    bits += ["seed %s" % meta.get("seed"), "tier %s" % meta.get("tier")]
+    for k in range(len(bits), 0, -1):
+        mid = "   ".join(x for x in bits[:k] if x)
+        if lx + _w(mid, 0.46) < right_limit:
+            _text(f, mid, (lx, 22), C_DIM, 0.46, 1)
+            break
 
 
 #: The intervention bar. Deliberately a different hue from the consequence bar:

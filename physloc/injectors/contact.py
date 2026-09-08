@@ -1580,6 +1580,42 @@ class _CollisionEdit(Injector):
                    "heavy_ids": heavy, "light_ids": light,
                    "r_strong": float(r_strong), "lawful_dv": dv})
 
+    def refine_windows(self, spec, traj_valid, traj_invalid, plan) -> None:
+        """Re-scale the severity reference once the clip exists.
+
+        `plan()` measures `r_strong` with `_edited`, which re-solves the
+        collision for TWO bodies. That is the whole intervention on `collision`
+        and a small corner of it on a medium, where staging changes the mass of
+        every other grain in the pour -- so the reference came out roughly
+        twenty times too small and all three bins clipped to 1.000. Measured on
+        `pour`: residuals of 12.93 / 34.49 / 107.77 against an `r_strong` of
+        5.66.
+
+        Those three numbers are the fix as well as the symptom. Divided by
+        their declared ratios of 3, 8 and 25 they give 4.31, 4.31 and 4.31 --
+        the momentum residual is exactly linear in the mass ratio, which it
+        must be, because that is the only thing the intervention changes. So
+        this clip's own residual, scaled to the strongest ratio, IS the strong
+        bin's residual, and every bin arrives at the same reference without
+        anyone having to simulate the strong bin to find it.
+
+        Only where the pair preview is unrepresentative -- a group. The
+        two-body scenarios keep the measured reference, which is exact for
+        them.
+        """
+        if len(plan.causal_body_ids) < 2:
+            return
+        ratio = float(plan.notes.get("ratio") or 0.0)
+        if ratio <= 0.0:
+            return
+        strongest = float(self.RATIO_BY_BIN["strong"])
+        measured = max(
+            (self._measure(traj_invalid, int(bid), "linear_momentum", {})
+             for bid in plan.causal_body_ids), default=0.0)
+        if measured <= 0.0:
+            return
+        plan.notes["r_strong"] = float(measured * strongest / ratio)
+
     #: Both families are a mass statement, and PyBullet takes mass directly --
     #: so the collision itself can be left to the simulator instead of having
     #: its outcome written in. You reported the balls never touching; they do

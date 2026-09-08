@@ -359,8 +359,19 @@ class Friction(Injector):
             break
 
         rate = self.RATE_BY_BIN[severity_bin]
-        strong = self._retimed(traj, bi, t0, self.RATE_BY_BIN["strong"])
-        r_strong = self._measure(strong, int(actor.segmentation_id), "friction", {})
+        # THE WHOLE MEDIUM, not just the grain that stands for it. `_retimed`
+        # slows one body, which is the entire intervention on a single-actor
+        # scene and a fortieth of it on a pour -- so the reference came out at
+        # 1.085 against residuals of 2.50 to 3.08 and all three bins clipped to
+        # 1.000. Retiming every target and taking the largest is the same
+        # measurement the staged clip will be scored by.
+        strong = traj
+        for body in targets:
+            strong = self._retimed(strong, traj.index_of(
+                int(body.segmentation_id)), t0, self.RATE_BY_BIN["strong"])
+        r_strong = max(
+            (self._measure(strong, int(b.segmentation_id), "friction", {})
+             for b in targets), default=0.0)
         mu = float(getattr(actor, "friction", 0.5))
         grip, roll, target = self._solve_grip(spec, traj, actor, bi, t0,
                                               severity_bin)
@@ -435,11 +446,25 @@ class Friction(Injector):
         g = float(np.linalg.norm(traj.gravity)) or 9.81
         radius = max(float(traj.radius[bi]), 1e-6)
         mu = float(getattr(actor, "friction", 0.5))
-        floor = self.MIN_RATIO_BY_BIN[severity_bin] * mu
+        ratio = self.MIN_RATIO_BY_BIN[severity_bin]
+        floor = ratio * mu
         if actor.kind == "sphere":
             # Rolling resistance does the work; lateral friction only has to be
             # enough to keep it rolling rather than sliding.
-            roll = min(self.MAX_ROLLING, max(accel * radius / g, floor * 0.1))
+            #
+            # **And it must beat what the SCENE declares.** `pour`'s grains
+            # carry rolling friction of their own now, because a medium of
+            # frictionless rollers cannot hold a pile -- and the solved values
+            # here (0.058 to 0.24) straddle it. The weak bin was therefore
+            # setting a rolling friction BELOW the declared one and making the
+            # grains slipperier: the opposite violation, scored as this one.
+            # The floor is the same multiple of the declared coefficient the
+            # lateral floor uses, so "grips harder than it says it does" holds
+            # on both axes.
+            declared_roll = float(getattr(actor, "rolling_friction", 0.0))
+            roll = min(self.MAX_ROLLING,
+                       max(accel * radius / g, floor * 0.1,
+                           ratio * declared_roll))
             return (min(self.MAX_LATERAL, max(0.4, floor)), roll, target)
         return (min(self.MAX_LATERAL, max(accel / g, floor)), 0.0, target)
 
@@ -503,10 +528,16 @@ class Friction(Injector):
                 continue
             idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
             if idx is not None:
+                # Back to what the SCENE declares, not to zero. `pour`'s
+                # grains carry rolling friction so the medium can hold a pile
+                # at all, and zeroing it here would leave the next variant in
+                # the run pouring ball bearings -- exactly the cross-family
+                # leak `unstage` exists to prevent.
+                roll = float(getattr(body, "rolling_friction", 0.0))
                 pb.changeDynamics(
                     idx, -1,
                     lateralFriction=float(getattr(body, "friction", 0.5)),
-                    rollingFriction=0.0, spinningFriction=0.0)
+                    rollingFriction=roll, spinningFriction=roll)
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)

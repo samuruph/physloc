@@ -118,6 +118,26 @@ def _quat_matrix(q: np.ndarray) -> np.ndarray:
     ], axis=1)
 
 
+def _is_shadow(body) -> bool:
+    """A cast shadow is a picture, not a body, and carries no energy.
+
+    `shadow_track` hands the cast shadow to a scripted stand-in body so it can
+    have a segmentation id and therefore a mask -- see that scenario's
+    docstring. The consequence nobody chased down is that the stand-in is
+    declared with a mass like anything else, so it contributed a constant 0.33 J
+    to every clip in the scenario, and MOVING it moved the scene's energy:
+    `shadow x strong` slid the shadow a body-width over two frames and the
+    total jumped from 4.12 J to 54.63 J. A shadow is where light is not. It has
+    no mass, no momentum and no energy, and the energy channel must say so --
+    otherwise the three optical families read as the most violent energy
+    violations in the dataset while the object they are about never moves.
+
+    A violation OF the shadow is still fully annotated: it has a mask, a
+    severity and its own residual law. It just does not have joules.
+    """
+    return str(getattr(body, "role", "")) == "shadow"
+
+
 def contact_frames(traj, slack: int = CONTACT_SLACK) -> np.ndarray:
     """[T] bool -- frames on or beside a reported contact."""
     T = traj.num_frames
@@ -162,7 +182,7 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
 
     for j, name in enumerate(traj.body_names):
         body = bodies.get(name)
-        if body is None or body.static:
+        if body is None or body.static or _is_shadow(body):
             continue
         m0 = float(getattr(body, "mass", 1.0))
         # Mass follows volume -- see docs/energy.md. Volume-preserving squash
@@ -174,7 +194,19 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
         v = np.asarray(traj.lin_vel[:, j, :], np.float64)
         w = np.asarray(traj.ang_vel[:, j, :], np.float64)
         p = np.asarray(traj.pos[:, j, :], np.float64)
-        here = np.asarray(traj.present[:, j], bool).astype(np.float64)
+        # HOW MUCH OF THE BODY IS STILL THERE, not merely whether it is. A
+        # dissolving body loses its matter over several frames, and `present`
+        # is a single flip at the end of the fade -- so the energy fell off a
+        # cliff on one frame however slowly the body faded, and the weak bin
+        # (an eleven-frame fade) produced exactly the same step as the strong
+        # (four frames), just later. Weighting by opacity makes the trace
+        # follow the intervention's own profile, which is what makes the three
+        # bins of `dissolve` distinguishable in the energy channel at all.
+        #
+        # Everything else is unaffected: only `dissolve` writes opacity, and
+        # `permanence` still steps, because a cut IS a step.
+        here = (np.asarray(traj.present[:, j], bool).astype(np.float64)
+                * np.clip(np.asarray(traj.opacity[:, j], np.float64), 0.0, 1.0))
 
         # Inertia scales as m*r^2, so a resized body's tensor moves with the
         # cube of the linear factor times the mass factor.
@@ -365,7 +397,13 @@ def body_state(traj, spec) -> Dict[str, np.ndarray]:
         body = bodies.get(name)
         if body is None:
             continue
-        is_static[j] = bool(body.static)
+        # Reported as static, for the same reason `compute` skips it: a cast
+        # shadow is a picture of an absence and has no mechanics. Leaving it
+        # dynamic here would let a consumer recompute an energy the shipped
+        # trace does not contain.
+        is_static[j] = bool(body.static or _is_shadow(body))
+        if _is_shadow(body):
+            continue
         lin = np.asarray(traj.scale_mul[:, j, :], np.float64)
         m = float(getattr(body, "mass", 1.0)) * np.clip(
             np.prod(lin, axis=1), 1e-9, None)
@@ -389,6 +427,12 @@ def body_state(traj, spec) -> Dict[str, np.ndarray]:
         "body_names": np.asarray([str(n) for n in traj.body_names], dtype="U32"),
         "static": is_static,
         "present": np.asarray(traj.present, bool),
+        # HOW MUCH OF THE BODY IS LEFT. `compute` weights each body's energy by
+        # this, so it has to ship or the "recompute the trace from this file
+        # alone" guarantee stops holding on the one family that moves it --
+        # `dissolve`, where the body's matter goes away over several frames
+        # rather than at one. 1.0 everywhere else.
+        "opacity": np.clip(np.asarray(traj.opacity, np.float32), 0.0, 1.0),
         "mass": mass,                                  # [T,B]  kg, follows volume
         "radius": np.asarray(traj.radius, np.float32),  # [B]   m
         "inertia": inertia,                            # [T,B,3] body-frame diag

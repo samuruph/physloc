@@ -632,13 +632,25 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
     cv2.rectangle(f, (bx, by), (bx + bw, by + h), (12, 12, 16), -1)
     cv2.rectangle(f, (bx, by), (bx + bw, by + h), (60, 60, 70), 1)
 
-    series = [(trace["total"], (255, 120, 120))]
-    if twin is not None and "total" in twin:
-        series.insert(0, (twin["total"], C_REF))
+    # WHAT THE CAMERA CAN STILL ACCOUNT FOR. The curve is `energy_in_frame`,
+    # not `total`, because the panel sits beside a video and has to describe
+    # the same clip the video does. A super-elastic bounce that throws the ball
+    # out of the top of the shot leaves `total` sitting at 12 J for the rest of
+    # the clip while every pixel of evidence for it is gone -- you reported
+    # exactly that on `drop x superelastic`, `solidity` and `antigravity`.
+    # `total` is still drawn, dimmed, so the difference between the two IS the
+    # reading: where they separate, energy has left the frame rather than the
+    # scene, and `energy.npz` ships both.
+    key = "energy_in_frame" if "energy_in_frame" in trace else "total"
+    series = [(trace[key], (255, 120, 120))]
+    if trace.get("total") is not None and key != "total":
+        series.insert(0, (trace["total"], (110, 60, 60)))
+    if twin is not None and key in twin:
+        series.insert(0, (twin[key], C_REF))
     lo = min(float(np.min(s)) for s, _ in series)
     hi = max(float(np.max(s)) for s, _ in series)
     span = max(hi - lo, 1e-9)
-    T = len(trace["total"])
+    T = len(trace[key])
     for s, col in series:
         pts = [(bx + int(i / max(T - 1, 1) * (bw - 1)),
                 by + h - 1 - int((float(s[i]) - lo) / span * (h - 3)))
@@ -647,15 +659,23 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
             cv2.line(f, pts[i - 1], pts[i], col, 1, cv2.LINE_AA)
     px = bx + int(t / max(T - 1, 1) * (bw - 1))
     cv2.line(f, (px, by), (px, by + h), (255, 255, 255), 1)
-    lab = "E %.2fJ" % float(trace["total"][t])
+    seen = float(trace[key][t])
+    lab = "E %.2fJ" % seen
     _text(f, lab, (bx + 3, by + 11), (255, 255, 255), 0.36, 1)
     # Which line is which. Without it the panel shows two curves crossing and
     # leaves the reader to guess which one is the violation.
     lx = bx + 6 + _w(lab, 0.36)
-    if len(series) > 1:
+    if twin is not None and key in twin:
         _text(f, "valid", (lx, by + 11), C_REF, 0.34, 1)
-        _text(f, "this", (lx + 6 + _w("valid", 0.34), by + 11),
-              (255, 120, 120), 0.34, 1)
+        lx += 6 + _w("valid", 0.34)
+    _text(f, "this", (lx, by + 11), (255, 120, 120), 0.34, 1)
+    # Named only when it says something. A body inside the frustum makes the
+    # two curves identical, and a legend for a line nobody can see is noise.
+    if key != "total":
+        gone = float(trace["total"][t]) - seen
+        if abs(gone) > 0.01 * max(abs(float(trace["total"][0])), 1e-9):
+            _text(f, "off-frame %.2fJ" % gone,
+                  (lx + 6 + _w("this", 0.34), by + 11), (110, 60, 60), 0.34, 1)
     # Name the channel instead of signing the number. All three are
     # non-negative by construction, so "%+.0f%%" printed a plus on every frame
     # and told the reader nothing -- and which channel fired is the part that

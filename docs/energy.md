@@ -44,6 +44,22 @@ E(t) = Σ_b  ½·m_b(t)·|v_b(t)|²  +  ½·ω_b(t)ᵀ·I_b(t)·ω_b(t)  +  m_b(
   the body's quaternion.
 - Bodies with `present == False` contribute nothing. That is what makes `permanence` read
   −100%.
+- **A body contributes in proportion to how much of it is still there**, `present × opacity`,
+  not `present` alone. `present` is a single flip, which is exactly right for `permanence`
+  -- a cut is a step -- and wrong for `dissolve`, where the matter goes away over several
+  frames. Weighted by `present` alone, an eleven-frame fade and a four-frame fade produced
+  the identical one-frame cliff at different moments, so the three severity bins were
+  indistinguishable in this channel. Only `dissolve` writes `opacity`; everything else sits
+  at 1.0 and is unaffected. `bodies.npz` ships the column, so the trace is still
+  recomputable from that file alone (`tests/test_energy.py`).
+- **A cast shadow carries no energy at all.** `shadow_track` gives its shadow to a scripted
+  stand-in body so that it can have a segmentation id and therefore a mask (see that
+  scenario's docstring); the stand-in was declared with a mass like anything else, so it
+  contributed a constant 0.33 J to every clip in the scenario and *moving* it moved the
+  scene's energy -- the `shadow` family at its strong bin slid the shadow a body-width over
+  two frames and the total jumped from 4.12 J to 54.63 J. A shadow is where light is not.
+  Bodies with `role == "shadow"` are skipped, and `body_state` reports them as static so the
+  two files cannot disagree. The violation is still fully annotated; it just has no joules.
 
 **Mass follows volume**: `m_b(t) = m_b(0) · Π scale_mul[t,b]`. This is a deliberate choice
 and it is the one that keeps the annotation consistent with the taxonomy. A body that
@@ -118,7 +134,18 @@ it already checks the exclusive laws.
 
 - **Scripted scenarios.** `pendulum_swing` and `shadow_track` drive a body kinematically, so
   the conservation invariant does not apply to those bodies and the clip-level claim must
-  exclude them. Handled by flagging, not by hiding the numbers.
+  exclude them. Handled by flagging, not by hiding the numbers. (`shadow_track`'s *shadow*
+  is a separate case and is excluded outright -- see above. Its actor is still counted.)
+- **`total` is the scene; `energy_in_frame` is the evidence.** Energy comes off the
+  trajectory, not the pixels, so a body that has left the shot still has a real energy and a
+  super-elastic bounce really does add that much. What a viewer -- or a model with only the
+  invalid video -- can account for is `energy_in_frame`, which sums the bodies inside the
+  frustum and goes to zero when they leave it. Both ship, and `overlay.mp4` plots
+  `energy_in_frame` solid with `total` dimmed behind it, so the gap between the two reads as
+  "this much energy left the frame rather than the scene". Measured on `drop`:
+  `superelastic` at medium holds 19.8 J to the last frame while every pixel of evidence for
+  it is gone from frame 14; `solidity` at strong holds 7.9 J while the ball is 17 m below
+  the floor.
 - **PyBullet's `impulse` field may be a force.** Noted in CLAUDE.md and the cause of an
   earlier residual bimodality. The free-energy channel deliberately needs no force at all,
   and the restitution budget uses velocities rather than the reported impulse, so neither

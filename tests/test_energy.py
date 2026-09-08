@@ -209,12 +209,40 @@ def test_body_state_reproduces_the_shipped_energy():
     """The published clip must be self-contained: a consumer with `bodies.npz`
     and nothing else must be able to recompute the energy trace and get the
     shipped one back."""
+    for name in ("drop", "shadow_track"):
+        sc, spec, traj = _scene(name)
+        trace = E.compute(traj, spec)
+        st = E.body_state(traj, spec)
+        here = (st["present"] & ~st["static"][None, :]) * st["opacity"]
+        recomputed = ((st["kinetic"] + st["potential"]) * here).sum(axis=1)
+        assert np.allclose(recomputed, trace.total, rtol=1e-6, atol=1e-6), name
+
+
+def test_a_dissolving_body_loses_its_energy_gradually():
+    """The energy has to follow the fade, and the bins have to differ.
+
+    `present` is a single flip at the end of the fade, so weighting by it alone
+    made every dissolve -- an eleven-frame one and a four-frame one -- the same
+    one-frame cliff at a different moment. That is `permanence`'s picture, and
+    `dissolve` exists precisely to not be it.
+    """
     sc, spec, traj = _scene("drop")
-    trace = E.compute(traj, spec)
-    st = E.body_state(traj, spec)
-    here = st["present"] & ~st["static"][None, :]
-    recomputed = ((st["kinetic"] + st["potential"]) * here).sum(axis=1)
-    assert np.allclose(recomputed, trace.total, rtol=1e-6, atol=1e-6)
+    inj = get_injector("dissolve")
+    ends = []
+    for sev in ("weak", "medium", "strong"):
+        plan = inj.plan(spec, traj, np.random.RandomState(0), sev)
+        assert plan is not None
+        total = E.compute(inj.apply(spec, traj, plan), spec).total
+        t0 = plan.t_event
+        tail = total[t0:]
+        assert np.all(np.diff(tail) <= 1e-6), "%s: energy rose while fading" % sev
+        # More than one frame carries the loss, and it is monotone: a cliff
+        # would put the whole drop in a single step.
+        steps = int((np.abs(np.diff(tail)) > 1e-3).sum())
+        assert steps >= 2, "%s: energy fell in %d step(s)" % (sev, steps)
+        ends.append(int(np.argmax(tail <= 1e-6)))
+    # A slower fade takes longer to reach zero, which is the ladder.
+    assert ends[0] > ends[1] > ends[2], ends
 
 
 def test_body_state_columns_are_physically_consistent():

@@ -512,6 +512,9 @@ def _write_license(outdir: str, license_name: str) -> None:
             % license_name)
 
 
+from .. import reference  # noqa: E402
+
+
 def _count(rows, field):
     """(value, n) pairs for one column, for the card's summary table."""
     import collections
@@ -619,23 +622,39 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "## The complexity ladder",
         "",
-        "The ladder is SCENE REALISM: `L0` primitives on a solid background, "
-        "`L1` adds materials whose appearance and density agree, `L2` an HDRI "
-        "environment, `L3` GSO objects in it. Every clip carries its rung in "
-        "`complexity`, so a rung is a filter rather than a separate download.",
+        "SCENE REALISM, four rungs, each the one below plus one thing. Every "
+        "clip carries its rung in `complexity`, so a rung is a filter rather "
+        "than a separate download, and each rung draws its OWN scenes -- an L1 "
+        "clip is not an L0 clip in better materials.",
         "",
-        "**Difficulty conditions are not rungs.** Every clip carries one of "
-        "five, applied inside every rung: `standard` (6 in 10), `camera` "
-        "(1), `distractors` (1), `multi` (1) and `camera+multi` (1). So "
-        "\"what does clutter cost\" is answerable at each realism level and "
-        "not only at the top. Filter on `condition`.",
+        # GENERATED, from the same functions the README uses. Two documents
+        # describing one set of constants is exactly how the counts drifted
+        # five different ways before; neither is written by hand now.
+        reference.render("ladder"),
         "",
-        "One condition per clip, rather than independent coin flips per axis, "
-        "so every per-condition count is exact and every comparison against "
-        "`standard` isolates one change. Under `multi` the scene holds several "
-        "actors and only some of them violate -- `n_actors` and `n_culprits` "
-        "say how many -- so the clip asks WHICH objects are wrong rather than "
-        "whether something is.",
+        "## Difficulty conditions",
+        "",
+        "Not rungs -- every clip carries exactly ONE of these, applied inside "
+        "every rung, so \"what does clutter cost\" is answerable at each "
+        "realism level and not only at the top. Filter on `condition`.",
+        "",
+        reference.render("conditions"),
+        "",
+        "One condition per clip rather than independent coin flips per axis, "
+        "so every count is exact and every comparison against `standard` "
+        "isolates one change. Under `multi` the scene holds N objects of which "
+        "M violate, both drawn per clip -- `n_actors` and `n_culprits` say how "
+        "many -- so the clip asks WHICH objects are wrong rather than whether "
+        "something is.",
+        "",
+        "## The taxonomy",
+        "",
+        "Five levels: medium -> domain -> family -> scenario -> instance. A "
+        "*cell* is one (scenario, family) pair.",
+        "",
+        reference.render("domains"),
+        "",
+        reference.render("scenarios"),
         "",
         "## Files",
         "",

@@ -49,11 +49,11 @@ defaults:
   severity: all        # the full weak/medium/strong ladder
   # THE SHARE THIS RUNG WOULD GET IN A FULL RUN, so the four configs PARTITION
   # `v0_release` rather than each being a release of their own: generating all
-  # four gives exactly what `--complexity all --variants 3` gives, and
+  # four gives exactly what `--complexity all --variants 10` gives, and
   # generating one gives exactly that rung's part of it.
   #
-  # `variants_at("L1", 3)` = 2, from the rung's declared share.
-  variants: 2
+  # `variants_at("L1", 10)` = 5, from the rung's declared share.
+  variants: 5
 
 generate:
   keep_going: true

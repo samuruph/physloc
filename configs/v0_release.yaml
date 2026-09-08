@@ -39,18 +39,27 @@
 # breadth available. Price the exact run before starting it -- these are the
 # numbers `taxonomy --config v0_release` prints, not a promise:
 #
-#     bins   variants   ladder gives          parallel (4 workers)
-#      1        1       L0 x1                  ~6 h
-#      3        1       L0 x1                 ~51 h
-#      3        3       L0 x3, L1 x2          see `taxonomy`
-#      3       10       L0 x10, L1 x5         a week+ -- measure, don't guess
+#     variants   ladder gives                    parallel (4 workers)
+#        3        L0 3, L1 2, L2 1, L3 1           ~670 h   2 of 5 conditions
+#       10        L0 10, L1 5, L2 3, L3 2         ~1795 h   5 of 5
+#
+# THIS IS WEEKS ON ONE BOX. It is also embarrassingly parallel: jobs are
+# independent by (scenario, seed, rung) and the per-clip rng is keyed by
+# content rather than queue position, so N machines is N times faster. Split
+# with `--scenario a,b,c` per machine, or a rung apiece with v0_L0..v0_L3, and
+# merge the clip trees -- nothing collides.
 #
 defaults:
   seed: 20260824
   tier: release        # 512x512, 30 fps, 89 frames = 2.97 s, ~637 s a clip
   complexity: all      # the whole BUILT ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
-  variants: 3          # the L0 allocation; other rungs are a share of it
+  # TEN, and it is forced rather than chosen. The condition cycle has ten slots
+  # and each rung takes a share of them, so below ten the upper rungs and the
+  # rarer conditions simply do not appear: at three variants L3 gets one clip
+  # per cell and the release contains two of its five conditions. Ten is the
+  # smallest number that makes the dataset the thing it claims to be.
+  variants: 10
 
 generate:
   keep_going: true

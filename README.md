@@ -368,8 +368,21 @@ a check you will not run is a check you do not have.
 | `review_L0` … `review_L3` | does **this rung** render every scene correctly? | ~3–18 min |
 | `review_ladder` | do the rungs come out in their **declared proportions**? | ~18 min |
 | `review` | does **every cell** build? | ~35 min |
-| `v0_release` | the published dataset, whole ladder | **price it first** |
+| `v0_mini` | **the whole dataset in miniature** — every family, rung, condition and bin | **~6 h** |
+| `v0_release` | the published dataset, whole ladder, 10 variants | **~1795 h — read below** |
 | `v0_L0` … `v0_L3` | one rung of that release, on its own | the four **sum to** `v0_release` |
+
+**`v0_mini` is not a review sweep** — it is the same structure as the release, made small, so
+what you learn from it transfers. It is small in *cells*, not variants, and that is forced:
+the condition cycle has ten slots and each rung takes a share of them, so it takes **ten
+variants** before all four rungs and all five conditions appear at all. Three scenarios
+(`pour`, `shadow_track`, `drop`) cover all 23 families between them, which is 41 cells
+instead of 166.
+
+**`v0_release` is weeks on one box**, and embarrassingly parallel: jobs are independent by
+`(scenario, seed, rung)` and the per-clip rng is keyed by content rather than queue position,
+so N machines is N× faster. Split with `--scenario a,b,c` per machine, or a rung apiece with
+`v0_L0`…`v0_L3`, and merge the clip trees — nothing collides.
 
 ```bash
 python -m physloc.cli generate --config review_severity
@@ -480,7 +493,37 @@ repeatable and uploading is neither. `run.sh` does both if `PHYSLOC_PUSH_TO` is 
 (`PHYSLOC_PUSH_PRIVATE=1` for a private repo). What lands: the dataset card, `index.parquet`
 with videos playable inline, `taxonomy.json`, `splits/`, `LICENSE` and the WebDataset shards.
 
-## 16. Keeping the tables honest
+## 16. The generation knobs
+
+Shares, counts and bands used to be module constants spread across three files. They are now
+**`configs/common.yaml`** — one place to see them and one place to change them.
+
+```bash
+python -m physloc.cli params                    # what is in force, and what differs
+python -m physloc.cli params --config v0_mini   # ...for one run
+```
+
+| section | what it holds |
+|---|---|
+| `ladder` | each rung's share of a full generation |
+| `conditions` | the difficulty cycle — its length is the period, its contents are the shares |
+| `objects` | extra-object count, culprit counts, distractor size/speed/clearance |
+| `camera` | motion kinds and weights, travel and dolly ranges |
+| `materials` | the mass scale |
+
+Any config may override part of it in its own `params:` block, so `common.yaml` holds the
+defaults and a run states its differences. Three layers — shipped defaults, `common.yaml`,
+the run — each validated against the known tree, so **a typo is an error rather than a value
+that silently does nothing**.
+
+The resolved values are written to `params.json` and recorded in every `meta.json`, so a clip
+says what it was generated under: a tunable nobody can reproduce is worse than a constant
+nobody can change.
+
+They cross the container seam as **JSON, not YAML** — the render container has Kubric's
+pinned packages and no PyYAML, and scene sampling happens there.
+
+## 17. Keeping the tables honest
 
 The taxonomy, ladder, condition and tier tables in Part I are **generated** from
 `physloc/taxonomy.py` and `physloc/scenarios/base.py` — prose copies of these numbers have
@@ -494,7 +537,7 @@ python -m physloc.reference --write    # regenerate the tables in place
 `tests/test_reference.py` fails if they are stale, and the HuggingFace card is generated from
 the same functions, so the two documents cannot disagree.
 
-## 17. Repo layout
+## 18. Repo layout
 
 ```
 physloc/scenarios/    13 scenario builders + the ladder and conditions (base.py)
@@ -508,7 +551,7 @@ docs/PLAN.md          the design document
 docs/roadmap.md       what is next and why
 ```
 
-## 18. Papers
+## 19. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). The IntPhys 2 category and LikePhys

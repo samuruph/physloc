@@ -113,20 +113,69 @@ class ShadowTrack(Scenario):
         n = traj.num_frames
         t = np.arange(n, dtype=np.float64) * traj.dt
         actor = spec.body("body")
-        ja, js = spec.index_of("body"), spec.index_of("shadow")
+        ja = spec.index_of("body")
 
         p = np.asarray(actor.position, np.float64)[None, :] + \
             np.asarray(actor.velocity, np.float64)[None, :] * t[:, None]
         traj.pos[:, ja, :] = p.astype(np.float32)
         traj.lin_vel[:, ja, :] = np.tile(np.asarray(actor.velocity, np.float32),
                                          (n, 1))
+        self._cast(spec, traj)
 
+    def rescript(self, spec, traj, plan) -> None:
+        """Re-cast the shadow from whatever the actor ENDED UP doing.
+
+        A shadow is a projection, so it is a function of the caster and of the
+        light -- never a track of its own. Every family that acts on the actor
+        therefore changes the shadow too, and until this existed none of them
+        did: the ball teleported and its shadow stayed on the lawful line, the
+        ball grew and its shadow did not, the ball was removed and its shadow
+        went on sliding across an empty floor. Each of those clips carried a
+        detached shadow -- which is the `shadow` family, a violation in its own
+        right -- while claiming and annotating something else entirely.
+
+        The three optical families are exactly the exception: their culprit IS
+        the shadow, and re-deriving it from a caster that never moved would
+        simply undo them. So this stands aside whenever the shadow is named in
+        the plan.
+        """
+        shade = next((b for b in spec.bodies if b.role == "shadow"), None)
+        if shade is None:
+            return
+        if int(shade.segmentation_id) in {int(i) for i in plan.causal_body_ids}:
+            return
+        self._cast(spec, traj)
+
+    def _cast(self, spec, traj) -> None:
+        """Put the shadow under the caster, at the caster's size and presence.
+
+        Four channels, because a shadow follows its object in all of them:
+
+        * **position** -- the light's projection of the caster onto the ground.
+        * **footprint** -- a body that doubles in size doubles its shadow, so
+          the caster's horizontal `scale_mul` carries over. Not the vertical
+          one: the shadow is a flat patch on the floor and scaling its
+          thickness would only lift it off the ground.
+        * **presence** -- what is not there casts nothing. This is what makes
+          `permanence` and `dissolve` read correctly on this scenario instead
+          of leaving an orphaned shadow behind.
+        * **opacity** -- a half-transparent body casts a half-strength shadow,
+          so a dissolve fades both together.
+        """
+        ja, js = spec.index_of("body"), spec.index_of("shadow")
+        p = np.asarray(traj.pos[:, ja, :], np.float64)
         traj.pos[:, js, :] = project(p, spec.notes["light_dir"],
                                      float(spec.notes["surface_top"]),
                                      0.006).astype(np.float32)
-        traj.lin_vel[1:, js, :] = ((traj.pos[1:, js, :] - traj.pos[:-1, js, :])
-                                   / traj.dt)
-        traj.lin_vel[0, js, :] = traj.lin_vel[1, js, :]
+        if traj.num_frames > 1:
+            traj.lin_vel[1:, js, :] = ((traj.pos[1:, js, :]
+                                        - traj.pos[:-1, js, :]) / traj.dt)
+            traj.lin_vel[0, js, :] = traj.lin_vel[1, js, :]
+        lin = np.asarray(traj.scale_mul[:, ja, :], np.float64)
+        traj.scale_mul[:, js, 0] = lin[:, 0]
+        traj.scale_mul[:, js, 1] = lin[:, 1]
+        traj.present[:, js] = np.asarray(traj.present[:, ja], bool)
+        traj.opacity[:, js] = np.asarray(traj.opacity[:, ja], np.float32)
 
 
 def project(p: np.ndarray, light_dir, surface_top: float,

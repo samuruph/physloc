@@ -333,9 +333,22 @@ class GlobalGravity(_GravityScale):
     """
 
     family = "global_gravity"
-    #: Monotone in |deviation|: 0.25 < 0.55 < 1.2. Weak and medium are both
-    #: slower than Earth (gravity x0.75 and x0.45), strong is faster (x2.2).
-    ALPHA_BY_BIN = {"weak": 0.25, "medium": 0.55, "strong": -1.2}
+    #: Monotone in the quantity the family is SCORED on, which is
+    #: `|1 - alpha|`, not alpha. The previous ladder read
+    #: `{0.25, 0.55, -1.2}` under a comment claiming "monotone: 0.25 < 0.55 <
+    #: 1.2" -- but those are alphas, and their deviations are 0.75, 0.45 and
+    #: 2.2. Medium deviated LESS than weak, which is the same V the ladder
+    #: before it was rewritten to remove, one level of indirection down; the
+    #: shipped magnitudes said so plainly (weak 0.75, medium 0.45, strong 2.2)
+    #: and nothing checked them.
+    #:
+    #: Deviations are now 0.55 / 1.20 / 2.20: gravity at 0.45x Earth, reversed
+    #: gently at -0.2x, and reversed hard at -1.2x. Weak stays inside the
+    #: "different planet" regime; medium and strong leave it. You reported weak
+    #: and medium as invisible on `pour` -- at 0.75 and 0.45 deviation, spread
+    #: over a trapezoid whose mean is well under its peak, they were a pour
+    #: falling slightly slowly.
+    ALPHA_BY_BIN = {"weak": 0.45, "medium": -0.20, "strong": -1.2}
     MIN_BODIES = 2
     spatial_extent = "global"
 

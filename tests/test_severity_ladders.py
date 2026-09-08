@@ -7,12 +7,24 @@ coefficient is a more slippery `friction` -- so the rule is not "increasing",
 it is "does not turn around".
 
 The bug this exists for: `global_gravity` declared
-`{weak: 0.45, medium: 0.05, strong: -1.2}`. As a deviation from lawful gravity
-that is 0.45, 0.05, 1.20 -- a V. Medium was a five per cent change, milder than
-weak's forty-five, so it was invisible. Measured over a 166-cell L0 sweep the
-family scored weak 0.000 / medium 0.000 / strong 1.000 on four of its five
-scenarios: a binary family wearing three labels, with a third of its clips
-depicting nothing.
+`{weak: 0.45, medium: 0.05, strong: -1.2}` and scored weak 0.000 / medium 0.000
+/ strong 1.000 over a 166-cell L0 sweep -- a binary family wearing three
+labels, with a third of its clips depicting nothing.
+
+**Distance from LAWFUL, not distance from zero**, and getting that wrong is how
+this file let the same family through a second time. A gravity scale is a
+ratio: `alpha = 1` is Earth and lawful, `alpha = 0` is weightlessness and about
+as wrong as it gets. Comparing `abs(alpha)` therefore measures nothing the
+family is scored on -- `_GravityScale.magnitude` is `abs(1 - alpha)` -- and it
+passed `{0.25, 0.55, -1.2}`, whose deviations are **0.75, 0.45, 2.20**: a V,
+with medium a milder violation than weak. That reached the review sweep as
+"weak and medium are invisible on pour", and the shipped `meta.json` said so
+outright, reporting magnitudes of 0.75 / 0.45 / 2.2 in that order.
+
+So `LAWFUL` records, per table, the value that means "nothing is wrong".
+Default 0, because most knobs are already deviations; 1.0 for the ratio knobs,
+where doubling and halving are equally far from lawful and neither is near
+zero. `tests/test_all_cells.py` carries the same table for the same reason.
 
 Static, over the declared tables, so it costs nothing and covers every family
 that declares one.
@@ -22,6 +34,26 @@ import pytest
 from physloc import injectors
 
 BINS = ("weak", "medium", "strong")
+
+#: (family, table) -> the value of that table meaning "lawful". See the module
+#: docstring. Anything unlisted is a deviation already, so its lawful value is 0.
+LAWFUL = {
+    ("antigravity", "ALPHA_BY_BIN"): 1.0,
+    ("global_gravity", "ALPHA_BY_BIN"): 1.0,
+    ("shadow_inverted", "FRACTION_BY_BIN"): 1.0,
+    ("superelastic", "GAIN_BY_BIN"): 1.0,
+    ("newton2_mass", "RATIO_BY_BIN"): 1.0,
+    ("newton3_reaction", "RATIO_BY_BIN"): 1.0,
+    ("solidity", "RETENTION_BY_BIN"): 1.0,
+    ("friction", "RATE_BY_BIN"): 1.0,
+    ("friction", "TRAVEL_BY_BIN"): 1.0,
+}
+
+
+def _distance(family, attr, vals):
+    """How far each bin sits from the value that means nothing is wrong."""
+    lawful = LAWFUL.get((family, attr), 0.0)
+    return [abs(v - lawful) for v in vals]
 
 
 def _ladders():
@@ -60,7 +92,7 @@ def test_a_ladder_never_turns_around(family, attr, vals):
     `strong`, and `global_gravity` goes from slower-than-Earth to faster. What
     is not allowed is a bin that is milder than the one below it.
     """
-    a = [abs(v) for v in vals]
+    a = _distance(family, attr, vals)
     up = a[0] <= a[1] <= a[2]
     down = a[0] >= a[1] >= a[2]
     assert up or down, (
@@ -77,7 +109,7 @@ def test_a_ladder_actually_climbs(family, attr, vals):
     constant across bins on purpose, because what its severity varies is how
     far the halves end up, which is a different table.
     """
-    a = [abs(v) for v in vals]
+    a = _distance(family, attr, vals)
     if a[0] == a[1] == a[2]:
         assert (family, attr) in {("fission", "SCALE_BY_BIN")}, (
             "%s.%s is flat across all three bins -- either vary it or record "

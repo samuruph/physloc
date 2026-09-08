@@ -101,7 +101,15 @@ def test_cell_plans_and_applies(scenario, family):
 #: a forty-five. Every clip of that family's medium bin measured zero severity
 #: as a result. A unit not listed here is assumed to be lawful at zero.
 LAWFUL_MAGNITUDE = {
-    "gravity_scale_deviation": 1.0,
+    # NOT 1.0. `_GravityScale` reports `abs(1 - alpha)`, so the magnitude is
+    # ALREADY a distance from lawful and lawful is zero. Subtracting one more
+    # made the guard measure `|alpha|` instead, and `|alpha|` is ordered for a
+    # ladder that is not: `global_gravity` shipped deviations of 0.75 / 0.45 /
+    # 2.2 -- medium a milder violation than weak -- and this test called it
+    # ordered because 0.25 < 0.55 < 1.2. That is the same V this file exists to
+    # refuse, hidden one level of indirection down, and it is what reached the
+    # review sweep as "weak and medium are invisible".
+    "gravity_scale_deviation": 0.0,
     "count_ratio": 1.0,
     "volume_ratio": 1.0,
     "energy_gain_ratio": 1.0,

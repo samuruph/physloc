@@ -226,23 +226,59 @@ Every free parameter is drawn per clip from the seed: object shape, size, colour
 starting position and velocity, floor and backdrop colour, camera pose, and **the frame the
 violation fires on**.
 
-**Materials** (from L1) give appearance and density that agree:
+**Materials** (from L1) give appearance and density that agree, so a heavy-looking object is
+heavy and the resulting motion is legible rather than arbitrary.
+
+They apply to the **staging** as well as the actors — a ramp is wooden, a pendulum post is
+steel — because half of what is on screen is staging, and leaving it as untextured blocks
+meant the rung changed only a fraction of the frame. Four materials are metallic and two
+transmissive, which matters most from L2 up: a metal or glass body *reflects and refracts the
+environment*, and that is what makes an object look like it belongs in the scene rather than
+composited onto it.
+
+**The draw is weighted, not uniform**, and the `share` column is why. The palette is not
+uniform in density — the metals that make a rung legible are also 7800–8900 kg/m³ — so
+drawing evenly would put the mean density at 3458 against the 2313 the scenarios' contact
+parameters were tuned against, and double the median. That is a change to the *physics*
+smuggled in by a change to the *appearance*. Weighting the light end up puts it back at 2256.
 
 <!-- physloc:materials -->
-| material | density kg/m³ |
-|---|---|
-| `cork` | 240 |
-| `wood` | 650 |
-| `plastic` | 1100 |
-| `rubber` | 1300 |
-| `ceramic` | 2400 |
-| `stone` | 2700 |
-| `steel` | 7800 |
+| material | density kg/m³ | share | surface |
+|---|---|---|---|
+| `cork` | 240 | 10% | rough 0.94, spec 0.18 |
+| `wood` | 650 | 10% | rough 0.82, spec 0.30 |
+| `cardboard` | 700 | 10% | rough 0.95, spec 0.10 |
+| `ice` | 920 | 10% | **transmissive**, ior 1.31, rough 0.10, spec 0.90 |
+| `plastic` | 1100 | 10% | rough 0.40, spec 0.55 |
+| `rubber` | 1300 | 10% | rough 0.96, spec 0.12 |
+| `ceramic` | 2400 | 6% | rough 0.15, spec 0.85 |
+| `glass` | 2500 | 6% | **transmissive**, ior 1.46, rough 0.22, spec 0.90 |
+| `marble` | 2700 | 6% | rough 0.16, spec 0.75 |
+| `stone` | 2700 | 6% | rough 0.92, spec 0.20 |
+| `aluminium` | 2700 | 5% | **metal**, rough 0.38, spec 0.60 |
+| `steel` | 7800 | 5% | **metal**, rough 0.22, spec 0.60 |
+| `brass` | 8500 | 4% | **metal**, rough 0.28, spec 0.60 |
+| `copper` | 8900 | 4% | **metal**, rough 0.26, spec 0.60 |
 <!-- /physloc:materials -->
 
-**Environments** (from L2): 36 HDRI Haven captures. **Objects** (L3): 48 Google Scanned
-Objects, all CC BY-SA 4.0, curated squat and roughly isotropic so their lawful motion is
-predictable — an object that topples unexpectedly reads as the violation.
+**Environments** (from L2): **509** HDRI Haven captures — every one the manifest has, since
+an environment map has no geometry to get wrong. **Objects** (L3): **140** Google Scanned
+Objects across 14 categories, all CC BY-SA 4.0, curated squat and roughly isotropic so their
+lawful motion is predictable — an object that topples unexpectedly reads as the violation.
+13 of them are in Kubric's own held-out split.
+
+The floor is the one exception to materials: it keeps the colour
+`_recolour_scenery` chose for it, because that colour is guarded for contrast against every
+actor in the scene, and takes only the surface finish.
+
+Two deliberate limits. Glass and ice are **frosted** rather than clear, because a transparent
+culprit is hard to point at and pointing at it is the task; and there are two transmissive
+materials at different densities (920 and 2500) so that *transparent* does not become a cue
+for *heavy*. Scenery draws from a **narrower set** — no glass ramp, no mirror floor.
+
+The floor is the one body that keeps its own colour: `_recolour_scenery` chooses it with a
+contrast guard against every actor in the scene, so the floor takes only the surface finish
+from its material.
 
 `python -m physloc.cli randomisation` reports distinct values per axis, so *"is it actually
 varied"* is a number rather than an impression.

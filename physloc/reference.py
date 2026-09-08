@@ -105,9 +105,20 @@ def conditions() -> str:
 
 def materials() -> str:
     from .scenarios.materials import MATERIALS
-    rows = [["`%s`" % k, "%.0f" % v.density]
-            for k, v in sorted(MATERIALS.items(), key=lambda kv: kv[1].density)]
-    return _table(["material", "density kg/m³"], rows)
+    from .scenarios.materials import ACTOR_MATERIALS
+    total = sum(MATERIALS[n].weight for n in ACTOR_MATERIALS)
+    rows = []
+    for k, v in sorted(MATERIALS.items(), key=lambda kv: kv[1].density):
+        look = []
+        if v.metallic:
+            look.append("**metal**")
+        if v.transmission:
+            look.append("**transmissive**, ior %.2f" % v.ior)
+        look.append("rough %.2f" % v.roughness)
+        look.append("spec %.2f" % v.specular)
+        share = ("%.0f%%" % (100 * v.weight / total)) if k in ACTOR_MATERIALS else "—"
+        rows.append(["`%s`" % k, "%.0f" % v.density, share, ", ".join(look)])
+    return _table(["material", "density kg/m³", "share", "surface"], rows)
 
 
 def tiers() -> str:

@@ -1423,6 +1423,35 @@ class Scenario:
         """
         return None
 
+    def rescript(self, spec: "SceneSpec", traj, plan) -> None:
+        """Re-derive the scenario's own driven bodies on an INVALID trajectory.
+
+        `script` runs once, on the valid rollout, before any injector exists.
+        That is right for a body whose motion is a property of the scene -- and
+        wrong the moment an injector changes the body that motion is derived
+        FROM. `shadow_track` is the case: its cast shadow is a projection of the
+        actor, so a clip that teleports the actor, grows it, pushes it or
+        removes it must move, grow, push or remove the shadow with it.
+
+        It did not. Measured on the review sweep: under `continuity` the ball
+        jumped 1.4 m and its shadow carried on down its lawful track; under
+        `phantom_impulse` the ball accelerated away and the shadow did not
+        follow; under `immutability` the ball grew to 2.3x and its shadow
+        stayed the original size; under `permanence` the ball vanished and its
+        shadow stayed. Every one of those clips shipped a detached shadow --
+        which is the `shadow` family -- inside a clip claiming something else,
+        and annotated only the something else.
+
+        Called on every invalid trajectory, after the intervention and before
+        the prefix check. `plan` is passed so a scenario can leave alone
+        whatever the intervention is actually about: when the culprit IS the
+        shadow, the injector owns it and this must not overwrite its work.
+
+        Prefix identity is untouched: the driven body is a function of a
+        trajectory whose prefix is already identical, so its prefix is too.
+        """
+        return None
+
     def sim_hooks(self, spec: "SceneSpec", simulator, objs):
         """Per-substep hooks the SIMULATOR runs, for constraints it has no joint
         for. Default is none, and most scenarios need none.

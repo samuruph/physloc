@@ -8,9 +8,10 @@
 #
 # L2 adds an HDRI environment.
 #
-# Lit by one of 36 real captures, on the same dome that is the ground at
-# every level. An HDRI clip costs several times an L0 one at debug size --
-# at release geometry the gap is much smaller; see `physloc/render/probe_cost.py`.
+# Lit by one of 36 real captures, projected onto a render-only dome above the
+# same cube ground every level stands on. The dome is what makes an HDRI clip
+# cost more than an L0 one -- it encloses the scene, so rays that would escape
+# bounce instead; see `physloc/render/probe_cost.py`.
 #
 # WHY A CONFIG PER LEVEL. `v0_release` walks the whole ladder in one run and is
 # the thing to publish; these exist for when you want one level on its own --

@@ -137,16 +137,34 @@ def build_scene(spec: SceneSpec, scratch):
             obj.material = material
             obj.segmentation_id = b.segmentation_id
         elif b.kind == "dome":
-            # KuBasic's dome is both the ground plane and the backdrop -- the
-            # idiom movi_def_worker.py uses, and now the ground at EVERY level
-            # rather than only the realistic ones, so the collision geometry
-            # cannot change underneath a level comparison. See `_common.ground`.
+            # THE BACKDROP, and only that. MOVi makes one dome serve as both the
+            # ground and the surface the HDRI is projected onto; this project
+            # tried that and measured what it costs -- a dome ENCLOSES the
+            # scene, so rays that miss an object bounce off it instead of
+            # escaping, and one scene at release geometry went from 8.69 s a
+            # frame on a cube slab to 27.54 on the dome.
+            #
+            # So the cube slab is the ground at every level and the dome is
+            # added, at the HDRI levels only, with its COLLISIONS DISABLED
+            # below. The rollout is then identical to the level beneath -- which
+            # is the property the dome was made universal to get -- and only
+            # the two levels that need an environment pay for one.
             kubasic = kb.AssetSource.from_manifest(KUBASIC)
             obj = kubasic.create(asset_id="dome", name=b.name, friction=b.friction,
                                  restitution=b.restitution, static=True,
                                  background=True)
             obj.segmentation_id = b.segmentation_id
             scene += obj
+            # It stays IN the simulator, because `simulate` reads an animation
+            # entry for every body in `spec.bodies` and a body the simulator
+            # has never seen has none. Disabling its filter mask is the honest
+            # way to say "present, drawn, and touching nothing".
+            if b.role == "backdrop":
+                idx = obj.linked_objects.get(simulator)
+                if idx is not None:
+                    import pybullet as pb
+
+                    pb.setCollisionFilterGroupMask(idx, -1, 0, 0)
             if hdri_tex is not None:
                 dome_blender = obj.linked_objects[renderer]
                 node = dome_blender.data.materials[0].node_tree.nodes["Image Texture"]

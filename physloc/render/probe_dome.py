@@ -1,5 +1,17 @@
 """Is the KuBasic dome's floor the same surface as our cube floor?
 
+SUPERSEDED, and kept because its measurement is still the reason the code looks
+the way it does. The answer below is yes -- the dome's inner floor really is
+flat to within Bullet's collision margin -- and the dome duly became the ground
+at every level. Then `probe_cost.py` priced it: **8.69 s/frame on the cube
+against 27.54 on the dome**, because a dome encloses the scene and a slab does
+not. So the dome went back to being a backdrop (`_common.backdrop`, HDRI levels
+only, collisions disabled) and the cube went back to being the ground. The
+level comparison this probe was run to enable is preserved by the collider
+being uniform, which it is.
+
+The original question follows.
+
 The one thing blocking L2. `_common.ground` returns a cube below the HDRI level
 and the dome at it, and a dome is a genuinely different collision shape -- so
 the same seed does not roll the same way and L1/L2 are two independent releases

@@ -115,12 +115,23 @@ breadth. "Twin" in this project means the valid/invalid pair and nothing else.
 - **Fixed — the ground.** `C.ground` returned a **cube** below the HDRI level
   and a KuBasic **dome** at it: a genuinely different collision surface, so the
   same seed did not roll the same way and the levels could not be compared at
-  all. The dome is now the ground at **every** level, shaded flat below L2 and
-  lit by an HDRI at it. Measured before committing to it
-  (`physloc/render/probe_dome.py`): a 0.35 m sphere dropped at 0–5 m from the
-  origin rests at 0.3500 on the cube and 0.3509 on the dome — flat to within
-  Bullet's collision margin, and once both sides use the dome the difference is
-  zero.
+  all. The first fix made the dome the ground at *every* level, and it worked —
+  and cost far more than it was worth. A dome **encloses** the scene, so every
+  ray that misses an object hits it and bounces, where a cube slab lets those
+  rays escape: measured on one scene at release geometry, all seven passes,
+  **8.69 s/frame on the cube against 27.54 on the dome**. That is 3.2× on the
+  75 % of the dataset that is L0 and L1 — about two months of compute on a full
+  release, spent on a backdrop those levels do not even light themselves from.
+
+  **The dome was doing two jobs and only one of them had to be uniform.** The
+  *collider* must match across levels, because the rollout depends on it; the
+  *backdrop* need not, because nothing physical reads it. So `C.ground` is a
+  cube slab everywhere and `C.backdrop` adds the dome at the HDRI levels only,
+  `role="backdrop"`, with its collisions disabled in the worker
+  (`setCollisionFilterGroupMask(idx, -1, 0, 0)`). It stays *in* `spec.bodies`
+  because `simulate` reads an animation entry for every body, and it is added
+  last so its segmentation id cannot renumber anything else. Level isolation is
+  unchanged and still measured: **0 of 13 differ** at every adjacent pair.
 - **Verified.** `tests/test_complexity_isolation.py` rolls all thirteen
   scenarios at every built level: **0 of 13 differ**. L2 is unblocked and built.
 
@@ -192,8 +203,9 @@ pieces and should land last, because it multiplies whatever the other two produc
 
 ### Order
 
-1. ~~**Make the levels isolable**~~ — **done**: the dome is the ground at every level and
-   `test_complexity_isolation.py` shows 0 of 13 scenarios differ (§3a). L2 is built.
+1. ~~**Make the levels isolable**~~ — **done**: a cube slab is the ground at every level,
+   the HDRI dome is a render-only backdrop above it, and `test_complexity_isolation.py`
+   shows 0 of 13 scenarios differ (§3a). L2 is built.
 2. **Population axis in the scenes**, still one culprit per clip. All 180 cells run unchanged
    in a busier scene, which is what makes this safe to land on its own.
 3. **Multi-culprit annotation**, one family at a time. `support` and `friction` first — they

@@ -248,6 +248,18 @@ Visibility is **measured from the rendered map**, not assumed: a dormant underst
 `frames_visible: 0` and `first_frame: null` rather than looking present because the scene
 declared it.
 
+`role` says what a body is *for*. `actor` is a body a family may target, `floor` is the cube
+slab everything stands on, `distractor` is scenery no family can target, `shadow` is the
+scripted stand-in on `shadow_track` (drawn, masked, and deliberately carrying **no energy**),
+and `backdrop` is the HDRI dome at L2 and L3 — present in `instances` and in the segmentation
+map, but with its collisions disabled, so nothing in the scene ever touches it.
+
+**At L2 and L3 the visible ground is the `backdrop`, not the `floor`.** The dome's inner
+surface sits at z = 0 and covers the slab, so the slab collides with everything and is drawn
+by nothing: it reports `frames_visible: 0` and holds no pixels. Anything that asks "what is
+this object resting on" should read `traj`/`bodies`, which is where support lives; the
+segmentation map answers a different question.
+
 ### Render passes — segmentation tracks, depth, flow
 
 All shipped for **both** twins, straight from the renderer with no re-encoding. They cost

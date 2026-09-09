@@ -95,7 +95,7 @@ def support_under(spec, body) -> Tuple[Optional[object], float]:
         # 0.0 to 0.87 -- the cylinder's top -- so "held up with nothing under
         # it" was scored against a reference 0.87 m in the air and the residual
         # fell from 3.60 to 1.65.
-        if other.role == "distractor":
+        if other.role in ("distractor", "backdrop"):
             continue
         if not _over(other, body.position, body.bounding_radius):
             continue

@@ -63,6 +63,15 @@ publication. Nothing has been published yet.
 
   **"Twin" means the valid/invalid pair and nothing else** — one scene, bit-identical prefix
   up to `t_event`. Levels are not twins of each other and must not be described as such.
+- **The ground is a cube slab at every level; the HDRI dome is a render-only backdrop.**
+  A level comparison needs the COLLIDER to be identical, so `_common.ground` returns the
+  same slab everywhere. It does not need the BACKDROP to be identical, because nothing
+  physical reads it — so `_common.backdrop` adds the dome at L2 and L3 only, appended last
+  by `_add_backdrop` (segmentation ids must not shift) with its collisions disabled in the
+  worker. Making the dome the ground at every level was tried, worked, and was reverted on
+  measurement: a dome encloses the scene, so **8.69 s/frame on the slab against 27.54 on the
+  dome** — 3.2× on the 75% of the dataset that is L0 and L1. At L2 and L3 the dome covers
+  the slab, so the ground you SEE is `role="backdrop"` and `floor` has no pixels.
 - **The README's tables are GENERATED** by `physloc/reference.py`, from `taxonomy.py` and
   `scenarios/base.py`, and the HuggingFace card calls the same functions. Run
   `python -m physloc.reference --write` after changing any count; `tests/test_reference.py`

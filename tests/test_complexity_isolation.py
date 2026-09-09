@@ -97,10 +97,12 @@ def test_the_whole_built_ladder_rolls_identically(name):
 
     The blocker this closed was geometry: `C.ground` returned a cube below the
     HDRI level and a KuBasic dome at it, so the ground changed shape under a
-    level that was supposed to be about lighting. The dome is now the ground
-    everywhere -- measured against the cube in `physloc/render/probe_dome.py`,
-    flat to within Bullet's collision margin -- and L0, L1 and L2 roll
-    identically on all thirteen scenarios.
+    level that was supposed to be about lighting. The ground is now a cube slab
+    everywhere; the dome survives at the HDRI levels as `C.backdrop`, a
+    render-only body whose collisions the worker disables. So the COLLIDER is
+    uniform -- which is all this test needs -- while only the levels that light
+    themselves from an environment map pay for a surface that encloses the
+    scene. L0, L1 and L2 roll identically on all thirteen scenarios.
 
     **L3 IS EXEMPT, and that is the level working.** It replaces primitives with
     scanned GSO meshes, so the collision geometry changes by construction: a

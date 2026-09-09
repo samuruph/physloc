@@ -9,10 +9,11 @@
 # STATUS: BUILT.
 #
 # It was blocked on the ground being a cube below this level and a dome at it --
-# a real change of collision shape. The dome is now the ground at EVERY level,
-# shaded flat below L2 and lit by an HDRI here, so the levels differ only in
-# their own axis. An HDRI clip costs ~44 s against a solid background's ~8 s,
-# which is why the ladder's shares fall as realism rises.
+# a real change of collision shape. The ground is now a cube slab at EVERY
+# level, and the dome survives here as a render-only BACKDROP with its
+# collisions disabled, so the levels differ only in their own axis while only
+# the levels that need an environment map pay for one. That is also why the
+# ladder's shares fall as realism rises: see the cost table in the README.
 #
 # Naming a level explicitly is what overrides the ladder's share rule: a
 # one-variant run of `--complexity all` produces L0 only, whereas this file

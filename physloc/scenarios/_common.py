@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import colorsys
 import math
-from typing import List, Tuple
+from typing import Optional, List, Tuple
 
 from .base import BodySpec, Complexity, LightSpec
 
@@ -52,30 +52,62 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
     return np.random.RandomState(mixed % (2 ** 31 - 1))
 
 
+#: Where the HDRI backdrop's segmentation id sits. Above every scenario's own
+#: and above the extras, so adding it cannot renumber anything else.
+SEG_BACKDROP = 900
+
+
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
-    """KuBasic's `dome`, at EVERY level -- shaded flat below L2, lit by an HDRI
-    at L2 and above. The trick MOVi uses, and the thing that makes the ladder a
-    ladder.
+    """A plain cube slab, at EVERY level. THE THING THE OBJECTS LAND ON.
 
-    It used to be a cube below the HDRI level and the dome at it, and that was
-    the one thing blocking L2: a dome is a genuinely different collision shape,
-    so the same seed did not roll the same way and the two levels were
-    independent releases that happened to share a seed rather than a pair.
+    It was briefly the KuBasic dome instead -- MOVi's trick, where one body is
+    both the ground and the HDRI backdrop -- because a cube and a dome are
+    different collision shapes, so the same seed rolled differently at the HDRI
+    level and no two levels could be compared. That fixed the comparison and cost
+    a great deal: a dome ENCLOSES the scene, so every ray that misses an object
+    hits it and bounces, where a cube lets those rays escape. Measured on one
+    scene at release geometry, all seven passes: **8.69 s/frame with the cube,
+    27.54 with the dome** -- 3.2x, on the 75% of the dataset that is L0 and L1,
+    and about two months of compute on a full release.
 
-    Measured in the pinned image (`physloc/render/probe_dome.py`) before
-    committing to the swap: a 0.35 m sphere dropped on each surface at 0, 0.5,
-    1, 2, 3, 4 and 5 m from the origin comes to rest at 0.3500 on the cube and
-    0.3509 on the dome -- flat and level to within a millimetre, which is
-    Bullet's collision margin rather than a bowl. Once BOTH sides use it the
-    difference is not a millimetre, it is zero.
-
-    `size` is kept in the signature and ignored: the dome is 80 m across, and
-    every caller passed a half-extent for a slab that no longer exists.
+    The dome was doing two jobs and only one of them had to be uniform. The
+    COLLIDER must match across levels, because that is what the rollout depends
+    on; the BACKDROP need not, because nothing physical reads it. So the cube
+    collides everywhere and `backdrop()` adds the dome, render-only, at the
+    levels that light themselves from an HDRI.
     """
-    return BodySpec(name="floor", kind="dome", position=(0.0, 0.0, 0.0),
-                    mass=0.0, static=True, friction=0.6, restitution=0.4,
-                    color=(0.32, 0.33, 0.36),
+    return BodySpec(name="floor", kind="cube", position=(0.0, 0.0, -0.1),
+                    scale=(size, size, 0.1), mass=0.0, static=True,
+                    friction=0.6, restitution=0.4, color=(0.32, 0.33, 0.36),
                     segmentation_id=seg_id, role="floor")
+
+
+def backdrop(cx: Complexity) -> Optional[BodySpec]:
+    """The dome the HDRI is projected onto, or `None` below L2.
+
+    RENDER-ONLY. It is added to the scene like anything else -- the trajectory
+    is built from `spec.bodies` and would fail on a body the simulator has
+    never heard of -- but the worker disables its collisions, so the cube slab
+    stays the only ground and the rollout is identical to the level below.
+
+    `role="backdrop"` keeps it out of everything that reasons about the scene:
+    it is not an actor, not a support surface, and not something a family can
+    target or a distractor must clear.
+
+    ONE VISIBLE CONSEQUENCE, checked in a render rather than assumed. The dome's
+    inner surface sits at z = 0, exactly where the slab's top is, and the dome
+    wins: at L2 and L3 the ground you SEE is this body, and the slab reports
+    `frames_visible: 0` and holds no pixels. That is the MOVi look and it is
+    what an HDRI environment should give you -- the ground belongs to the
+    capture rather than being a grey rectangle floating in it. It is also
+    uniform, not speckled: the two surfaces are coplanar but the dome is drawn
+    as the background, so there is no z-fighting to see.
+    """
+    if cx.background != "hdri":
+        return None
+    return BodySpec(name="backdrop", kind="dome", position=(0.0, 0.0, 0.0),
+                    mass=0.0, static=True, friction=0.6, restitution=0.4,
+                    segmentation_id=SEG_BACKDROP, role="backdrop")
 
 
 def lights(cx: Complexity, look_at=(0.0, 0.0, 0.6),

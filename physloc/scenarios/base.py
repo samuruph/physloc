@@ -656,6 +656,7 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     _material_scenery(spec, seed)
     _swap_in_gso(spec, seed)
     _pick_hdri(spec, seed)
+    _add_backdrop(spec)
     _maybe_move_camera(spec, seed)
     return spec
 
@@ -735,7 +736,7 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
         (int(seed) * 2654435761 + 0x57A6E + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
     for body in spec.bodies:
-        if body.role in ("actor", "distractor") or body.material:
+        if body.role in ("actor", "distractor", "backdrop") or body.material:
             continue
         # The shadow stand-in is a picture of an absence -- see
         # `shadow_track`. Giving it a surface would make it an object.
@@ -826,6 +827,27 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
         body.render_scale = None
     spec.notes["gso_assets"] = sorted(
         {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
+
+
+def _add_backdrop(spec: SceneSpec) -> None:
+    """The HDRI dome, at the levels that have an HDRI, and nowhere else.
+
+    Added here rather than by each scenario for the same reason the
+    environment itself is: it is a property of the LEVEL, and a property of the
+    level that lives in thirteen files is one that will eventually differ in one
+    of them.
+
+    Added LAST, so its segmentation id cannot renumber anything -- which is the
+    objection that kept the dome out of the higher levels originally, and it is
+    answered by ordering rather than by making the dome the ground everywhere.
+    """
+    from . import _common as C
+
+    if any(b.role == "backdrop" for b in spec.bodies):
+        return
+    body = C.backdrop(COMPLEXITY[spec.complexity])
+    if body is not None:
+        spec.bodies.append(body)
 
 
 def _pick_hdri(spec: SceneSpec, seed: int) -> None:

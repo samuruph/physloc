@@ -44,6 +44,18 @@ def main() -> int:
     ap.add_argument("--frames", type=int, default=2)
     ap.add_argument("--spp", type=int, default=64)
     ap.add_argument("--complexity", default="L0")
+    ap.add_argument("--floor", choices=("as-is", "cube", "dome"),
+                    default="as-is",
+                    help="override the ground. The dome became the ground at "
+                         "every level to make the levels comparable, and it is "
+                         "80 m across where the cube was 6 -- this is how to "
+                         "find out what that cost.")
+    ap.add_argument("--variant", type=int, default=0)
+    ap.add_argument("--n-variants", type=int, default=None,
+                    help="with --variant, picks the difficulty CONDITION -- "
+                         "which is how to price a crowded clip against a "
+                         "standard one, since `DISTRACTOR_COST` scales every "
+                         "estimate by the share of clips that carry extras.")
     a = ap.parse_args()
 
     # ONE MEASUREMENT PER PROCESS, on purpose. `kb.simulator.PyBullet` connects
@@ -56,7 +68,25 @@ def main() -> int:
 
     tier = scenarios.TIERS["debug"].override(resolution=a.resolution,
                                              samples_per_pixel=a.spp)
-    spec = scenarios.get("drop").sample(777, tier, a.complexity)
+    spec = scenarios.get("drop").sample(777, tier, a.complexity,
+                                        variant=a.variant,
+                                        n_variants=a.n_variants)
+    extras = sum(1 for b in spec.bodies
+                 if b.role in ("distractor", "actor")) - 1
+    if a.floor != "as-is":
+        import dataclasses
+
+        for i, b in enumerate(spec.bodies):
+            if b.role != "floor":
+                continue
+            if a.floor == "cube":
+                spec.bodies[i] = dataclasses.replace(
+                    b, kind="cube", position=(0.0, 0.0, -0.1),
+                    scale=(6.0, 6.0, 0.1))
+            else:
+                spec.bodies[i] = dataclasses.replace(
+                    b, kind="dome", position=(0.0, 0.0, 0.0),
+                    scale=(1.0, 1.0, 1.0))
 
     t0 = time.perf_counter()
     scene, sim, renderer, objs = build_scene(spec, "out/_probe_cost")
@@ -64,12 +94,17 @@ def main() -> int:
 
     scene.frame_start, scene.frame_end = 0, max(0, a.frames - 1)
     t0 = time.perf_counter()
-    renderer.render(return_layers=("rgba",))
+    # ALL SEVEN PASSES, because that is what `render_and_save` does. The first
+    # version asked for `rgba` alone and so measured a render the project never
+    # performs -- depth, both flows, normals, object coordinates and
+    # segmentation are not free.
+    renderer.render()
     render = time.perf_counter() - t0
 
-    print("COST %s res=%d spp=%d build=%.2f per_frame=%.3f"
-          % (a.complexity, a.resolution, a.spp, build,
-             render / max(1, a.frames)))
+    print("COST %s floor=%-6s res=%d spp=%d cond=%-13s extras=%2d "
+          "build=%.2f per_frame=%.3f"
+          % (a.complexity, a.floor, a.resolution, a.spp,
+             spec.condition, extras, build, render / max(1, a.frames)))
     return 0
 
 

@@ -56,7 +56,7 @@ defaults:
   # run and not the full matrix. Change it only alongside
   # `taxonomy.COMPATIBILITY`: the point of the list is that it reaches every
   # family, and a smaller one silently stops doing that.
-  scenario: pour,shadow_track,drop
+  # scenario: pour,shadow_track,drop
 
 generate:
   keep_going: true

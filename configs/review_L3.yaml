@@ -43,7 +43,7 @@ defaults:
   # and breadth of family is `review_severity`'s job. It also keeps L2 and L3
   # affordable: an HDRI clip costs ~54 s against a solid background's ~10 s,
   # so the full matrix here would be over an hour.
-  family: solidity,support,continuity
+  # family: solidity,support,continuity
 
 generate:
   keep_going: true

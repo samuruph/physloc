@@ -49,13 +49,32 @@ class Pour(Scenario):
         # while its three bins did not differ from each other (0.334 / 0.338 /
         # 0.382 m), and `friction` had no heap whose angle it could change.
         #
-        # Eighty grains in a 0.68 m box settle about three deep, which is the
-        # smallest pile with an inside. The count went up and the vessel came
-        # down together because only their ratio sets the depth -- grains alone
-        # would have had to triple again, and render cost here is dominated by
-        # how many bodies are in the frame.
-        n_grains = 80 if tier.name == "debug" else 176
-        r = float(rng.uniform(0.062, 0.076))
+        # Depth is `n * (2pi/3) * r^2 / (packing * floor area)`, so the count,
+        # the radius and the vessel are one knob with three handles. The vessel
+        # came down from 1.64 m and the count went up, because grains alone
+        # would have had to reach several hundred.
+        #
+        # **The radius is then set by what a grain should LOOK like**, and the
+        # count follows to hold the depth. At 0.069 m in a 0.68 m box the
+        # medium is under five beads across and reads as marbles; at 0.059 m it
+        # is nearly six, and it is still seven pixels at the debug tier's
+        # 128 px -- small enough to read as a medium, large enough to resolve.
+        #
+        # **How far to go is limited by the residual laws, not by the render.**
+        # `penetration` reports depth in RADII and `trajectory_shape` normalises
+        # by radius, so shrinking a grain magnifies every residual measured on
+        # it. Measured, twice: at 0.048 m -- seven grains across, which looks
+        # better still -- `solidity` went to 0.94 / 0.91 / 1.00,
+        # `superelastic` to 1.00 / 0.87 / 1.00 and `friction` to a flat 1.000;
+        # at 0.056 m `superelastic` still came out 0.29 / 0.19 / 0.42, out of
+        # order. 0.063 m is as fine as the ladders currently hold.
+        #
+        # The count is then chosen WITH the radius to keep `n r^2 / A` -- and
+        # therefore the pile depth -- exactly where those ladders were
+        # calibrated, so the only thing that changes is how fine the medium
+        # looks.
+        n_grains = 96 if tier.name == "debug" else 212
+        r = float(rng.uniform(0.058, 0.068))
         hue = float(rng.uniform(0, 1))
 
         # Low walls, and a camera high enough to see over the near one.
@@ -63,7 +82,15 @@ class Pour(Scenario):
         # through the floor was behind it in both twins, so the violation
         # was active, correctly scored and completely unobservable. The wall
         # came down with the box, for the same reason -- what matters is the
-        # wall against the PILE, and the pile is now about 0.45 m tall.
+        # wall against the PILE, and the pile is about 0.46 m tall.
+        #
+        # **Deliberately lower than the pile, and raising it was tried and
+        # reverted.** A finer medium overflows more, so 0.28 was tested to
+        # contain it -- and it did, at the cost of the one family that needs
+        # the medium free to spread: confined by a taller wall, `friction` has
+        # nothing left to reduce and went from a saturating 1.00 / 1.00 / 1.00
+        # to a flat 0.00 / 0.00 / 0.00, which is a clip depicting nothing. The
+        # overflow is contained by the FRAME instead -- see the camera below.
         half, wall_t, wall_h = 0.34, 0.04, 0.20
         walls = []
         for i, (cx_, cy_, sx, sy) in enumerate([
@@ -139,13 +166,15 @@ class Pour(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
             # Moved in AND up with the box. The old pose framed 1.66 m of
             # world, which around a 0.68 m vessel is mostly empty floor. This
-            # frames 1.05 m -- enough for the grains that overflow the walls,
-            # measured at 0.96 m from the centre -- and looks down at 52
+            # frames 1.49 m -- the grains that overflow the low walls reach
+            # 1.43 m from the centre at 96 grains, and a grain outside the
+            # frame is a culprit with no pixels in a clip that claims one --
+            # and looks down at 52
             # degrees rather than 36, so the near wall hides 0.16 m of the box
             # instead of 0.27. That is the trap the wall height already
             # carries a comment about: at a shallow angle a wall tall enough to
             # hold the pour is also tall enough to hide it.
-            camera_position=(0.85, -1.58, 2.50), camera_look_at=(0.0, 0.0, 0.20),
+            camera_position=(1.20, -2.23, 3.47), camera_look_at=(0.0, 0.0, 0.20),
             floor_level=0.0, complexity=complexity, physics_medium="granular",
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,

@@ -8,6 +8,7 @@ py3.9-compatible: imported inside the container.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1006,6 +1007,15 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
     spec.notes["n_distractors_placed"] = len(placed)
 
 
+#: What a body looks like before any material touches it, read off `BodySpec`
+#: rather than written down again -- the first copy of these numbers fell two
+#: traits behind the dataclass and took L0's whole appearance guarantee with it.
+_BODY_DEFAULTS = {
+    f.name: f.default
+    for f in dataclasses.fields(BodySpec)
+    if f.name in ("roughness", "metallic", "specular", "transmission", "ior")}
+
+
 def _flatten_materials(spec: SceneSpec) -> None:
     """Below L2, bodies have a flat colour and ONE shared density.
 
@@ -1024,6 +1034,20 @@ def _flatten_materials(spec: SceneSpec) -> None:
     Hue is preserved so the objects stay tellable apart; only saturation and
     value are pinned, which is what makes them read as plain colours rather
     than as steel or rubber.
+
+    ALL FIVE OPTICAL TRAITS ARE RESET, not just the two this started with.
+    `roughness` and `metallic` were the whole surface when materials were
+    introduced; `specular`, `transmission` and `ior` arrived with glass and ice
+    and this function was not told about them. So L0 -- the level whose entire
+    definition is "flat colour, one density" -- shipped a random subset of
+    clips whose actors were TRANSPARENT: `drop` drew glass on 5 seeds in 6 and
+    rendered a see-through ball, `pour` on 2 in 6 and rendered 144 see-through
+    grains, `ramp_slide` ice on 4 in 6. That is the appearance confound the
+    level exists to remove, arriving at the level meant to be free of it, and
+    it also charged L0 for the most expensive shading in the table.
+
+    The defaults are `BodySpec`'s own, so this cannot drift from them again
+    without the dataclass changing underneath it.
     """
     import colorsys
 
@@ -1036,7 +1060,9 @@ def _flatten_materials(spec: SceneSpec) -> None:
             continue
         h, _, _ = colorsys.rgb_to_hsv(*b.color)
         b.color = tuple(float(c) for c in colorsys.hsv_to_rgb(h, 0.62, 0.88))
-        b.roughness, b.metallic = 0.55, 0.0
+        for trait in ("roughness", "metallic", "specular", "transmission",
+                      "ior"):
+            setattr(b, trait, _BODY_DEFAULTS[trait])
         b.mass = M.mass_for(M.REFERENCE_MATERIAL, b.scale, b.kind)
         b.material = None
 

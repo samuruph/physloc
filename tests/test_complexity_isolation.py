@@ -121,14 +121,38 @@ def test_the_whole_built_ladder_rolls_identically(name):
     base_assets = COMPLEXITY[built[0]].actor_assets
     same = [k for k in built if COMPLEXITY[k].actor_assets == base_assets]
     assert len(same) >= 2, "nothing to compare"
-    rolls = {lv: mockroll.roll(sc.sample(SEED, TIERS["release"], lv), sc)
-             for lv in built}
+
+    # COMPARED BODY BY BODY, not array against array. The HDRI levels carry one
+    # body the levels below do not -- the backdrop dome -- so the position
+    # blocks have different widths and a shape assert fails on a difference
+    # that is render-only by construction: `_common.backdrop` has its
+    # collisions disabled in the worker and cannot touch anything. Matching on
+    # segmentation id says what the test means: every body BOTH levels have
+    # follows the same path.
+    def by_id(level):
+        spec = sc.sample(SEED, TIERS["release"], level)
+        roll = mockroll.roll(spec, sc)
+        return spec, {int(b.segmentation_id): roll.pos[:, i, :]
+                      for i, b in enumerate(spec.bodies)}
+
+    base_spec, base = by_id(same[0])
     for lv in same[1:]:
-        assert rolls[lv].pos.shape == rolls[same[0]].pos.shape, (name, lv)
-        assert np.allclose(rolls[same[0]].pos, rolls[lv].pos, atol=1e-9), (
-            "%s: %s rolls differently from %s -- max %.3e"
-            % (name, lv, same[0],
-               float(np.abs(rolls[same[0]].pos - rolls[lv].pos).max())))
+        spec, other = by_id(lv)
+        shared = set(base) & set(other)
+        assert shared, (name, lv, "no bodies in common")
+        # The only body a level may add or drop is the backdrop.
+        extra = {int(b.segmentation_id) for b in spec.bodies} ^ {
+            int(b.segmentation_id) for b in base_spec.bodies}
+        roles = {int(b.segmentation_id): b.role
+                 for b in list(spec.bodies) + list(base_spec.bodies)}
+        assert all(roles[i] == "backdrop" for i in extra), (
+            "%s: %s adds or drops %s, which is not a backdrop"
+            % (name, lv, sorted((i, roles[i]) for i in extra)))
+        for seg in sorted(shared):
+            assert np.allclose(base[seg], other[seg], atol=1e-9), (
+                "%s: %s rolls body %d differently from %s -- max %.3e"
+                % (name, lv, seg, same[0],
+                   float(np.abs(base[seg] - other[seg]).max())))
 
 
 @pytest.mark.parametrize("name", NAMES)

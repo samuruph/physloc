@@ -126,3 +126,122 @@ def test_a_material_is_self_consistent(name):
     if m.transmission:
         assert 1.0 < m.ior < 2.5, "%s: ior %.2f is not a real refractive index" % (name, m.ior)
         assert not m.metallic, "%s is both a metal and transparent" % name
+
+
+# ---------------------------------------------------------------------------
+# What the LEVEL is, in terms of materials. L0 is the absence of them and L1 is
+# their presence, and both halves have to hold or "L2 minus L1" measures the
+# HDRI plus whatever leaked.
+
+#: Bodies whose surface is not a material's business. A shadow is a picture of
+#: an absence, and the HDRI dome carries the environment map rather than a
+#: chosen finish.
+EXEMPT = ("shadow", "backdrop")
+
+SEEDS = range(6)
+
+
+def _bodies(name, level):
+    from physloc import scenarios as S
+
+    for seed in SEEDS:
+        spec = S.get(name).sample(seed, S.TIERS["debug"], level)
+        for body in spec.bodies:
+            if body.role not in EXEMPT:
+                yield seed, body
+
+
+def _names():
+    from physloc import scenarios as S
+
+    return sorted(S.available())
+
+
+@pytest.mark.parametrize("name", _names())
+def test_l0_is_actually_flat(name):
+    """L0 means one shared density and no surface. ALL of it, not most.
+
+    `_flatten_materials` reset `roughness` and `metallic` -- the whole surface
+    when materials were introduced -- and never learned about `specular`,
+    `transmission` and `ior`, which arrived with glass and ice. So L0 shipped a
+    random subset of clips with TRANSPARENT actors: `drop` drew glass on five
+    seeds in six, `pour` on two in six and rendered 144 see-through grains,
+    `ramp_slide` ice on four in six. An appearance confound at the level whose
+    entire job is not having one, and the most expensive shading in the table
+    charged to the cheapest half of the dataset.
+    """
+    from physloc.scenarios.base import _BODY_DEFAULTS
+
+    for seed, body in _bodies(name, "L0"):
+        assert body.material is None, (
+            "%s seed %d: %s kept material %s at L0"
+            % (name, seed, body.name, body.material))
+        for trait, want in _BODY_DEFAULTS.items():
+            got = getattr(body, trait)
+            assert got == want, (
+                "%s seed %d: %s has %s=%r at L0, want the default %r"
+                % (name, seed, body.name, trait, got, want))
+
+
+@pytest.mark.parametrize("name", _names())
+@pytest.mark.parametrize("level", ["L1", "L2", "L3"])
+def test_everything_on_screen_is_made_of_something(name, level):
+    """From L1 up the STAGING has a material too, not just the actors.
+
+    Half of what is on screen is a ramp, a barrier, a table, a pendulum post,
+    a pour's walls and a floor. When materials landed on actors alone, L1
+    looked like L0 -- the level changed a fraction of the frame. This is the
+    check that says otherwise, and it covers every body in every scenario
+    rather than the one the family happens to act on.
+    """
+    for seed, body in _bodies(name, level):
+        assert body.material, (
+            "%s %s seed %d: %s (role %s) has no material"
+            % (name, level, seed, body.name, body.role))
+
+
+@pytest.mark.parametrize("name", _names())
+def test_the_floor_takes_the_surface_but_not_the_colour(name):
+    """One deliberate exception, and the reason for it.
+
+    A floor's colour is chosen by `_recolour_scenery` against a contrast guard
+    measured over every actor; a material's own colour band would throw that
+    away and put a wooden floor under a wooden block. So the floor takes
+    roughness, specular and the rest -- it reads as stone or wood rather than
+    as matte nothing -- and keeps the colour that was fitted for it.
+
+    Checked WITHIN a level, not across two. The obvious version of this test
+    compares the floor at L0 against the floor at L1 and expects the colour to
+    be identical; it is not, and should not be. The guard fits the floor
+    against the actors, the actors take their materials' colours at L1, so the
+    best-separated floor moves with them. `tests/test_scenery_colour.py` is
+    what holds the separation itself.
+    """
+    from physloc import scenarios as S
+    from physloc.scenarios import materials as M
+
+    for seed in SEEDS:
+        spec = S.get(name).sample(seed, S.TIERS["debug"], "L1")
+        for body in spec.bodies:
+            if body.role != "floor":
+                continue
+            assert body.material, "%s seed %d: floor has no material" % (
+                name, seed)
+            mat = M.get(body.material)
+            assert body.roughness == mat.roughness, (
+                "%s seed %d: floor did not take %s's surface"
+                % (name, seed, body.material))
+            assert body.specular == mat.specular, (
+                "%s seed %d: floor did not take %s's specular"
+                % (name, seed, body.material))
+            # The colour is the guard's, so it need not lie in the material's
+            # own value band -- and on a dark floor under a light material it
+            # provably does not.
+            import colorsys
+
+            _, _, value = colorsys.rgb_to_hsv(*body.color)
+            from physloc.scenarios.base import FLOOR_VALUE
+
+            assert FLOOR_VALUE[0] - 1e-6 <= value <= FLOOR_VALUE[1] + 1e-6, (
+                "%s seed %d: floor value %.3f is outside the guard's band %s"
+                % (name, seed, value, (FLOOR_VALUE,)))

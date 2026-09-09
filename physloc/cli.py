@@ -183,6 +183,30 @@ def cmd_export(a) -> int:
 
 
 # ----------------------------------------------------------- randomisation
+def cmd_stats(a) -> int:
+    """Plot what a release actually contains.
+
+    `validate` says it is well formed and `audit` says every cell depicts
+    something; neither says what the DISTRIBUTIONS look like, and those are
+    what a benchmark is judged on. Reads only `meta.json`, so it runs in
+    seconds over a full release and can be re-run after any annotation change.
+    """
+    from .release.stats import report
+
+    s = report(a.root, a.outdir)
+    print("%d clips (%d invalid, %d valid) -> %s"
+          % (s["clips"], s["invalid"], s["valid"], s["outdir"]))
+    total = max(1, s["invalid"])
+    print("   difficulty: " + ", ".join(
+        "%s %d (%.0f%%)" % (lv, s["difficulty"].get(lv, 0),
+                            100.0 * s["difficulty"].get(lv, 0) / total)
+        for lv in ("easy", "moderate", "hard")))
+    print("   binding:    " + ", ".join(
+        "%s %d" % kv for kv in sorted(s["binding_factors"].items(),
+                                      key=lambda kv: -kv[1])))
+    return 0
+
+
 def cmd_randomisation(a) -> int:
     """Count the distinct values the sampler produces on each axis.
 
@@ -1011,6 +1035,12 @@ def _build(suppress: bool = False):
     p.add_argument("--private", action="store_true",
                    help="create the hub repo private")
     p.set_defaults(fn=cmd_export)
+
+    p = add_parser("stats",
+                   help="what a release contains: five figures and stats.json")
+    p.add_argument("root", help="a release root, e.g. out/physloc_v0")
+    p.add_argument("--outdir", help="default <root>/stats")
+    p.set_defaults(fn=cmd_stats)
 
     p = add_parser("randomisation",
                    help="how much the sampler actually varies, per axis")

@@ -36,7 +36,7 @@ class EnergyTrace:
     by_body: np.ndarray               # [T, B]
     body_ids: np.ndarray              # [B]
     dissipated: np.ndarray            # [T]  cumulative E0 - E(t), >= 0 lawfully
-    in_frame: np.ndarray              # [T, B] bool -- body inside the frustum
+    in_frame: np.ndarray              # [T, B] bool -- body the camera can SEE
     energy_in_frame: np.ndarray       # [T]  the total over visible bodies only
     free_anomaly: np.ndarray          # [T]  |dE| on contact-free frames, / E0
     contact_anomaly: np.ndarray       # [T]  energy GAINED at a contact, / E0
@@ -165,8 +165,15 @@ def contact_frames(traj, slack: int = CONTACT_SLACK) -> np.ndarray:
     return out
 
 
-def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
-    """Mechanical energy of every dynamic body, frame by frame."""
+def compute(traj, spec, floor_level: Optional[float] = None,
+            seg: Optional[np.ndarray] = None) -> EnergyTrace:
+    """Mechanical energy of every dynamic body, frame by frame.
+
+    `seg` is the rendered segmentation, `[T, H, W]` of declared ids. Pass it
+    whenever there is one: it is what decides `in_frame`, and the frustum test
+    that stands in for it when there is not is a strictly weaker answer -- see
+    the note beside `visible` below.
+    """
     bodies = {b.name: b for b in spec.bodies}
     g = np.asarray(traj.gravity, np.float64)
     g_norm = float(np.linalg.norm(g))
@@ -237,13 +244,36 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
     # off screen. `energy_in_frame` sums only the bodies a camera can see, so a
     # consumer can score what is visible while `total` stays consistent with the
     # trajectory a consumer could recompute it from.
+    #
+    # THE PIXELS DECIDE THIS, not the frustum. A frustum test answers "is it in
+    # shot", and the question is "can the camera see it" -- which differs by
+    # every occluder in the scene, starting with the ground. On `pour` x
+    # `solidity` the grains drop through the floor and are hidden by it from
+    # frame 8, while the frustum keeps calling them visible until frame 13
+    # because falling out of the world takes a while to leave the bottom of the
+    # shot. So the energy curve went on accounting for the whole pour for five
+    # frames after nobody could see any of it -- reported as the energy lagging
+    # the disappearance. Every other occluder in the dataset has the same
+    # shape, and `occluder_pass` stages one on purpose.
+    #
+    # The segmentation is the exact answer and it is already rendered. The
+    # frustum stays as the fallback for callers that have no render yet -- the
+    # mock rollout in `tests/`, and `Injector` fit ladders, which run before
+    # anything is drawn.
     visible = np.zeros((T, B), bool)
-    for j in range(B):
-        try:
-            visible[:, j] = _geom.in_frame(
-                spec, np.asarray(traj.pos[:, j, :], np.float64))
-        except Exception:                                     # noqa: BLE001
-            visible[:, j] = True
+    if seg is not None:
+        seg_arr = np.asarray(seg)
+        ids = [int(x) for x in np.asarray(traj.body_ids)]
+        for j in range(B):
+            n = min(T, seg_arr.shape[0])
+            visible[:n, j] = (seg_arr[:n] == ids[j]).any(axis=(1, 2))
+    else:
+        for j in range(B):
+            try:
+                visible[:, j] = _geom.in_frame(
+                    spec, np.asarray(traj.pos[:, j, :], np.float64))
+            except Exception:                                 # noqa: BLE001
+                visible[:, j] = True
     visible &= np.asarray(traj.present, bool)
     energy_visible = (by_body * visible).sum(axis=1)
 

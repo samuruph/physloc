@@ -139,8 +139,16 @@ it already checks the exclusive laws.
 - **`total` is the scene; `energy_in_frame` is the evidence.** Energy comes off the
   trajectory, not the pixels, so a body that has left the shot still has a real energy and a
   super-elastic bounce really does add that much. What a viewer -- or a model with only the
-  invalid video -- can account for is `energy_in_frame`, which sums the bodies inside the
-  frustum and goes to zero when they leave it. Both ship, and `overlay.mp4` plots
+  invalid video -- can account for is `energy_in_frame`, which sums the bodies the camera
+  can SEE and goes to zero when the last of them is gone. Visibility is read off the
+  rendered segmentation, not off a frustum test: the frustum answers "is it in shot" and the
+  question is "can it be seen", and the two differ by every occluder in the scene, starting
+  with the ground. Measured on `pour x solidity`, the grains are hidden by the floor they
+  fell through from frame 8 while the frustum still counted them until frame 13, so the
+  curve trailed the disappearance by five frames. It follows that a body the camera loses
+  temporarily -- `occluder_pass` runs one behind a screen on purpose -- drops out of the sum
+  and comes back, which is the right reading and not a discontinuity to smooth: the question
+  the curve answers is what a viewer can account for right now. Both ship, and `overlay.mp4` plots
   `energy_in_frame` solid with `total` dimmed behind it, so the gap between the two reads as
   "this much energy left the frame rather than the scene". Measured on `drop`:
   `superelastic` at medium holds 19.8 J to the last frame while every pixel of evidence for

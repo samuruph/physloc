@@ -428,7 +428,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # Mechanical energy, on BOTH twins -- the valid clip's trace is the
         # baseline every anomaly is judged against, and shipping it means a
         # consumer never has to load the twin to know what lawful looked like.
-        etrace = energy_mod.compute(traj, spec)
+        etrace = energy_mod.compute(traj, spec, seg=seg_here)
         np.savez_compressed(os.path.join(cdir, "energy.npz"), **etrace.to_npz())
         np.savez_compressed(
             os.path.join(cdir, "energy_map.npz"),

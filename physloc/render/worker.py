@@ -155,16 +155,10 @@ def build_scene(spec: SceneSpec, scratch):
                                  background=True)
             obj.segmentation_id = b.segmentation_id
             scene += obj
-            # It stays IN the simulator, because `simulate` reads an animation
-            # entry for every body in `spec.bodies` and a body the simulator
-            # has never seen has none. Disabling its filter mask is the honest
-            # way to say "present, drawn, and touching nothing".
-            if b.role == "backdrop":
-                idx = obj.linked_objects.get(simulator)
-                if idx is not None:
-                    import pybullet as pb
-
-                    pb.setCollisionFilterGroupMask(idx, -1, 0, 0)
+            # `collides=False` is honoured below, once every body has been
+            # built -- see `_disable_collisions`. It stays IN the simulator,
+            # because `simulate` reads an animation entry for every body in
+            # `spec.bodies` and a body the simulator has never seen has none.
             if hdri_tex is not None:
                 dome_blender = obj.linked_objects[renderer]
                 node = dome_blender.data.materials[0].node_tree.nodes["Image Texture"]
@@ -194,6 +188,8 @@ def build_scene(spec: SceneSpec, scratch):
             obj.scale = tuple(float(x) for x in b.render_scale)
         _set_visibility(renderer, obj, b)
         objs[b.name] = obj
+
+    _disable_collisions(simulator, objs, spec)
 
     for l in spec.lights:
         scene += kb.DirectionalLight(name=l.name, position=l.position,
@@ -267,6 +263,44 @@ def _clear_animation(renderer, obj) -> None:
     # Blender's rather than silently describing curves that no longer exist.
     for member in list(getattr(obj, "keyframes", {})):
         obj.keyframes[member].clear()
+
+
+def _disable_collisions(simulator, objs, spec) -> None:
+    """Switch off the collision filter of every `collides=False` body.
+
+    "Present, drawn, and touching nothing." Done in one place, after the whole
+    scene is built, because the alternative is a `pb.setCollisionFilterGroupMask`
+    beside each body's constructor and that is how the dome ended up being the
+    only body that got one -- `pendulum_swing`'s rod, which has exactly the same
+    requirement, did not.
+
+    Group AND mask are zeroed: the mask alone would still let another body's
+    group match this one's, which is the same collision arriving from the other
+    side.
+
+    A body it cannot resolve raises rather than being skipped. Silently leaving
+    the filter on is the failure this whole flag exists to stop, and it fails
+    the way every bug in this file has: not with an error, but with a rollout
+    that is quietly wrong.
+    """
+    import pybullet as pb
+
+    # ABSOLUTE, like every other import in this file -- the worker runs as a
+    # SCRIPT in the container, so it has no parent package and a relative
+    # import raises before a single clip renders. Second occurrence; the
+    # `sys.path` shim at the top is what makes `physloc` importable here.
+    from physloc.render import stepper
+
+    for b in spec.bodies:
+        if b.collides:
+            continue
+        idx = stepper.pybullet_index(simulator, objs, spec,
+                                     int(b.segmentation_id))
+        if idx is None:
+            raise RuntimeError(
+                "collides=False body %r has no PyBullet id: it would collide"
+                % b.name)
+        pb.setCollisionFilterGroupMask(int(idx), -1, 0, 0)
 
 
 def _set_visibility(renderer, obj, body) -> None:

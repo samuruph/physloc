@@ -25,7 +25,7 @@ def _tops(spec):
     """Static surfaces as (top_z, cx, cy, hx, hy, seg_id, mu), highest first."""
     out = []
     for b in spec.bodies:
-        if not b.static:
+        if not b.static or not b.collides:
             continue
         if b.kind == "cube":
             out.append((b.position[2] + b.scale[2], b.position[0], b.position[1],
@@ -46,7 +46,7 @@ def _boxes(spec):
     """
     out = []
     for b in spec.bodies:
-        if not b.static or b.kind != "cube":
+        if not b.static or not b.collides or b.kind != "cube":
             continue
         sx, sy, sz = (float(x) for x in b.scale)
         if sz <= min(sx, sy):

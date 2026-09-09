@@ -1,7 +1,7 @@
 """Shared scenario building blocks.
 
 Scenario files stay short because everything generic lives here: the ground
-plane (which becomes an HDRI dome from complexity L1 up), standard lighting and
+slab, the HDRI dome that backs it from complexity L2 up, standard lighting and
 a colour helper. A new scenario is then mostly a description of *what is staged*,
 not renderer plumbing.
 """
@@ -87,12 +87,17 @@ def backdrop(cx: Complexity) -> Optional[BodySpec]:
 
     RENDER-ONLY. It is added to the scene like anything else -- the trajectory
     is built from `spec.bodies` and would fail on a body the simulator has
-    never heard of -- but the worker disables its collisions, so the cube slab
+    never heard of -- but it is declared `collides=False`, so the cube slab
     stays the only ground and the rollout is identical to the level below.
 
-    `role="backdrop"` keeps it out of everything that reasons about the scene:
-    it is not an actor, not a support surface, and not something a family can
-    target or a distractor must clear.
+    `role="backdrop"` keeps it out of everything that reasons about what the
+    scene DEPICTS -- it is not an actor, not something a family can target and
+    not something a distractor must clear -- and `collides=False` keeps it out
+    of everything that reasons about what the scene TOUCHES. The second is not
+    a restatement of the first: the role was there from the start and the
+    geometry search that put `solidity` through the floor at L2 and L3 did not
+    consult it, because "is there a static surface under this body" is a
+    question about colliders, not about staging.
 
     ONE VISIBLE CONSEQUENCE, checked in a render rather than assumed. The dome's
     inner surface sits at z = 0, exactly where the slab's top is, and the dome
@@ -106,7 +111,8 @@ def backdrop(cx: Complexity) -> Optional[BodySpec]:
     if cx.background != "hdri":
         return None
     return BodySpec(name="backdrop", kind="dome", position=(0.0, 0.0, 0.0),
-                    mass=0.0, static=True, friction=0.6, restitution=0.4,
+                    mass=0.0, static=True, collides=False,
+                    friction=0.6, restitution=0.4,
                     segmentation_id=SEG_BACKDROP, role="backdrop")
 
 

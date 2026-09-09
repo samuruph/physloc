@@ -99,7 +99,7 @@ def test_the_whole_built_ladder_rolls_identically(name):
     HDRI level and a KuBasic dome at it, so the ground changed shape under a
     level that was supposed to be about lighting. The ground is now a cube slab
     everywhere; the dome survives at the HDRI levels as `C.backdrop`, a
-    render-only body whose collisions the worker disables. So the COLLIDER is
+    render-only body declared `collides=False`. So the COLLIDER is
     uniform -- which is all this test needs -- while only the levels that light
     themselves from an environment map pay for a surface that encloses the
     scene. L0, L1 and L2 roll identically on all thirteen scenarios.
@@ -185,3 +185,50 @@ def test_the_gso_level_actually_changes_the_objects(name):
         assert 2 * max(after.extents) == pytest.approx(
             2 * max(before.extents), rel=0.02), (
             "%s: %s changed size across the level" % (name, after.name))
+
+# --------------------------------------------------------------------------
+# What a level must NOT change: what a body is standing on, and what a family
+# decides to break. Both were shipping wrong at the HDRI and GSO levels.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_the_backdrop_is_never_a_surface(name):
+    """`solidity` breaks the same contact at every level.
+
+    The dome is static, 40 m across, and its inner surface is coplanar with the
+    slab, so a geometry search for "what is under this body" found it and
+    answered with the BACKDROP. Measured on the review sweep: `barrier_pass`,
+    `collision`, `drop` and `stack_topple` planned `pass_through` against a wall
+    or another body at L0 and L1, and `sink` against segmentation id 900 at L2
+    and L3 -- four scenarios where the clip showed a body dropping through the
+    ground while the annotation named something else.
+
+    Written against the PLAN rather than against a rendered clip, because the
+    plan is where the choice is made and the host can reach it.
+    """
+    from physloc.injectors import get as get_injector
+
+    sc = scenarios.get(name)
+    built = [k for k, v in COMPLEXITY.items() if v.implemented]
+    inj = get_injector("solidity")
+    modes = {}
+    for lv in built:
+        spec = sc.sample(SEED, TIERS["release"], lv)
+        backdrops = {int(b.segmentation_id) for b in spec.bodies
+                     if not b.collides}
+        traj = mockroll.roll(spec, sc)
+        plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+        if plan is None:
+            continue
+        touched = (set(int(x) for x in plan.params.get("pair", ()))
+                   | set(int(x) for x in plan.params.get("also_disable", ()))
+                   | set(int(x) for x in plan.causal_body_ids))
+        assert not (touched & backdrops), (
+            "%s at %s: solidity acts on a body nothing can touch (%s)"
+            % (name, lv, sorted(touched & backdrops)))
+        modes[lv] = plan.params.get("mode")
+    base = COMPLEXITY[built[0]].actor_assets
+    same = [lv for lv in modes if COMPLEXITY[lv].actor_assets == base]
+    assert len({modes[lv] for lv in same}) <= 1, (
+        "%s: solidity breaks a different contact per level -- %s" % (name, modes))

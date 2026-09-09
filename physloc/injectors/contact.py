@@ -82,8 +82,15 @@ def _riding_on(spec, traj, actor, latest: int):
     """
     floors = {int(b.segmentation_id) for b in spec.bodies
               if b.static and getattr(b, "role", "") == "floor"}
+    # `collides` and not the role, because what is being asked here is which
+    # COLLIDER holds this body up. The HDRI dome is static, is not the floor,
+    # and its inner surface is coplanar with the slab -- so at L2 and L3 it was
+    # answering "the actor is riding on me" on every scenario, and `solidity`
+    # duly sent bodies through the ground on the four where L0 and L1 send them
+    # through a wall or another body.
     statics = [b for b in spec.bodies
-               if b.static and int(b.segmentation_id) not in floors]
+               if b.static and b.collides
+               and int(b.segmentation_id) not in floors]
     if not statics:
         return None
 
@@ -366,7 +373,8 @@ class Solidity(Injector):
         # the world. That is why this follows the contact normal rather than
         # whether the partner is static.
         extra_ids = ([int(b.segmentation_id) for b in spec.bodies
-                      if b.static and int(b.segmentation_id) != int(partner_id)]
+                      if b.static and b.collides
+                      and int(b.segmentation_id) != int(partner_id)]
                      if (mode == "sink" and partner_static) else [])
 
         notes = {"radius": float(radius),
@@ -846,7 +854,8 @@ class Solidity(Injector):
             # Every grain against every surface that could hold it up. The
             # grains stay solid to EACH OTHER, which is the point: the pour
             # still behaves like a pour on the way down, it simply has no floor.
-            surfaces = [int(b.segmentation_id) for b in spec.bodies if b.static]
+            surfaces = [int(b.segmentation_id) for b in spec.bodies
+                        if b.static and b.collides]
             out = []
             for bid in plan.causal_body_ids:
                 ia = stepper.pybullet_index(simulator, objs, spec, int(bid))

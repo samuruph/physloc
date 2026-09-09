@@ -53,14 +53,26 @@ class PendulumSwing(Scenario):
         # The rod is GEOMETRY, not a participant. It is kinematic -- pinned in
         # the simulator and hung between the pivot and the bob every substep by
         # `_carry_rod` -- because a stick with no mass of its own contributes
-        # nothing to the swing and nothing collides with it. It stays a body so
-        # that it has a segmentation id; a `prop` rather than an `actor` so it
-        # never becomes a culprit, and when the swing changes the rod's motion
-        # changes with it, which `causal_mask` picks up as a measured
-        # consequence without anyone declaring it.
+        # nothing to the swing. It stays a body so that it has a segmentation
+        # id; a `prop` rather than an `actor` so it never becomes a culprit,
+        # and when the swing changes the rod's motion changes with it, which
+        # `causal_mask` picks up as a measured consequence without anyone
+        # declaring it.
+        #
+        # `collides=False`, and it always should have been. "Nothing collides
+        # with it" was a claim, not a setting: the rod's far end is AT the bob's
+        # centre, so the two overlap by a whole bob radius on every frame. A
+        # sphere hid it -- one contact point through its centre, no torque, and
+        # the constraint hook overwrote the response every substep -- but a
+        # scanned bob at L3 meets the same rod with a convex decomposition,
+        # takes several contacts with a lever arm, and spins up to 21 rad/s.
+        # The swing's own drift clamp reads that spin as energy it must give
+        # back, zeroes the bob's velocity, and the pendulum stops dead in the
+        # air. Measured on seed 777: the bob left x = 1.07, reached 0.98 by
+        # frame 4 and never moved again.
         rod = BodySpec(name="rod", kind="cube", position=(0.0, 0.0, pivot[2] - arm / 2),
                        scale=(0.035, 0.035, arm / 2.0), mass=0.0, static=False,
-                       scripted=True, color=(0.55, 0.55, 0.60),
+                       scripted=True, collides=False, color=(0.55, 0.55, 0.60),
                        segmentation_id=self.SEG_ROD, role="prop")
         # The bob is an ORDINARY DYNAMIC BODY. Its arc is not written down
         # anywhere: it falls under gravity like anything else and the rod is a

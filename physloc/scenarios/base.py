@@ -354,6 +354,24 @@ class BodySpec:
     # understudy is always there, and the intervention only switches it on.
     dormant: bool = False
 
+    # PRESENT, DRAWN, AND TOUCHING NOTHING. The body is in the scene and in the
+    # simulator -- `simulate` reads an animation entry for every body in
+    # `spec.bodies`, so one PyBullet has never heard of has none -- but its
+    # collision filter is switched off in the worker and nothing on the host
+    # may treat it as a surface, a contact partner or an obstacle.
+    #
+    # Two bodies need it and both were shipping bugs without it. The HDRI dome
+    # is a backdrop: a 40 m bowl whose inner surface is coplanar with the slab,
+    # so `_riding_on` found it "beneath" the actor and `solidity` sank bodies
+    # through the FLOOR at L2 and L3 on scenarios where L0 and L1 correctly
+    # sent them through a wall. And `pendulum_swing`'s rod is drawn geometry
+    # hung between the pivot and the bob every substep: a primitive bob touched
+    # it in one point and the constraint absorbed it, but a scanned bob at L3
+    # met it with a decomposed hull, took 21 rad/s of spin off the collision,
+    # and the swing's own drift clamp then zeroed the velocity -- a pendulum
+    # frozen in mid-air.
+    collides: bool = True
+
     # Cycles ray visibility. `shadow_track` uses these to hand the cast shadow
     # to a body of its own, which is the only way a shadow can carry a
     # segmentation id and therefore a mask.

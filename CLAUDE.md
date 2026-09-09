@@ -67,11 +67,21 @@ publication. Nothing has been published yet.
   A level comparison needs the COLLIDER to be identical, so `_common.ground` returns the
   same slab everywhere. It does not need the BACKDROP to be identical, because nothing
   physical reads it — so `_common.backdrop` adds the dome at L2 and L3 only, appended last
-  by `_add_backdrop` (segmentation ids must not shift) with its collisions disabled in the
-  worker. Making the dome the ground at every level was tried, worked, and was reverted on
+  by `_add_backdrop` (segmentation ids must not shift). Making the dome the ground at every
+  level was tried, worked, and was reverted on
   measurement: a dome encloses the scene, so **8.69 s/frame on the slab against 27.54 on the
   dome** — 3.2× on the 75% of the dataset that is L0 and L1. At L2 and L3 the dome covers
   the slab, so the ground you SEE is `role="backdrop"` and `floor` has no pixels.
+- **`collides=False` is how a body says "present, drawn, and touching nothing", and the
+  HOST must honour it too.** The dome and `pendulum_swing`'s rod both carry it: they are in
+  `spec.bodies` because `simulate` needs an animation entry for every body, and the worker
+  zeroes their collision filter in one place (`_disable_collisions`). The half that was
+  missing is that every host-side search for *a surface under this body* now skips them.
+  Without it the dome — static, 40 m across, inner surface coplanar with the slab — was the
+  answer to "what is this actor riding on" at L2 and L3, so `solidity` sank bodies through
+  the FLOOR on `barrier_pass`, `collision`, `drop` and `stack_topple` where L0 and L1
+  correctly sent them through a wall or another body. Role is about what a body MEANS;
+  `collides` is about what it TOUCHES, and the geometry searches want the second.
 - **The README's tables are GENERATED** by `physloc/reference.py`, from `taxonomy.py` and
   `scenarios/base.py`, and the HuggingFace card calls the same functions. Run
   `python -m physloc.reference --write` after changing any count; `tests/test_reference.py`

@@ -83,8 +83,14 @@ def test_choosing_an_environment_does_not_shift_a_physics_draw():
         sc = scenarios.get(name)
         plain = sc.sample(SEED, TIERS["debug"], "L1")
         lit = sc.sample(SEED, TIERS["debug"], level)
-        assert len(plain.bodies) == len(lit.bodies), name
-        for x, y in zip(plain.bodies, lit.bodies):
+        # COLLIDERS ONLY. The HDRI level adds the dome, which is a body in
+        # `spec.bodies` because the trajectory is built from that list -- and
+        # `collides=False`, because nothing physical may read it. Comparing the
+        # raw lists compares a scene against itself plus a backdrop.
+        plain_b = [b for b in plain.bodies if b.collides]
+        lit_b = [b for b in lit.bodies if b.collides]
+        assert len(plain_b) == len(lit_b), name
+        for x, y in zip(plain_b, lit_b):
             for f in ("kind", "position", "scale", "mass", "friction",
                       "restitution", "velocity", "material"):
                 assert getattr(x, f) == getattr(y, f), (

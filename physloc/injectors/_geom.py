@@ -85,7 +85,7 @@ def support_under(spec, body) -> Tuple[Optional[object], float]:
     lowest = float(body.position[2]) - float(body.bounding_radius) + 1e-3
     best, best_top = None, None
     for other in spec.bodies:
-        if other is body or not other.static:
+        if other is body or not other.static or not other.collides:
             continue
         # A DISTRACTOR IS NEVER A SUPPORT SURFACE. It is scenery: the
         # scenario stages the floor, the table, the ramp that a violation is
@@ -487,7 +487,7 @@ def _support_id(spec, body) -> int:
     surface, _ = support_under(spec, body)
     if surface is not None:
         return int(surface.segmentation_id)
-    ground = next((b for b in spec.bodies if b.static), None)
+    ground = next((b for b in spec.bodies if b.static and b.collides), None)
     return int(ground.segmentation_id) if ground is not None else 0
 
 
@@ -541,7 +541,7 @@ def support_under_any(spec, body, traj=None, frame: int = 0):
     ref = (traj.pos[frame, traj.index_of(int(body.segmentation_id))]
            if traj is not None else body.position)
     for other in spec.bodies:
-        if other is body or other.dormant:
+        if other is body or other.dormant or not other.collides:
             continue
         if not _over(other, ref, body.bounding_radius):
             continue
@@ -701,7 +701,7 @@ class Obstacles:
         self.spheres = []
         for body in spec.bodies:
             bid = int(body.segmentation_id)
-            if bid in exclude or body.dormant:
+            if bid in exclude or body.dormant or not body.collides:
                 continue
             if body.static:
                 if body.kind != "cube":

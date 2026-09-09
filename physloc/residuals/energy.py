@@ -13,7 +13,7 @@ tuned threshold. Measured floor on valid clips: 0.005% of E0.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -69,11 +69,36 @@ class EnergyTrace:
         }
 
 
+def inertia_size(body) -> Tuple[float, float, float]:
+    """The half-extent triple `inertia_diag` wants for `body`.
+
+    **A GSO body's `scale` is not a length.** Following MOVi, a scan is
+    normalised by its own longest mesh axis -- `scale = target / longest` -- so
+    it is a unitless factor that says nothing about how big the thing is drawn:
+    measured on `barrier_pass` at L3, a 0.37 m ball became a porcelain ramekin
+    carrying `scale = 8.338`. Fed to `inertia_diag` as though it were a
+    half-extent that gives `I0 = 27.8` against the correct 0.038 -- a factor of
+    739 on the rotational term, which is why the LAWFUL L3 clip's energy trace
+    peaked at 38 J where the same scene at L0, L1 and L2 sat flat at 3.3. A
+    valid rollout cannot gain energy, so the trace was reporting the units
+    rather than the physics.
+
+    `extents` is the answer: the mesh's own half-extents as drawn, from the
+    baked bounds. For a primitive the two already agree, so this changes
+    nothing below L3.
+    """
+    if getattr(body, "kind", None) == "gso":
+        return tuple(float(x) for x in body.extents)
+    return tuple(float(x) for x in getattr(body, "scale", (0.5,) * 3))
+
+
 def inertia_diag(kind: str, scale, mass: float) -> np.ndarray:
     """Body-frame principal moments for the primitives this project stages.
 
     `scale` is the half-extent triple Kubric uses, so a cube of `scale=(h,h,h)`
-    has side `2h` and a sphere of `scale=(r,r,r)` has radius `r`.
+    has side `2h` and a sphere of `scale=(r,r,r)` has radius `r`. Pass a GSO
+    body's through `inertia_size`, which is the only kind whose `scale` is not
+    a length.
     """
     s = np.asarray(scale, np.float64).reshape(3)
     if kind == "sphere":
@@ -101,6 +126,14 @@ def inertia_diag(kind: str, scale, mass: float) -> np.ndarray:
         R, a = float(s[0]) * 0.75, float(s[0]) * 0.25
         lat = mass * (5.0 / 8.0 * a * a + 0.5 * R * R)
         return np.array([lat, lat, mass * (0.75 * a * a + R * R)])
+    if kind == "gso":
+        # A scan has whatever shape it has and no closed form; the honest
+        # stand-in is the uniform solid ELLIPSOID on its own half-extents,
+        # which reduces to the sphere branch above when the scan is isotropic
+        # and, unlike a sphere of the mean radius, keeps a squat object squat.
+        a, b, c = s
+        return mass / 5.0 * np.array([b * b + c * c, a * a + c * c,
+                                      a * a + b * b])
     r = float(s.mean())                    # anything else: solid-sphere stand-in
     return np.full(3, 0.4 * mass * r * r)
 
@@ -218,7 +251,7 @@ def compute(traj, spec, floor_level: Optional[float] = None,
         # Inertia scales as m*r^2, so a resized body's tensor moves with the
         # cube of the linear factor times the mass factor.
         lin = np.asarray(traj.scale_mul[:, j, :], np.float64)
-        I0 = inertia_diag(body.kind, getattr(body, "scale", (0.5,) * 3), 1.0)
+        I0 = inertia_diag(body.kind, inertia_size(body), 1.0)
         I_body = m[:, None] * I0[None, :] * lin ** 2
         R = _quat_matrix(np.asarray(traj.quat[:, j, :], np.float64))
         w_body = np.einsum("tji,tj->ti", R, w)      # world -> body frame
@@ -438,7 +471,7 @@ def body_state(traj, spec) -> Dict[str, np.ndarray]:
         m = float(getattr(body, "mass", 1.0)) * np.clip(
             np.prod(lin, axis=1), 1e-9, None)
         mass[:, j] = m
-        I0 = inertia_diag(body.kind, getattr(body, "scale", (0.5,) * 3), 1.0)
+        I0 = inertia_diag(body.kind, inertia_size(body), 1.0)
         inertia[:, j, :] = m[:, None] * I0[None, :] * lin ** 2
         height[:, j] = -(np.asarray(traj.pos[:, j, :], np.float64) @ g_hat) - datum
 

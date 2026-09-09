@@ -1058,7 +1058,20 @@ class Dissolve(Injector):
         if not gone:
             return ()
         self._gone = gone
-        vanish_at = plan.t_event + int(plan.notes["fade_frames"])
+        # **THE FRAME IT GOES INVISIBLE IS THE FRAME IT STOPS TOUCHING THINGS.**
+        # The fade profile in `post_simulate` runs `u = (k + 1) / n`, so opacity
+        # reaches exactly zero on the LAST faded frame, `t_event + n - 1` -- and
+        # this used to leave the body in the solver until `t_event + n`. That is
+        # one whole frame of a body nobody can see that still collides, and on
+        # `collision x 0777` it was the frame that mattered: measured, ball_a
+        # was at opacity 0.00 from frame 11 and ball_b was struck during
+        # 11 -> 12 and rolled away exactly as in the lawful twin. You reported
+        # it as the other ball moving after the first had dissolved.
+        #
+        # A fading body is still solid while you can still see it, which is the
+        # point of the family; a body you cannot see is gone, and gone bodies do
+        # not strike anything.
+        vanish_at = plan.t_event + int(plan.notes["fade_frames"]) - 1
         state = {"hidden": False}
 
         def fade(_client, _step, frame):
@@ -1086,13 +1099,17 @@ class Dissolve(Injector):
         traj_invalid.opacity = np.asarray(traj_invalid.opacity).copy()
         traj_invalid.present = np.asarray(traj_invalid.present).copy()
         traj_invalid.pos = np.asarray(traj_invalid.pos).copy()
+        # The frame opacity reaches zero, which is the frame `stage` takes the
+        # body out of the solver -- the two have to name the same frame or the
+        # clip carries an invisible body that still collides. See `stage`.
+        gone = t0 + n - 1
         for bid in plan.causal_body_ids:
             bi = traj_valid.index_of(int(bid))
             traj_invalid.opacity[t0:t0 + n, bi] = alpha.astype(np.float32)
-            if t0 + n < T:
-                traj_invalid.opacity[t0 + n:, bi] = 0.0
-                traj_invalid.present[t0 + n:, bi] = False
-                _hold_where_it_vanished(traj_invalid, bi, t0 + n, T - 1)
+            if gone < T:
+                traj_invalid.opacity[gone:, bi] = 0.0
+                traj_invalid.present[gone:, bi] = False
+                _hold_where_it_vanished(traj_invalid, bi, gone, T - 1)
         return super().post_simulate(spec, traj_valid, traj_invalid, plan)
 
     def _apply(self, spec, traj, plan) -> Trajectory:
@@ -1104,15 +1121,16 @@ class Dissolve(Injector):
         u = (np.arange(n, dtype=np.float64) + 1.0) / n
         alpha = 1.0 - u * u * (3.0 - 2.0 * u)      # 1 -> 0, smooth at both ends
 
+        gone = t0 + n - 1
         for bid in plan.causal_body_ids:
             bi = traj.index_of(int(bid))
             out.opacity[t0:t0 + n, bi] = alpha.astype(np.float32)
-            if t0 + n < T:
-                out.opacity[t0 + n:, bi] = 0.0
+            if gone < T:
+                out.opacity[gone:, bi] = 0.0
                 # Removed once it is invisible, so it leaves the segmentation
                 # too. Transparency alone does not: cryptomatte tracks geometry,
                 # so a fully faded body still reports every one of its pixels.
-                out.present[t0 + n:, bi] = False
+                out.present[gone:, bi] = False
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .. import camera as cam
 from ..sim.trajectory import Trajectory
 from . import _geom
 from .base import Injector, InterventionPlan, register
@@ -1222,10 +1223,33 @@ class SuperElastic(Injector):
                    # contact faster than `gain` times the fastest speed the
                    # LAWFUL rollout ever reaches. A fact about the scene, so it
                    # bounds the intervention without tuning.
+                   #
+                   # **PER BODY, because a medium is not one body.** This was
+                   # the max over every target handed to each of them, which is
+                   # the same number on a pair and a licence on a pour:
+                   # measured at seed 777, the fastest grain reaches 6.01 m/s
+                   # and the slowest 2.33, so every grain in the box was
+                   # allowed to leave a contact at 14.4 m/s on the strength of
+                   # a speed it never had. Its own lawful maximum is what the
+                   # sentence above actually says.
+                   "max_lawful_speed_by_id": {
+                       str(int(b.segmentation_id)): float(np.linalg.norm(
+                           traj.lin_vel[:, traj.index_of(int(b.segmentation_id))],
+                           axis=1).max()) for b in targets},
                    "max_lawful_speed": float(max(
                        (np.linalg.norm(
                            traj.lin_vel[:, traj.index_of(int(b.segmentation_id))],
                            axis=1).max() for b in targets), default=0.0)),
+                   # WHAT THE SHOT CAN HOLD, for the medium case only -- see
+                   # `stage`. `_fit_to_frame` is the framing guard everywhere
+                   # else, and on a medium it is measured on `_rewrite_group`,
+                   # which this family already documents as not describing the
+                   # staged rollout. So the bound it could not enforce on the
+                   # preview is enforced on the solver instead.
+                   "frame_speed_cap": float(
+                       cam.frame_extent(spec.camera_position,
+                                        spec.camera_look_at)
+                       / max(self.FRAME_TOLERANCE * float(traj.dt), 1e-9)),
                    "surface_top": top,
                    "speed_gain": gain, "n_bounces": len(windows),
                    "r_strong": float(r_strong),
@@ -1349,8 +1373,12 @@ class SuperElastic(Injector):
         normal0 = normal0 / n0 if n0 > 1e-9 else np.array([0.0, 0.0, 1.0])
 
         # Per body, because each grain of a pour arrives and rebounds on its
-        # own schedule.
-        watch = {sid: {"approach": approach0, "ready": True, "touched": -99}
+        # own schedule. `approach` is the body's free VELOCITY, not its speed:
+        # restitution is a statement about the component along the contact
+        # normal, and a magnitude has forgotten which way the body was going --
+        # see the boost below.
+        watch = {sid: {"approach": normal0 * approach0, "ready": True,
+                       "touched": -99}
                  for sid, _ in movers}
         state = {"fired": False}
         # **A HARD CEILING, because the observational boost otherwise compounds.**
@@ -1369,13 +1397,41 @@ class SuperElastic(Injector):
         # unaffected -- a dropped ball's fastest lawful speed IS its impact
         # speed, so the ceiling sits exactly at the boost the plan asked for --
         # and a cascade cannot climb past one bounce's worth of gain.
-        ceiling = float(plan.notes.get("max_lawful_speed", 0.0)) * gain
-        if ceiling <= 1e-6:
-            ceiling = float("inf")
+        #
+        # Read PER BODY, so a slow grain cannot spend the fastest grain's
+        # budget -- on a pair the two are the same number.
+        by_sid = {int(k): float(v) for k, v in
+                  (plan.notes.get("max_lawful_speed_by_id") or {}).items()}
+        lawful0 = float(plan.notes.get("max_lawful_speed", 0.0))
+        # **A MEDIUM IS ALSO BOUNDED BY THE SHOT.** A grain in a pile is free
+        # for a frame, boosted, and touching again immediately, so it holds its
+        # ceiling for the rest of the clip rather than flying up and coming
+        # back the way a single bounced ball does. Measured on `pour x 0777`
+        # before this: grains ended 27.6 m from their lawful positions in a
+        # 0.68 m box -- against 0.84 m for `phantom_impulse` on the same scene
+        # and bin, which is the incomparability you reported. The cap is the
+        # family's own `FRAME_TOLERANCE` read as a speed: a boosted body may
+        # leave the shot, but not before the frames this family already says it
+        # is willing to spend off camera.
+        #
+        # Only on a medium. A single body or a pair is fitted by
+        # `_fit_to_frame` on a preview that does describe it, and clamping
+        # those would weaken the bounce the fit already sized -- on `drop` the
+        # rebound leaving the top of the shot IS the violation.
+        frame_cap = float(plan.notes.get("frame_speed_cap", 0.0) or 0.0)
+        crowd = len(movers) > 2
 
-        def _free_speed(idx):
-            return float(np.linalg.norm(
-                np.asarray(pb.getBaseVelocity(idx)[0], np.float64)))
+        def _ceiling(sid: int) -> float:
+            lawful = by_sid.get(int(sid), lawful0)
+            top = lawful * gain if lawful > 1e-6 else float("inf")
+            if crowd and frame_cap > 1e-6:
+                top = min(top, frame_cap)
+            return top
+
+        ceiling_by_sid = {sid: _ceiling(sid) for sid, _ in movers}
+
+        def _free_velocity(idx):
+            return np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
 
         def _first_bounce():
             """The planned impact, applied once, from the plan's own numbers."""
@@ -1385,18 +1441,36 @@ class SuperElastic(Injector):
                     else movers[1])
                 va = np.asarray(pb.getBaseVelocity(ia)[0], np.float64)
                 vb = np.asarray(pb.getBaseVelocity(ib)[0], np.float64)
+                # **`normal0` POINTS FROM THE ACTOR TO ITS PARTNER**, so the
+                # pair separates along `+n` and closes along `-n`. That sign is
+                # the whole of the collision and it used to be inverted here:
+                # `rel` was computed as `(va - vb) @ n`, which is the CLOSING
+                # speed, and then spent as though it were the separation --
+                # `+n` to the striker, `-n` to the target. The two were driven
+                # INTO each other at the boosted speed and the solver pushed
+                # them back apart out of interpenetration. Measured on
+                # `collision x 0777`: the striker left at +3.29 m/s and the
+                # target at -1.36, which are exactly the two correct answers
+                # handed to the wrong bodies, and the target then came out of
+                # the overlap at +2.60 m/s VERTICALLY -- a ball launched off
+                # the ground by a head-on horizontal collision. You reported
+                # that as the struck ball jumping; this is why it jumped.
                 n = normal0
-                rel = float((va - vb) @ n)
-                # `n` points from one body to the other; orient it along the
-                # separation so "faster than it arrived" is unambiguous.
-                if rel < 0.0:
-                    n, rel = -n, -rel
-                extra = approach0 * gain - rel
+                sep = float((vb - va) @ n)
+                extra = approach0 * gain - sep
                 if extra <= 0.0:
                     return
-                pb.resetBaseVelocity(ia, (va + n * extra * 0.5).tolist(),
+                # SPLIT BY MASS, so the pair gains energy and not momentum.
+                # An even split is only right for equal masses, which is what
+                # `collision` happens to stage; read from the solver so a
+                # scenario with an uneven pair stays momentum-clean.
+                ma = float(pb.getDynamicsInfo(ia, -1)[0])
+                mb = float(pb.getDynamicsInfo(ib, -1)[0])
+                if ma <= 0.0 or mb <= 0.0:
+                    ma = mb = 1.0
+                pb.resetBaseVelocity(ia, (va - n * extra * (mb / (ma + mb))).tolist(),
                                      list(pb.getBaseVelocity(ia)[1]))
-                pb.resetBaseVelocity(ib, (vb - n * extra * 0.5).tolist(),
+                pb.resetBaseVelocity(ib, (vb + n * extra * (ma / (ma + mb))).tolist(),
                                      list(pb.getBaseVelocity(ib)[1]))
                 del sa, sb
                 return
@@ -1440,7 +1514,7 @@ class SuperElastic(Injector):
                     # a medium arriving looks like.
                     if frame > w["touched"]:
                         w["ready"] = True
-                        w["approach"] = _free_speed(idx)
+                        w["approach"] = _free_velocity(idx)
                     continue
                 w["touched"] = frame
                 if not w["ready"]:
@@ -1455,7 +1529,21 @@ class SuperElastic(Injector):
                 out_speed = float(v @ n)
                 if out_speed <= 1e-3:
                     continue          # still arriving: wait for the rebound
-                target = min(w["approach"] * gain, ceiling)
+                # **ONLY THE NORMAL COMPONENT OF THE APPROACH.** This used to
+                # be the free SPEED, which is the same number for a ball
+                # dropped onto the floor and a ball rolling along it -- and the
+                # boost is spent along the contact normal. So a body that
+                # hopped a millimetre off the ground while travelling fast
+                # sideways was relaunched vertically at its whole horizontal
+                # speed times the gain, out of the top of the shot. Restitution
+                # reflects the normal component and leaves the tangential one
+                # alone, which is what `_boosted` computes on the host side and
+                # what this now agrees with.
+                approach_n = abs(float(np.asarray(w["approach"], np.float64) @ n))
+                if approach_n <= 1e-3:
+                    continue          # travelling along the surface, not into it
+                target = min(approach_n * gain,
+                             ceiling_by_sid.get(sid, float("inf")))
                 if target <= out_speed:
                     continue
                 pb.resetBaseVelocity(idx, (v + n * (target - out_speed)).tolist(),

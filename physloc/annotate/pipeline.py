@@ -66,6 +66,34 @@ def annotate_work(workdir: str, outroot: str, release: str = "physloc_v0",
             for d in dirs]
 
 
+def _asset_block(spec, spec_d):
+    """Per-body source and licence, by what the body actually IS.
+
+    A GSO body's licence comes from the baked manifest, which is where it is
+    recorded when the source is enabled -- see `scenarios/_gso.py`. Anything
+    else is a KuBasic primitive and carries Kubric's own licence.
+    """
+    from ..scenarios._gso import GSO_ASSETS
+
+    by_id = {int(b.segmentation_id): b for b in spec.bodies}
+    out = []
+    for b in spec_d["bodies"]:
+        sid = int(b["segmentation_id"])
+        live = by_id.get(sid)
+        aid = getattr(live, "asset_id", None) if live is not None else None
+        if aid and getattr(live, "kind", None) == "gso":
+            entry = GSO_ASSETS.get(aid) or {}
+            out.append({"name": b["name"], "source": "gso",
+                        "asset_id": aid,
+                        "license": entry.get("license", "unknown"),
+                        "held_out": bool(entry.get("held_out", False)),
+                        "segmentation_id": sid})
+        else:
+            out.append({"name": b["name"], "source": "kubric_primitive",
+                        "license": "Apache-2.0", "segmentation_id": sid})
+    return out
+
+
 def annotate_pair(workdir: str, vdir: str, outroot: str,
                   release: str = "physloc_v0",
                   write_video: bool = True) -> Dict[str, object]:
@@ -753,10 +781,19 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         # full-length track, so the field never needs a special case.
         "camera": _camera_block(spec, spec_d, tier.num_frames),
         "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
-        "assets": [{"name": b["name"], "source": "kubric_primitive",
-                    "license": "Apache-2.0",
-                    "segmentation_id": b["segmentation_id"]}
-                   for b in spec_d["bodies"]],
+        # EVERY ASSET CARRIES ITS OWN LICENCE, which for two thirds of the
+        # dataset is Kubric's and for L3's actors is not. This block declared
+        # `kubric_primitive` / Apache-2.0 for every body in the scene, so a
+        # `barrier_pass` clip at L3 whose ball is a GSO scan
+        # (`BIA_Porcelain_Ramekin_With_Glazed_Rim...`, CC BY-SA 4.0) shipped
+        # claiming Apache-2.0 -- a share-alike asset attributed as permissive,
+        # which is the one way non-negotiable 7 can fail while the field is
+        # still populated and `validate` still passes.
+        #
+        # Read off the live `spec` rather than `spec_d`: `SceneSpec.to_dict`
+        # does not carry `asset_id`, and the spec is re-sampled above precisely
+        # so the scene's real geometry is available here.
+        "assets": _asset_block(spec, spec_d),
         # The label space, spelled out. A segmentation map is unusable without
         # the id -> name table beside it, and burying that in `assets` (which
         # exists to carry licences) made consumers reconstruct it.

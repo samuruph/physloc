@@ -160,11 +160,10 @@ def test_the_gso_level_actually_changes_the_objects(name):
     """The other half: a level whose objects are indistinguishable from the
     level below measures nothing.
 
-    L3 swaps every non-static actor and distractor for a scanned asset, sized
-    so its LONGEST AXIS matches what the primitive was drawn at -- MOVi's
-    normalisation (`movi_c_worker.py:167-170`). Without that the level would
-    change the scene's scale as well as its geometry, and two axes would move
-    at once.
+    L3 swaps every moving body for a scanned asset, sized so its LONGEST AXIS
+    matches what the primitive was drawn at -- MOVi's normalisation
+    (`movi_c_worker.py:167-170`). Without that the level would change the
+    scene's scale as well as its geometry, and two axes would move at once.
     """
     gso = [k for k, v in COMPLEXITY.items()
            if v.implemented and v.actor_assets == "gso"]
@@ -185,6 +184,7 @@ def test_the_gso_level_actually_changes_the_objects(name):
         assert 2 * max(after.extents) == pytest.approx(
             2 * max(before.extents), rel=0.02), (
             "%s: %s changed size across the level" % (name, after.name))
+
 
 # --------------------------------------------------------------------------
 # What a level must NOT change: what a body is standing on, and what a family
@@ -232,3 +232,40 @@ def test_the_backdrop_is_never_a_surface(name):
     same = [lv for lv in modes if COMPLEXITY[lv].actor_assets == base]
     assert len({modes[lv] for lv in same}) <= 1, (
         "%s: solidity breaks a different contact per level -- %s" % (name, modes))
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_scanned_objects_still_rest_on_what_they_rested_on(name):
+    """A swapped body keeps its UNDERSIDE, not its centre.
+
+    A scan is normalised by its longest axis, so its other half-extents shrink;
+    keeping the centre therefore lifts it off its support. Measured at seed 777:
+    `resting_table`'s mug started 0.18 m above the table and `collision`'s balls
+    0.034 m above the floor, so both clips opened with the actor settling --
+    which is what you see as an object dropping through the ground.
+
+    A body resting on nothing keeps its centre instead: it is in flight, or on
+    `pendulum_swing`'s fixed arm, where lowering it would lengthen the rod.
+    """
+    gso = [k for k, v in COMPLEXITY.items()
+           if v.implemented and v.actor_assets == "gso"]
+    if not gso:
+        pytest.skip("no GSO level is built")
+    sc = scenarios.get(name)
+    plain = sc.sample(SEED, TIERS["release"], "L0")
+    scanned = sc.sample(SEED, TIERS["release"], gso[0])
+    for before, after in zip(plain.bodies, scanned.bodies):
+        if after.kind != "gso":
+            continue
+        kept_bottom = abs((after.centre[2] - after.extents[2])
+                          - (before.centre[2] - before.extents[2])) < 1e-6
+        kept_centre = abs(after.centre[2] - before.centre[2]) < 1e-6
+        assert kept_bottom or kept_centre, (
+            "%s: %s is neither seated nor centred -- bottom %+.4f, centre %+.4f"
+            % (name, after.name,
+               (after.centre[2] - after.extents[2])
+               - (before.centre[2] - before.extents[2]),
+               after.centre[2] - before.centre[2]))
+        for axis in (0, 1):
+            assert abs(after.centre[axis] - before.centre[axis]) < 1e-6, (
+                "%s: %s moved sideways across the level" % (name, after.name))

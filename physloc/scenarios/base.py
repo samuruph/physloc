@@ -434,6 +434,27 @@ class BodySpec:
         return KIND_BOUNDS.get(self.kind, KIND_BOUNDS["sphere"])
 
     @property
+    def centre(self) -> Tuple[float, float, float]:
+        """The middle of the drawn body, which is not always `position`.
+
+        Kubric places an asset by its ORIGIN. For a primitive that is the
+        middle of the shape and the two agree; for a scanned mesh it is
+        wherever the scan was authored, a few millimetres off centre in
+        general. `_swap_in_gso` takes the difference out when it swaps a body
+        in, so the two agree again -- but only for a body it placed, and only
+        while nothing moves `position` afterwards. Anything measuring where the
+        body IS should ask for this.
+
+        The offset is in the body's own frame. Every body this applies to is
+        placed axis-aligned or nearly so, so it is added unrotated rather than
+        carrying a quaternion rotation for a millimetre.
+        """
+        lo, hi = self.mesh_bounds
+        return tuple(float(p) + float(s) * (float(l) + float(h)) / 2.0
+                     for p, s, l, h in zip(self.position, self.draw_scale,
+                                           lo, hi))
+
+    @property
     def extents(self) -> Tuple[float, float, float]:
         """Half-extents in the body's own frame, as DRAWN."""
         lo, hi = self.mesh_bounds
@@ -789,9 +810,47 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     happened to be. Without that the level would change the scene's SCALE as
     well as its geometry, and two axes would move at once.
 
-    Scenery is left alone: a floor, a ramp or a barrier is staging, and the
-    violation is defined against it. Swapping those for scanned meshes would
-    change what the physics means, not how hard it is to look at.
+    EVERY MOVING BODY, not only the culprit. This used to be `actor` and
+    `distractor` alone, which left `stack_topple` scanning one block and
+    stacking it on two plastic cubes, `pyramid_impact` dropping a scan onto
+    four primitive spheres, and `resting_table` putting a scanned mug beside
+    two primitive props. One scanned object in a scene of primitives is not the
+    level this is trying to build. So the rule is now about what the body IS,
+    not what it is for: if it moves, it is an object and it gets a scan.
+
+    STATIC STAGING IS STILL LEFT ALONE -- the floor, the ramp, the barrier, the
+    occluding screen, the table top, the pour's walls. Those are what the
+    violation is DEFINED AGAINST: `ramp_slide` means a body on a plane of known
+    tilt, `resting_table` means a surface at a known height, and a scanned mesh
+    in place of any of them changes what the clip claims rather than how hard
+    it is to look at. `collides=False` bodies are excluded for the same reason
+    they are excluded everywhere else: `pendulum_swing`'s rod is a drawn stick
+    whose pose is computed from the pivot and the bob, and there is no scan of
+    a rod that is 1.46 m long in this scene and some other length in the next.
+
+    A BODY THAT WAS RESTING ON SOMETHING IS RE-SEATED ON IT. A scan is
+    normalised by its LONGEST axis, so its other two half-extents shrink -- and
+    a scenario placed the primitive by its CENTRE, at a height chosen so the
+    primitive's bottom met a surface. Keeping the centre therefore lifts the
+    scan off whatever it was standing on: measured on `resting_table` at seed
+    777 the mug's half height fell from 0.238 to 0.092 and it started 0.18 m
+    above the table, dropping onto it during the clip; on `collision` both
+    balls started 0.034 m up and the left one toppled. You reported it as
+    objects passing through the floor at L3, and the frames show a body
+    settling through the opening second of clips that claim to be lawful.
+
+    The seat is looked up rather than assumed, because a stack CASCADES:
+    `stack_topple`'s middle block rests on the base, and if the base's scan is
+    shorter than the cube it replaced then re-seating the middle block on its
+    own old bottom leaves it hanging in the air above the new base. So each
+    body is re-seated on the CURRENT top of whatever it was resting on, and
+    bodies are walked in declaration order, which every stacking scenario
+    writes bottom-up.
+
+    A body that was resting on nothing keeps its CENTRE instead. It is in
+    flight, or hanging: `pendulum_swing`'s bob is a fixed arm from the pivot and
+    lowering it by the difference in half-height would lengthen the rod. Lateral
+    placement always keeps the centre, since nothing rests sideways on anything.
 
     Its own salted stream, so turning the level up cannot shift a physics draw
     a scenario already made.
@@ -816,8 +875,12 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     # The signature is what a viewer could tell apart before the swap, so the
     # grouping is exactly as fine as the distinction it has to preserve.
     picked = {}
+    seated = set()
+    was_placed = {id(b): (b.centre, b.extents) for b in spec.bodies}
     for body in spec.bodies:
-        if body.role not in ("actor", "distractor") or body.static:
+        if body.static or not body.collides:
+            continue
+        if body.role not in ("actor", "distractor", "prop"):
             continue
         # Keyed on what is VISIBLE, not on the material NAME. `fission`'s
         # understudy is drawn with its parent's colour but carries no material
@@ -840,12 +903,83 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
         # agree, and for what it is about to become they do not.
         target = 2.0 * float(max(body.extents))
         f = target / longest
+        # Read before the swap: where the primitive's middle was, and what it
+        # was standing on.
+        was = body.centre
+        seat = _seat_under(spec, body, was_placed, seated)
+        if seat is not None:
+            seated.add(id(body))
         body.kind = "gso"
         body.asset_id = aid
         body.scale = (f, f, f)
         body.render_scale = None
+        # Kubric places an asset by its ORIGIN, and a scan's origin is wherever
+        # the scan was authored -- a few millimetres off the middle of its own
+        # bounding box. `position` is therefore offset so that the body's
+        # `centre` lands where it is wanted, which is what every geometry
+        # helper on the host reads.
+        off = (lo + hi) / 2.0 * f
+        z = was[2] if seat is None else seat + float(body.extents[2])
+        body.position = (float(was[0]) - float(off[0]),
+                         float(was[1]) - float(off[1]),
+                         float(z) - float(off[2]))
     spec.notes["gso_assets"] = sorted(
         {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
+
+
+#: How far a body's underside may be from a surface and still count as sitting
+#: on it. Scenarios lift a body a hair off its support so the solver settles it
+#: into contact rather than starting it interpenetrating -- `_common.on_ramp`
+#: uses 0.02 m -- so the test has to be looser than that gap and tighter than
+#: any real hover.
+SEAT_TOLERANCE = 0.03
+
+
+def _seat_under(spec: SceneSpec, body: BodySpec, was, seated) -> Optional[float]:
+    """The top of the surface `body` is resting on, or None if it rests on none.
+
+    WHETHER it is resting is decided on the scene AS THE SCENARIO STAGED IT --
+    `was` maps each body to the `(centre, extents)` it was declared with. WHERE
+    to put it is read off the scene as it stands now, so a body earlier in
+    `spec.bodies` that has already been swapped contributes its new height and
+    a stack re-seats all the way up. Asking both questions of the current scene
+    breaks the block above: `stack_topple`'s middle block tests its own old
+    underside against the base's NEW top, which a shorter scan has already
+    lowered, so the pair reads as "not touching" and the block is left in the
+    air -- the exact failure the re-seating exists to prevent.
+
+    A CANDIDATE MUST ITSELF BE STANDING ON SOMETHING -- `seated` carries the
+    bodies already known to, starting from the statics. Without that chain,
+    `pour` re-seats grains on each other: the grains are released as a random
+    cloud inside a narrow column, so most of them have a neighbour within a few
+    centimetres directly below, and proximity alone reads that as support.
+    Nothing in a cloud is supporting anything; it is all in the air, on its way
+    down.
+
+    Lateral overlap is tested against the axis-aligned footprints, which is what
+    every other placement check in this file uses.
+    """
+    c0, e0 = was[id(body)]
+    bottom = float(c0[2]) - float(e0[2])
+    best = None
+    for other in spec.bodies:
+        if other is body or other.dormant or not other.collides:
+            continue
+        if other.role in ("backdrop", "shadow"):
+            continue
+        if not (other.static or id(other) in seated):
+            continue
+        oc0, oe0 = was[id(other)]
+        if abs(float(c0[0]) - float(oc0[0])) > float(e0[0]) + float(oe0[0]):
+            continue
+        if abs(float(c0[1]) - float(oc0[1])) > float(e0[1]) + float(oe0[1]):
+            continue
+        if abs(bottom - (float(oc0[2]) + float(oe0[2]))) > SEAT_TOLERANCE:
+            continue
+        top = float(other.centre[2]) + float(other.extents[2])
+        if best is None or top > best:
+            best = top
+    return best
 
 
 def _add_backdrop(spec: SceneSpec) -> None:

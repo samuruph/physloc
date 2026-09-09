@@ -22,6 +22,7 @@ renders/
 out/
 out_old/
 out_old1/
+out_review_old/
 clips/
 physviol_v0/
 *.npz

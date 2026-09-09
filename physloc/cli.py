@@ -427,6 +427,105 @@ def cmd_generate(a) -> int:
     if len(levels) > 1:
         print("-- ladder: " + ", ".join("%s x%d" % lv for lv in levels))
 
+    # ----------------------------------------------------------------- resume
+    # A RUN THAT DIES AT 80% MUST NOT START OVER. A release run is days, and
+    # until now `generate` had no memory at all: every invocation rebuilt every
+    # clip, so an interrupted run -- a spot reclaim, a full disk, a Ctrl-C --
+    # threw away everything it had already paid for.
+    #
+    # The ledger is one small json per JOB, written only after the job has
+    # fully landed (worker ok, annotation done, overlays built). `--resume`
+    # replays a job from its ledger entry instead of running it, and does so
+    # ONLY when the recorded request matches the current one exactly. That last
+    # part is what makes it safe to leave on: change the family list, the
+    # severity ladder, the tier or any render dial and the entry no longer
+    # matches, so the job is rebuilt rather than silently reused at the old
+    # settings.
+    #
+    # It is keyed by the job's identity BEFORE it runs -- level, scenario,
+    # seed, variant -- because the clip directory is named for the sampled
+    # CONDITION, which is not known until the scene has been built.
+    release_name = os.path.basename(os.path.normpath(rel)) or "physloc_v0"
+    ledger_dir = os.path.join(rel, ".jobs")
+
+    def _ledger_request(job):
+        """What the current invocation is asking of this job.
+
+        Every field here changes the OUTPUT. A dial that changes pixels but is
+        absent from this dict is a resume bug: the run would keep clips made
+        at the old setting and report them as new ones.
+        """
+        seed, scenario, families, variant, level, n_v = job
+        return {"scenario": scenario, "seed": seed, "level": level,
+                "variant": variant, "n_variants": n_v,
+                "families": sorted(families), "severity": a.severity,
+                "tier": tier, "window": a.window, "release": release_name,
+                "overlay": not a.no_overlay,
+                "dials": {"resolution": a.resolution, "fps": a.fps,
+                          "frames": a.frames, "spp": a.spp},
+                # The render backend is part of the request: a clip denoised
+                # with NLM and one denoised with OIDN are not interchangeable,
+                # and resuming across that change would ship a mixed release.
+                "backend": {k: os.environ.get(k) for k in
+                            ("PHYSLOC_ADAPTIVE", "PHYSLOC_DENOISER",
+                             "PHYSLOC_GPU", "PHYSLOC_IMAGE")}}
+
+    def _ledger_path(job):
+        seed, scenario, _f, variant, level, _n = job
+        return os.path.join(ledger_dir,
+                            "%s_%s_%d_v%d.json" % (level, scenario, seed,
+                                                   variant))
+
+    def _ledger_load(job):
+        """The recorded outcome, or None if absent, stale or unreadable."""
+        path = _ledger_path(job)
+        try:
+            with open(path) as fh:
+                entry = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if entry.get("request") != _ledger_request(job):
+            return None
+        # A ledger entry is a claim about files. Verify the claim rather than
+        # trusting it -- a half-deleted outdir, an rsync that dropped a file,
+        # a disk that filled mid-write all leave an entry pointing at nothing,
+        # and resuming onto those produces a release with holes in it that
+        # `validate` finds days later.
+        for clip in entry.get("clips", []):
+            if not os.path.exists(os.path.join(clip, "meta.json")):
+                return None
+        return entry.get("outcome")
+
+    def _ledger_save(job, outcome):
+        if outcome.get("rc") != 0:
+            return                      # only completed work is resumable
+        clips = [r["clips"]["invalid"] for r in outcome.get("results", [])
+                 if isinstance(r.get("clips"), dict) and r["clips"].get("invalid")]
+        os.makedirs(ledger_dir, exist_ok=True)
+        path = _ledger_path(job)
+        tmp = path + ".tmp"
+        # Written atomically: a ledger truncated by a kill would be read back
+        # as "no entry" at best and as a corrupt one at worst.
+        with open(tmp, "w") as fh:
+            json.dump({"request": _ledger_request(job), "clips": clips,
+                       "outcome": outcome}, fh, default=str)
+        os.replace(tmp, path)
+
+    # Predicted cost per job, in job order, so the ETA is right in proportion
+    # from the first few jobs rather than only near the end. See
+    # physloc/progress.py -- a ladder emits its levels in blocks and they
+    # differ by ~2.6x, so an unweighted rate promises an ending it cannot make.
+    from .progress import Profile, Progress, job_weight
+    from .scenarios.base import COMPLEXITY
+    from .taxonomy import SEVERITY_BINS
+
+    n_bins = len(SEVERITY_BINS) if a.severity == "all" else len(
+        [x for x in str(a.severity).split(",") if x])
+    weights = [job_weight(level, tier, SECONDS_PER_CLIP, COMPLEXITY,
+                          n_families=len(families), n_bins=n_bins)
+               for _seed, _scen, families, _v, level, _n in jobs]
+    prof = Profile()
+
     def run_one(job):
         seed, scenario, families, variant, level, n_v = job
         # A level of its own in the work tree when the ladder is walked. Not
@@ -434,14 +533,25 @@ def cmd_generate(a) -> int:
         # the scratch paths cannot collide -- but a ladder run's scratch is
         # easier to read, and to delete a level from, when it is grouped.
         here = work if len(levels) == 1 else os.path.join(work, level)
-        rc, info = _run_worker(scenario, seed, tier, ",".join(families),
-                               a.severity, here, complexity=level,
-                               window=a.window, variant=variant,
-                               n_variants=n_v, params_path=params_path,
-                               dials={"resolution": a.resolution, "fps": a.fps,
-                                      "frames": a.frames, "spp": a.spp})
+        with prof.timer("worker"):
+            rc, info = _run_worker(scenario, seed, tier, ",".join(families),
+                                   a.severity, here, complexity=level,
+                                   window=a.window, variant=variant,
+                                   n_variants=n_v, params_path=params_path,
+                                   dials={"resolution": a.resolution,
+                                          "fps": a.fps,
+                                          "frames": a.frames, "spp": a.spp})
+        # The worker reports what Blender itself spent, per render. Recording
+        # it beside the container round trip is what separates "the renderer is
+        # slow" from "everything around the renderer is slow" -- and the
+        # measured answer decides whether a GPU image is worth building.
+        render = info.get("render_seconds") or {}
+        if isinstance(render, dict):
+            prof.add("render", sum(float(v) for v in render.values()),
+                     n=max(1, len(render)))
         if rc != 0:
             return {"scenario": scenario, "seed": seed, "level": level,
+                    "variant": variant,
                     "rc": rc, "info": info, "results": [], "bad": []}
         # A SKIP IS NOT A FAILURE. `colour_shift` cannot act on a scanned
         # asset, so at the GSO level it declines -- and reporting that as a
@@ -450,25 +560,42 @@ def cmd_generate(a) -> int:
                if not x.get("ok") and not x.get("skipped")]
         skipped = [x for x in info.get("variants", []) if x.get("skipped")]
         produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
-        results = list(_annotate(info["outdir"], rel,
-                                 overlay=not a.no_overlay, only=produced))
-        return {"scenario": scenario, "seed": seed, "level": level, "rc": 0,
+        with prof.timer("annotate+overlay" if not a.no_overlay else "annotate"):
+            results = list(_annotate(info["outdir"], rel,
+                                     overlay=not a.no_overlay, only=produced))
+        return {"scenario": scenario, "seed": seed, "level": level,
+                "variant": variant, "rc": 0,
                 "info": info, "results": results, "bad": bad,
                 "skipped": skipped}
 
-    done_count = {"n": 0}
+    # A progress line as each job lands. The parallel path used to collect
+    # every outcome before printing anything, so a twenty-minute run showed
+    # nothing at all until it finished. The ordered results still print
+    # afterwards, so the transcript stays identical at any worker count.
+    #
+    # RETRIES PUSH THE TOTAL UP. A declined cell is rebuilt on a fresh seed, so
+    # the job count is not known until the run is over; `bump` widens the bar
+    # rather than letting it sit at 100% while work continues.
+    progress = Progress(len(jobs), weights=weights,
+                        desc="generate %s" % (a.complexity or "L0"))
 
     def run_and_report(job, total=None):
+        if getattr(a, "resume", False):
+            cached = _ledger_load(job)
+            if cached is not None:
+                if total and total > progress.total:
+                    progress.bump(total - progress.total)
+                progress.skip("%-16s seed=%-6d %-3s"
+                              % (cached["scenario"], cached["seed"],
+                                 cached.get("level", "")))
+                return cached
         out = run_one(job)
-        done_count["n"] += 1
-        # A progress line as each job lands. The parallel path used to collect
-        # every outcome before printing anything, so a twenty-minute run showed
-        # nothing at all until it finished. The ordered results still print
-        # afterwards, so the transcript stays identical at any worker count.
-        print("  [%d/%d] %-16s seed=%-6d %-3s %s"
-              % (done_count["n"], total or len(jobs), out["scenario"],
-                 out["seed"], out.get("level", ""),
-                 "ok" if out["rc"] == 0 else "FAILED"), flush=True)
+        _ledger_save(job, out)
+        if total and total > progress.total:
+            progress.bump(total - progress.total)
+        progress.update("%-16s seed=%-6d %-3s"
+                        % (out["scenario"], out["seed"], out.get("level", "")),
+                        ok=out["rc"] == 0)
         return out
 
     workers = max(1, int(getattr(a, "workers", 1) or 1))
@@ -500,33 +627,60 @@ def cmd_generate(a) -> int:
     # reason; the generator had no equivalent, so the tests said the cell was
     # fine and the run produced nothing. Retry seeds start past the variant
     # block so they can never collide with a seed the main pass already used.
+    #
+    # A DECLINE IS IDENTIFIED BY THE CLIP IT HAPPENED ON, not by the cell
+    # alone: one ladder run offers the same cell a scene at every level, and
+    # the same level several variants, so `toss x angular_momentum` can decline
+    # at L0/v3 while standing at L2/v0. A retry therefore carries the declining
+    # clip's LEVEL and VARIANT INDEX forward and changes only the seed -- the
+    # variant index is what picks the condition (`scenarios.base.condition_for`
+    # reads it together with the level's variant count), so a retry that
+    # renumbered it would quietly hand the rebuilt cell a different camera
+    # treatment or a different amount of clutter than the clip it replaces.
+    n_at = dict(levels)
+    level_i = {lv: i for i, (lv, _) in enumerate(levels)}
     declined = sorted({
-        (o["scenario"], b.get("family"))
+        (o["level"], o["variant"], o["scenario"], b.get("family"))
         for o in outcomes
         for b in o["bad"] if b.get("error") == NO_PLAN})
     for attempt in range(RETRY_SEEDS):
         if not declined:
             break
-        retry_jobs, by_scen = [], {}
-        for scenario, family in declined:
-            by_scen.setdefault(scenario, []).append(family)
-        seed = a.seed + a.variants + attempt
-        # Retries reuse the declining cell's variant index, so a cell rebuilt
-        # on another seed keeps the camera treatment its variant called for.
-        retry_jobs = [(seed, scen, fams, a.variants + attempt)
-                      for scen, fams in sorted(by_scen.items())]
-        print("  retrying %d declined cell(s) at seed %d"
-              % (len(declined), seed), flush=True)
+        by_clip = {}
+        for level, variant, scenario, family in declined:
+            by_clip.setdefault((level, variant, scenario), []).append(family)
+        retry_jobs = []
+        for (level, variant, scenario), fams in sorted(by_clip.items()):
+            # A BLOCK PER ATTEMPT, one seed per variant inside it. Past the
+            # level's own variant block and still inside its stride, so a retry
+            # seed can no more collide with another level than a main-pass one
+            # can -- and distinct PER VARIANT, because a clip is written to
+            # `<level>/<scenario>/<seed>_<condition>/` and several variants of
+            # one level carry the same condition. One seed for the whole level
+            # would have had the six `standard` retries of an L0 cell overwrite
+            # each other in turn, leaving one clip where six were reported.
+            seed = (a.seed + a.variants * (attempt + 1) + variant
+                    + LEVEL_SEED_STRIDE * level_i.get(level, 0))
+            retry_jobs.append((seed, scenario, sorted(fams), variant, level,
+                               n_at.get(level)))
+        print("  retrying %d declined cell(s) on %d clip(s), attempt %d"
+              % (len(declined), len(retry_jobs), attempt + 1), flush=True)
         total = len(jobs) + len(retry_jobs)
         for job in retry_jobs:
             out = run_and_report(job, total=total)
             outcomes.append(out)
             if out["rc"] != 0:
                 continue
-            still = {(out["scenario"], b.get("family"))
+            clip = (out["level"], out["variant"], out["scenario"])
+            still = {clip + (b.get("family"),)
                      for b in out["bad"] if b.get("error") == NO_PLAN}
             declined = [c for c in declined
-                        if c[0] != out["scenario"] or c in still]
+                        if c[:3] != clip or c in still]
+
+    # The bar owns the terminal until here; the ordered summary below must not
+    # be interleaved with a redraw, so close it before anything else prints.
+    progress.close()
+    prof.report(workers=workers)
 
     # Reported in job order, not completion order, so two runs at different
     # worker counts produce the same transcript.
@@ -984,6 +1138,14 @@ def _build(suppress: bool = False):
     p.add_argument("--workdir")
     p.add_argument("--outdir")
     p.add_argument("--no-overlay", action="store_true")
+    p.add_argument("--resume", action="store_true",
+                   help="skip jobs this outdir has already completed. Safe to "
+                        "leave on: a job is reused only when the RECORDED "
+                        "request -- families, severity, tier, dials, render "
+                        "backend, overlay -- matches the current one exactly "
+                        "and every clip it claims still has a meta.json. "
+                        "Change any of those and the job is rebuilt. Nothing "
+                        "is ever deleted; a resume only declines to redo work.")
     p.set_defaults(fn=cmd_generate)
 
     p = add_parser("annotate", help="host-side annotation of a worker dir")

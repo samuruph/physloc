@@ -56,7 +56,8 @@ def main() -> int:
                          "which is how to price a crowded clip against a "
                          "standard one, since `DISTRACTOR_COST` scales every "
                          "estimate by the share of clips that carry extras.")
-    a = ap.parse_args()
+    from physloc.render.worker import _blender_argv
+    a = ap.parse_args(_blender_argv())
 
     # ONE MEASUREMENT PER PROCESS, on purpose. `kb.simulator.PyBullet` connects
     # to a physics server on construction and the connection does not survive a
@@ -101,10 +102,17 @@ def main() -> int:
     renderer.render()
     render = time.perf_counter() - t0
 
+    # THE BACKEND IS PART OF THE MEASUREMENT. A per-frame number means
+    # nothing without the denoiser, the sampler and the device that produced
+    # it -- and the whole point of these dials is to compare those, so a line
+    # that omitted them would be unattributable an hour after it scrolled past.
+    backend = spec.notes.get("render_backend", {})
     print("COST %s floor=%-6s res=%d spp=%d cond=%-13s extras=%2d "
-          "build=%.2f per_frame=%.3f"
+          "build=%.2f per_frame=%.3f adaptive=%s denoiser=%s device=%s"
           % (a.complexity, a.floor, a.resolution, a.spp,
-             spec.condition, extras, build, render / max(1, a.frames)))
+             spec.condition, extras, build, render / max(1, a.frames),
+             backend.get("adaptive"), backend.get("denoiser"),
+             backend.get("device")))
     return 0
 
 

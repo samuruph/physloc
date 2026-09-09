@@ -57,6 +57,117 @@ GSO = "gs://kubric-public/assets/GSO/GSO.json"
 HDRI = "gs://kubric-public/assets/HDRI_haven/HDRI_haven.json"
 
 
+
+def _blender_argv():
+    """The script's own flags, whichever interpreter is hosting it.
+
+    The pinned image runs `python3 worker.py --scenario drop`, so argv is
+    already ours. The GPU image (docker/Dockerfile.gpu) has no importable `bpy`
+    outside Blender, so it runs `blender --background --python worker.py --
+    --scenario drop` instead, and argv is Blender's own command line with ours
+    appended after a bare `--`. Returning the tail keeps one argparse for both.
+    """
+    if "--" in sys.argv:
+        return sys.argv[sys.argv.index("--") + 1:]
+    return sys.argv[1:]
+
+
+# --------------------------------------------------------------------------
+# Render backend dials
+# --------------------------------------------------------------------------
+#: Cycles settings that change HOW a frame is computed but not WHAT it depicts.
+#: They are environment variables rather than tier fields or CLI flags because
+#: a tier says how big and how long and nothing else, and because the host has
+#: to be able to set them for a whole run without every call site growing an
+#: argument. `docker/kubric.sh` forwards each one with a bare `--env NAME`, so
+#: an unset dial stays unset inside the container rather than becoming "".
+#:
+#: EVERY DEFAULT IS TODAY'S BEHAVIOUR. Nothing here changes a render until it
+#: is asked for, so a run started before this existed and one started after
+#: produce the same pixels.
+#:
+#: WHY THESE THREE. `physloc/render/probe_cost.py` fits `T = a + b*spp` and
+#: finds only ~26% of a frame is sampling, which was read as "there is no room
+#: to speed a render up". It is really "the room is not in SAMPLING":
+#:
+#:   * PHYSLOC_ADAPTIVE -- Kubric constructs `Blender(adaptive_sampling=False)`
+#:     and never revisits it. These scenes are the case adaptive sampling is
+#:     for: a flat slab and a handful of primitives, most pixels converged long
+#:     before the sample budget runs out. Set to a float to use it as the noise
+#:     threshold, or to `1` for Cycles' own default.
+#:   * PHYSLOC_DENOISER -- Kubric hardcodes `denoiser = "NLM"` in its
+#:     `use_denoising` setter. NLM is the legacy CPU denoiser 2.93 keeps for
+#:     compatibility; OPENIMAGEDENOISE is the one that replaced it. `off`
+#:     disables denoising entirely, which is how you find out what it costs.
+#:   * PHYSLOC_GPU -- the pinned image cannot honour this (its Blender is the
+#:     CPU-only `bpy` wheel: no OPTIX in `compute_device_type`, and CUDA
+#:     enumerates the host CPU and nothing else). It is here for the GPU image
+#:     in `docker/Dockerfile.gpu`, and it FAILS LOUDLY rather than falling back
+#:     to CPU, because a GPU run that silently rendered on the CPU would be
+#:     reported as a GPU measurement.
+def _render_backend(renderer) -> dict:
+    """Apply the env-var render dials to a built renderer. Returns what it did.
+
+    Called once per scene, straight after `build_scene`. The return value goes
+    into `plan.json` so a clip records the backend it was rendered on -- two
+    clips that differ in denoiser are not a twin pair, and without this the
+    only evidence of that is the wall clock.
+    """
+    cycles = bpy.context.scene.cycles
+    chosen = {"adaptive": False, "denoiser": "NLM", "device": "CPU"}
+
+    adaptive = os.environ.get("PHYSLOC_ADAPTIVE", "").strip()
+    if adaptive:
+        cycles.use_adaptive_sampling = True
+        # `1` means "on, at Cycles' own threshold"; anything else is the
+        # threshold itself. 0.0 is Cycles' sentinel for "derive it from the
+        # sample count", which is what we want when no number is given.
+        thr = 0.0 if adaptive in ("1", "true", "yes", "on") else float(adaptive)
+        cycles.adaptive_threshold = thr
+        chosen["adaptive"] = thr if thr else True
+
+    denoiser = os.environ.get("PHYSLOC_DENOISER", "").strip().upper()
+    if denoiser:
+        if denoiser in ("OFF", "NONE", "0"):
+            cycles.use_denoising = False
+            chosen["denoiser"] = "off"
+        else:
+            # Kubric's `use_denoising` setter stamps NLM every time it is set,
+            # so the denoiser has to be chosen AFTER it, never before.
+            cycles.use_denoising = True
+            cycles.denoiser = denoiser
+            chosen["denoiser"] = denoiser
+    elif cycles.use_denoising:
+        chosen["denoiser"] = cycles.denoiser
+
+    if os.environ.get("PHYSLOC_GPU", "").strip() not in ("", "0", "false"):
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+        wanted = os.environ.get("PHYSLOC_GPU_BACKEND", "OPTIX").strip().upper()
+        available = [e.identifier
+                     for e in prefs.bl_rna.properties["compute_device_type"].enum_items]
+        if wanted not in available:
+            raise RuntimeError(
+                "PHYSLOC_GPU asked for %s but this Blender (%s) only offers %s "
+                "-- the pinned image is the CPU-only bpy wheel; use "
+                "docker/Dockerfile.gpu" % (wanted, bpy.app.version_string, available))
+        prefs.compute_device_type = wanted
+        gpus = [d for d in prefs.get_devices_for_type(wanted) if d.type != "CPU"]
+        if not gpus:
+            raise RuntimeError(
+                "PHYSLOC_GPU asked for %s but Cycles enumerated no %s device "
+                "(did docker run get --gpus all?)" % (wanted, wanted))
+        for d in prefs.devices:
+            d.use = (d.type != "CPU")
+        cycles.device = "GPU"
+        # 2.93 is pre-Cycles-X and still tile-based: 64x64 tiles keep a GPU
+        # mostly idle in scheduling overhead, where a CPU wants them small.
+        bpy.context.scene.render.tile_x = 256
+        bpy.context.scene.render.tile_y = 256
+        chosen["device"] = "%s:%s" % (wanted, ",".join(d.name for d in gpus))
+
+    return chosen
+
+
 def build_scene(spec: SceneSpec, scratch):
     scene = kb.Scene(
         resolution=(spec.tier.resolution, spec.tier.resolution),
@@ -68,6 +179,7 @@ def build_scene(spec: SceneSpec, scratch):
     renderer = Blender(scene, scratch, use_denoising=True,
                        samples_per_pixel=spec.tier.samples_per_pixel,
                        background_transparency=False)
+    spec.notes["render_backend"] = _render_backend(renderer)
     scene.background = kb.Color(*spec.background_color)
     scene.ambient_illumination = kb.Color(0.04, 0.04, 0.05)
 
@@ -682,7 +794,7 @@ def main() -> int:
     ap.add_argument("--frames", type=int)
     ap.add_argument("--spp", type=int)
     ap.add_argument("--outdir", default="out/phase0")
-    a = ap.parse_args()
+    a = ap.parse_args(_blender_argv())
 
     tier = scenarios.TIERS[a.tier].override(
         resolution=a.resolution, fps=a.fps, num_frames=a.frames,

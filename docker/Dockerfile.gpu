@@ -1,0 +1,120 @@
+# A GPU-capable Kubric image. SEPARATE FROM THE PIN ON PURPOSE.
+#
+# `docker/IMAGE_DIGEST` stays exactly as it is and every existing run keeps
+# rendering on it. This file exists to answer one question the pinned image
+# cannot even be asked:
+#
+#     the pinned image's Blender is the CPU-only `bpy` pip wheel --
+#     `compute_device_type` offers ('NONE', 'CUDA', 'OPENCL') with no OPTIX,
+#     CUDA enumerates the host EPYC and no GPU at all, and the only Cycles
+#     kernels shipped are .cu SOURCE. There is no flag that reaches the card.
+#
+# so the L40S on this box is unreachable until Blender is replaced. Which means
+# a GPU trial is NOT a dial -- it is a different Blender, and therefore a
+# different renderer, and therefore different pixels. Read the warning below
+# before generating anything you intend to keep.
+#
+# ---------------------------------------------------------------------------
+# WHAT CHANGES, AND WHY THAT MATTERS
+# ---------------------------------------------------------------------------
+# Blender 3.6 is not 2.93 with CUDA bolted on. Cycles X replaced the integrator
+# wholesale in 3.0: different sampling, different denoiser defaults, different
+# light handling. A clip rendered here will NOT be pixel-identical to one from
+# the pinned image, at any spp.
+#
+# That does not break non-negotiable #1. Prefix identity is a property WITHIN a
+# twin pair -- valid and invalid rendered by the same process, same scene, same
+# seed -- and it holds here exactly as it holds there. What it breaks is
+# comparability ACROSS images. So:
+#
+#   * do not mix clips from the two images inside one release;
+#   * `plan.json` records the backend (`notes.render_backend`) so a clip always
+#     says what rendered it;
+#   * nothing is published yet, so re-pinning is cheap TODAY and expensive the
+#     day after the first release ships.
+#
+# ---------------------------------------------------------------------------
+# BUILD AND USE
+# ---------------------------------------------------------------------------
+#     docker build -f docker/Dockerfile.gpu -t physloc-kubric:gpu .
+#
+#     PHYSLOC_IMAGE=physloc-kubric:gpu PHYSLOC_GPU=1 \
+#       bash docker/kubric.sh physloc/render/probe_cost.py \
+#            --complexity L0 --resolution 512 --frames 4
+#
+# `PHYSLOC_GPU=1` makes docker/kubric.sh add `--gpus all` and makes the worker
+# select the card. The worker FAILS LOUDLY if no GPU device is enumerated,
+# rather than quietly rendering on the CPU and being reported as a GPU number.
+#
+# ---------------------------------------------------------------------------
+# THE RISK THIS BUILD IS ACTUALLY TESTING
+# ---------------------------------------------------------------------------
+# Kubric 2022.4.1 is written against the Blender 2.93 Python API. Some of it
+# will not survive 3.6 -- `cycles.denoiser = "NLM"` in the `use_denoising`
+# setter is already gone in Cycles X, and the renderer's EXR layer names moved.
+# Expect to patch kubric, and expect that patch to be the real work. This
+# Dockerfile gets you to the point where you can find out what breaks; it is
+# not a claim that nothing does.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.10 python3-pip python3.10-dev \
+        curl xz-utils ca-certificates git \
+        libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libsm6 \
+        libegl1 libglu1-mesa libxkbcommon0 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Blender 3.6 LTS: the last line that still resembles the API kubric was
+# written against, and new enough that its OptiX kernels know about Ada
+# (sm_89), which is what an L40S is. 2.93's do not -- that is the other half
+# of why the pinned image cannot be made to work with a flag.
+ARG BLENDER_VERSION=3.6.14
+RUN curl -fsSL "https://download.blender.org/release/Blender3.6/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+      -o /tmp/blender.tar.xz \
+ && mkdir -p /opt/blender \
+ && tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1 \
+ && rm /tmp/blender.tar.xz
+ENV PATH="/opt/blender:${PATH}"
+
+# Kubric imports `bpy` as a module, but a Blender RELEASE ships bpy only inside
+# its own bundled interpreter. Running our worker under Blender's python is the
+# way that costs no build: `blender --background --python script.py`.
+# `docker/kubric.sh` calls `python3 <script>`, so `python3` here IS that
+# interpreter, wrapped to keep the calling convention identical.
+RUN BPY=/opt/blender/3.6/python/bin/python3.10 \
+ && "$BPY" -m ensurepip --upgrade \
+ && "$BPY" -m pip install --no-cache-dir \
+      "numpy<2" scipy pybullet trimesh OpenEXR imageio "Pillow<11" \
+      tensorflow-datasets absl-py etils munch pandas \
+ && "$BPY" -m pip install --no-cache-dir --no-deps kubric==2022.4.1
+
+# The shim: `python3 anything.py --flags` runs inside Blender, where `bpy` is
+# importable, with argv after `--` so Blender does not eat our flags.
+# It must be named `python3` and sit ahead of /usr/bin on PATH, because
+# docker/kubric.sh invokes `python3 <script> <args>` and that calling
+# convention is shared with the pinned image. A script run this way sees its
+# own flags in sys.argv after the `--`, which is why worker.py and probe_cost
+# both parse with argparse against a cleaned argv (see _blender_argv).
+RUN mkdir -p /opt/shim && printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'set -euo pipefail' \
+      'script="$1"; shift' \
+      'exec blender --background --factory-startup --python-exit-code 1 \' \
+      '  --python "$script" -- "$@"' \
+    > /opt/shim/python3 \
+ && chmod +x /opt/shim/python3
+ENV PATH="/opt/shim:${PATH}"
+
+# OptiX needs no SDK at runtime -- the driver provides it -- but Cycles looks
+# for the CUDA toolkit when it has to JIT a kernel for an unknown arch.
+ENV CUDA_HOME=/usr/local/cuda
+ENV CYCLES_OPTIX_TEST_DEVICE=0
+
+WORKDIR /kubric
+ENV PYTHONPATH=/kubric
+
+# Same entry shape as the pinned image, so docker/kubric.sh needs no special
+# case: it calls `python3 <script> <args>` either way.
+ENTRYPOINT []

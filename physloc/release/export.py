@@ -408,7 +408,7 @@ OVERLAY_IN_SPLITS = ("debug",)
 #: rather than dropped, so adding a field to `_index_row` cannot silently lose
 #: it from the published index.
 INDEX_COLUMNS = (
-    "clip_uid", "overlay", "rgb",
+    "clip_uid", "rgb", "overlay",
     "label", "split", "scenario", "family", "domain", "medium",
     "severity_bin", "magnitude", "peak_severity",
     "t_event_frame", "violation_windows", "observability_lag",

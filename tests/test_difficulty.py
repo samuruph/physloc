@@ -199,3 +199,30 @@ def test_footprint_and_occlusion_come_from_the_arrays_when_given():
     assert again["footprint"] == pytest.approx(got["footprint"])
     assert again["occlusion"] == pytest.approx(got["occlusion"])
 
+
+def test_the_cuts_are_reachable_from_a_config():
+    """`configs/common.yaml` owns the thresholds, and the whole table moves.
+
+    Rebuilt as a table rather than field by field, so a factor cannot end up
+    with one threshold from the config and the other from the shipped default
+    -- which would silently invert `easier` on that factor and put the easy
+    band on the wrong side of the moderate one.
+    """
+    from physloc import params
+
+    meta = _meta(n_actors=4)
+    try:
+        params.apply()
+        assert D.assess(meta)["factors"]["clutter"]["level"] == "moderate"
+
+        params.apply({"difficulty": {"clutter": [4, 12]}})
+        assert D.assess(meta)["factors"]["clutter"]["level"] == "easy"
+        assert D.BY_NAME["clutter"].easy == 4
+        # Untouched factors keep BOTH of their shipped values.
+        assert (D.BY_NAME["severity"].easy,
+                D.BY_NAME["severity"].moderate) == (0.90, 0.40)
+    finally:
+        params.apply()
+
+    with pytest.raises(KeyError):
+        params.resolved({"difficulty": {"nonesuch": [1, 2]}})

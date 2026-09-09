@@ -82,6 +82,34 @@ DEFAULTS: Dict[str, Any] = {
         "travel": [0.10, 0.22],
         "dolly": [0.06, 0.12],
     },
+    "difficulty": {
+        # THE EASY / MODERATE / HARD CUTS, two per factor, in the order
+        # [easy, moderate] and always stated in the easier-is-better direction
+        # -- so `footprint` reads "easy at or above 0.05" and `occlusion`
+        # "easy at or below 0.05". Which direction that is belongs to the
+        # factor, not to the config, and lives in `annotate.difficulty`.
+        #
+        # THESE ARE FROZEN ONCE A RELEASE IS PUBLISHED. A benchmark whose
+        # difficulty labels move between releases cannot be compared with
+        # itself. They are editable because a future dataset with a different
+        # geometry or a different window policy will want different cuts --
+        # and because the resolved values ride in every `meta.json`, so a clip
+        # always says what it was labelled under. Changing them is a new
+        # release, not a bug fix.
+        #
+        # Four were fitted on the 431 invalid clips of the review corpus and
+        # three were chosen from what the quantity means; which is which is
+        # recorded per factor in `annotate/difficulty.py`.
+        # `scripts/fit_difficulty.py` prints the tertiles of a corpus so a
+        # refit starts from data rather than from taste.
+        "footprint": [0.05, 0.012],
+        "occlusion": [0.05, 0.5],
+        "duration": [0.35, 0.15],
+        "severity": [0.90, 0.40],
+        "clutter": [2, 6],
+        "culprits": [1, 3],
+        "camera": [0.02, 0.12],
+    },
     "materials": {
         # Divides every density. Anchors a median wooden actor near 1 kg, which
         # is the mass every body carried before materials existed -- so a
@@ -176,6 +204,17 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     C.DISTRACTOR_AIRBORNE = float(o["distractor_airborne"])
     C.KEEP_CLEAR_RADII = float(o["keep_clear_radii"])
     C.SIGHTLINE_RADII = float(o["sightline_radii"])
+
+    # The difficulty cuts, rebuilt as a whole table so a factor cannot end up
+    # with one threshold from the config and one from the shipped default.
+    from .annotate import difficulty as D
+
+    cuts = v["difficulty"]
+    D.FACTORS = tuple(
+        _replace(f, easy=float(cuts[f.name][0]), moderate=float(cuts[f.name][1]))
+        if f.name in cuts else f
+        for f in D.FACTORS)
+    D.BY_NAME = {f.name: f for f in D.FACTORS}
 
     c = v["camera"]
     B.CAMERA_MOTION_KINDS = tuple(c["kinds"])

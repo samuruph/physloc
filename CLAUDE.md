@@ -82,6 +82,17 @@ publication. Nothing has been published yet.
   the FLOOR on `barrier_pass`, `collision`, `drop` and `stack_topple` where L0 and L1
   correctly sent them through a wall or another body. Role is about what a body MEANS;
   `collides` is about what it TOUCHES, and the geometry searches want the second.
+- **Objects cast a shadow at EVERY level, from the same key light.** An HDRI was allowed to
+  light L2 and L3 on its own, on the reasoning that an environment map is a complete rig.
+  It is, for illumination, and it is not for contact shadow: most of HDRI Haven is overcast
+  or indoor. Measured on `stack_topple` by differencing a render against the same render
+  with the actors removed — **72/255 of ground darkening at L0, under 8 at L2** — and the
+  blocks read as pasted onto the street rather than standing on it. `_common.lights` now
+  returns the sun everywhere. A key light whose direction need not agree with the
+  environment's own is a small realism cost; grounding is not a realism question, because
+  `support` hovers a body a few centimetres off a surface and a clip with no contact shadow
+  does not show where the surface was. **A level may change how a scene is lit and may not
+  change whether the physics is legible in it.**
 - **The README's tables are GENERATED** by `physloc/reference.py`, from `taxonomy.py` and
   `scenarios/base.py`, and the HuggingFace card calls the same functions. Run
   `python -m physloc.reference --write` after changing any count; `tests/test_reference.py`

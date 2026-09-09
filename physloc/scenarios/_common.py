@@ -118,7 +118,27 @@ def backdrop(cx: Complexity) -> Optional[BodySpec]:
 
 def lights(cx: Complexity, look_at=(0.0, 0.0, 0.6),
            scale: float = 1.0) -> List[LightSpec]:
-    """An HDRI environment lights the scene on its own; only L0 needs a sun.
+    """THE SAME KEY LIGHT AT EVERY LEVEL. The environment is what changes.
+
+    An HDRI was allowed to light the scene on its own, on the reasoning that an
+    environment map is a complete lighting rig. It is -- for illumination. It is
+    not for CONTACT SHADOW, because most of HDRI Haven is overcast, indoor or
+    shaded, and a soft dome throws nothing a 128 px frame can resolve. Measured
+    on `stack_topple`, seed 777, by differencing a render against the same
+    render with the actors removed: at L0 the slab under the stack darkened by
+    up to 72/255, and at L2 with the dome and no sun by under 8 -- invisible in
+    the clip, and the blocks read as pasted onto the street rather than
+    standing on it. Adding this sun back put a 188/255 cast shadow on the dome,
+    which does receive one perfectly well once something directional is there
+    to cast it.
+
+    That matters more here than the small realism cost of a key light whose
+    direction need not agree with the environment's own. **The complexity
+    ladder is scene realism and nothing else**, so a level may change how a
+    scene is lit and may not change whether the physics is legible in it.
+    Grounding is physics: `support` hovers a body a few centimetres off a
+    surface, and without a contact shadow there is nothing in the frame that
+    says where the surface was.
 
     `scale` is the scene's linear size relative to the hand-tuned default of
     roughly four metres across -- see `camera.REFERENCE_HALF_EXTENT`. The
@@ -126,8 +146,6 @@ def lights(cx: Complexity, look_at=(0.0, 0.0, 0.6),
     at 4.5 m while the actor arcs twenty metres up would be a lamp *inside* the
     trajectory, lighting the underside of everything.
     """
-    if cx.background == "hdri":
-        return []
     s = float(scale)
     return [LightSpec("sun", position=(-2.2 * s, -1.6 * s, 4.5 * s),
                       look_at=look_at, intensity=2.6)]

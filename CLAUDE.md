@@ -83,7 +83,7 @@ publication. Nothing has been published yet.
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
-  liquid does not fit the pose-based seam. `pour` (80 grains at the debug tier, 176 above)
+  liquid does not fit the pose-based seam. `pour` (96 grains at the debug tier, 212 above)
   is the v0
   stand-in and is labelled `physics_medium: "granular"` — never call it fluid. True fluid and
   cloth are Phase 3.
@@ -92,10 +92,18 @@ publication. Nothing has been published yet.
   grains deep the medium settles.** Forty grains in a 1.64 m box covered under a third of
   the floor and settled exactly one grain deep — measured, every grain ended at z = 0.073 —
   and a medium with no interior is one `newton2_mass` cannot stratify and one `friction`
-  cannot shape. Eighty grains in a 0.68 m box settle about four deep. Grains also carry
+  cannot shape. Ninety-six grains in a 0.68 m box heap about four deep. Grains also carry
   `rolling_friction`, without which they are frictionless rollers with no angle of repose
   and no pile forms however narrowly they are poured; Kubric's constructors have no argument
   for it, so `render.worker` applies it through `changeDynamics`.
+
+  **How FINE the grains can be is limited by the residual laws, not by the render.**
+  `penetration` reports depth in radii and `trajectory_shape` normalises by radius, so
+  shrinking a grain magnifies every residual measured on it. Measured across four sizes at
+  a fixed pile depth: at r = 0.048 m (7.2 grains across the box) `solidity`, `superelastic`
+  and `friction` all saturated, and at 0.056 m `superelastic` came out of order. 0.060 m is
+  as fine as the ladders currently hold, and going finer means re-deriving those families'
+  references rather than editing one constant.
 - **CPU rendering, upstream image, unchanged.** GPU/OptiX caps at ~1.37× (only 26% of frame
   time is sampling); clip-level parallelism measures **2.50× at four workers** and flattens
   after that — eight buys 7% more. Do not build a GPU image without a new measurement.

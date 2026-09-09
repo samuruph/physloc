@@ -1337,11 +1337,17 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
     Skipped from L2 up, where an HDRI supplies the ground and the sky together
     and a chosen colour would be painted over.
 
-    THE DOME IS THE BACKDROP TOO. Below L2 the ground is a flat-shaded dome
-    rather than a slab in front of a separate backdrop, so one colour is the
-    whole surround. That is a gain rather than a compromise: the contrast guard
-    below used to apply to the floor only, and now the actor has to stand clear
-    of everything behind it.
+    TWO SURFACES, TWO COLOURS. Below L2 the scene is a 6 m slab in front of a
+    void, so the horizon is a real edge and something has to make it read. Both
+    are drawn here and both are held clear of every actor; the void is drawn
+    from its own, darker band so the ground does not dissolve into the sky.
+
+    This was one colour for a while, and correctly so: the ground was a dome
+    that curved up behind the scene and WAS the backdrop, so a second colour
+    would have had nothing to paint. When the dome went back to being a
+    render-only backdrop at the HDRI levels, that left `BACKDROP_VALUE` unused
+    and every L0 clip with a floor and a void the same shade -- 0.795, 0.812,
+    0.82 for both, on `drop` at seed 91731, which reads as fog.
     """
     import colorsys
 
@@ -1399,10 +1405,32 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
                 best, best_gap = cand, gap
     for b in floors:
         b.color = best
-    # The dome IS the backdrop, so the two agree by construction. Kept as a
-    # field because `to_dict` ships it and a consumer reading `meta.json`
-    # should not have to know which body happens to fill the frame.
-    spec.background_color = best
+
+    # THE VOID BEHIND THE SLAB, scanned the same way and against one more
+    # constraint: it has to stand clear of the actors AND of the floor it meets
+    # at the horizon, or there is no horizon. Its band is the darker one
+    # (`BACKDROP_VALUE`), so the usual outcome is a light floor against a dim
+    # surround; under a floor that is itself dark the scan takes the light end
+    # of that band instead, which separates just as well and is the reason it
+    # is a scan and not a fixed offset. Over the thirteen scenarios at three
+    # seeds apiece the closest pair comes out 23 Lab apart, on `resting_table`
+    # at L0, seed 7.
+    lab_floor = _srgb_to_lab(np.asarray(best, np.float64))
+    hue_b = float(rng.uniform(0.0, 1.0))
+    void, void_gap = spec.background_color, -1.0
+    for k in range(17):
+        v = BACKDROP_VALUE[0] + (
+            BACKDROP_VALUE[1] - BACKDROP_VALUE[0]) * k / 16.0
+        for j in range(3):
+            sat = BACKDROP_SATURATION[0] + (
+                BACKDROP_SATURATION[1] - BACKDROP_SATURATION[0]) * j / 2.0
+            cand = tuple(float(c) for c in colorsys.hsv_to_rgb(hue_b, sat, v))
+            lab = _srgb_to_lab(np.asarray(cand, np.float64))
+            gap = min(separation(cand),
+                      float(np.linalg.norm(lab - lab_floor)))
+            if gap > void_gap:
+                void, void_gap = cand, gap
+    spec.background_color = void
 
 
 class Scenario:

@@ -621,6 +621,17 @@ class NonParabolic(Injector):
             severity_bin=severity_bin,
             notes={"radius": radius, "surface_top": top,
                    "amplitude_reference_m": float(scale),
+                   # THE REFERENCE HAS TO MOVE WITH THE AMPLITUDE.
+                   # `trajectory_shape` reports deviation normalised by the
+                   # BODY's radius, and the amplitude is now written in the
+                   # MEDIUM's -- about three times larger on a pour. Left at
+                   # the declared 1.35 radii the residual overshot it at every
+                   # bin and all three clipped to 1.000, which is the ladder
+                   # disappearing at the top exactly as it had disappeared at
+                   # the bottom. On a single actor `scale` IS `radius`, so this
+                   # reduces to the declared value and no other scenario moves.
+                   "r_strong": float(self.AMPLITUDE_RADII["strong"] * 0.9
+                                     * scale / max(radius, 1e-9)),
                    "flight_frames": list(range(int(run[0]), int(run[1]) + 1))})
 
     #: STAGED. A path that is not a parabola requires a FORCE, and a force is
@@ -647,7 +658,16 @@ class NonParabolic(Injector):
         amp = float(plan.params["amplitude_m"])
         cycles = float(plan.params["cycles"])
         if of > 1:
-            amp *= 0.5 + 0.5 * ((k * 7 % of) / float(of - 1))
+            # **The FIRST body keeps the full nominal amplitude**, and the rest
+            # range down to half of it. The spread is what makes a medium snake
+            # rather than slide, but which grain gets which amplitude cannot be
+            # arbitrary: the severity is read off the culprit the plan names
+            # first, and giving that one the SMALLEST amplitude made the peak
+            # residual independent of the bin. Measured on `pour`, weak / medium
+            # / strong came out at 6.96 / 4.96 / 7.07 -- the ladder gone, with
+            # weak above medium. Anchoring the scored body at the nominal value
+            # puts the peak back in proportion to the knob.
+            amp *= 1.0 - 0.5 * ((k * 7 % of) / float(of - 1))
         lead = 2.0 * np.pi * (k / float(max(of, 1)))
         _, _, right, up = _geom.camera_basis(spec)
         u = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)

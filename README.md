@@ -569,6 +569,77 @@ PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --sce
 and eight buys 7% more — Blender already uses every core per render, so workers
 oversubscribe. Output is byte-identical at any worker count.
 
+### Render backend — buying time back from the denoiser
+
+Kubric constructs its renderer with **adaptive sampling off** and the **legacy NLM** denoiser,
+and neither was ever revisited. Both are measurable, and both are expensive.
+
+The existing fit (`T = 1.29 + 0.0074·spp`, only ~26% of a frame is sampling) was read as
+"there is no room to speed a render up". It really says *the room is not in sampling* — and
+until now nobody had measured what the other 74% was. Measured at release geometry, on `drop`,
+against a 512-spp reference, on an idle box:
+
+| backend | L0 s/frame | speedup | RMSE vs 512-spp | worst pixel |
+|---|---|---|---|---|
+| `NLM`, no adaptive — **today's default** | 7.80 | 1.00× | 0.15 | 7 |
+| adaptive + `OPENIMAGEDENOISE`, spp 128 | 5.87 | 1.33× | 0.30 | 10 |
+| **adaptive + no denoiser, spp 128** | **3.72** | **2.10×** | 0.37 | 11 |
+| adaptive + no denoiser, spp 64 | 3.57 | 2.18× | 0.45 | 22 |
+
+**NLM costs 2.4 s of every 7.8 s frame** — 31% of the render, for a denoiser Blender kept only
+for compatibility. Adaptive sampling buys back another 1.9 s by not sampling pixels that have
+already converged, which a flat slab and six primitives do early.
+
+**Raising spp costs almost nothing once sampling is adaptive**: 64 → 128 is +0.15 s a frame and
+halves the worst-pixel error, because the extra budget is only spent where the image is still
+noisy. That is why the recommended row is the 128 one and not the faster 64.
+
+The errors are all far below one 8-bit level — 0.15 against 0.37 on a 0–255 scale — so this is
+a small realism cost, not a visible one. It is still a real one, and it is **a decision to make
+before a run, never during**: the backend changes the pixels, so a release must not mix them.
+`plan.json` records `spec.notes.render_backend` on every clip so a mixed tree is detectable.
+
+Set them as environment variables — `scripts/run.sh` and `generate` both inherit them, and
+`docker/kubric.sh` forwards them into the container:
+
+```bash
+# the recommended pair, on any config or script
+export PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off
+bash scripts/run.sh review_L0 --spp 128
+
+# ...or one line, without exporting
+PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off \
+  python -m physloc.cli generate --config v0_release --spp 128 --resume
+
+# scripts/run_fast.sh is the same two variables, pre-set
+bash scripts/run_fast.sh review_L0 --spp 128
+```
+
+| variable | values | default |
+|---|---|---|
+| `PHYSLOC_ADAPTIVE` | `1`, or a float noise threshold | unset — off |
+| `PHYSLOC_DENOISER` | `off`, `OPENIMAGEDENOISE`, `NLM` | unset — `NLM` |
+| `PHYSLOC_GPU` | `1` | unset — CPU (see [§13.1](#gpu)) |
+
+**Prefix identity holds under all of them** — verified on a real twin pair: all seven passes
+bit-identical before `t_event`, diverging after. Both twins render in one process with one
+setting, so non-negotiable #1 is unaffected.
+
+**The dome levels gain less.** L2 measures **1.53×** (9.0 s/frame against 13.8) rather than L0's
+2.10×: a dome fills the frame with surface that never fully converges, so adaptive sampling has
+less it can skip. L2 and L3 are 46% of a release's bill, so the whole-run speedup is nearer
+**1.8×** than 2.1×. `scripts/probe_backend.sh` reproduces every number here and refuses to run
+while a container is up, because a probe on a busy box measures contention.
+
+<a name="gpu"></a>
+**The GPU is not one of these dials.** The pinned image's Blender is the CPU-only `bpy` wheel:
+`compute_device_type` offers `('NONE', 'CUDA', 'OPENCL')` with no OptiX, CUDA enumerates the
+host CPU and no card, and the only Cycles kernels present are `.cu` source. `PHYSLOC_GPU=1`
+therefore *fails loudly* on the pinned image rather than silently rendering on the CPU. Reaching
+a card means replacing Blender — `docker/Dockerfile.gpu` is a starting point, separate from the
+pin, and Cycles X will need kubric patched. Note that a GPU would also delete the 2.4 s
+denoiser cost, so the often-quoted 1.37× ceiling is an underestimate.
+
 ### What each config costs
 
 Every number below is **priced from measured constants**, not estimated — and generated from
@@ -578,13 +649,13 @@ the same figure for any config, with the per-level split.
 <!-- physloc:costs -->
 | config | levels | cells | renders | at 4 workers |
 |---|---|---|---|---|
-| `review_severity` | L0 | 41 | 126 | **6 min** |
+| `review_severity` | L0 | 166 | 511 | **36 min** |
 | `review_conditions` | L0 | 6 | 80 | **6 min** |
-| `review_L0` | L0 | 32 | 45 | **6 min** |
-| `review_L1` | L1 | 32 | 45 | **6 min** |
-| `review_L2` | L2 | 32 | 45 | **18 min** |
-| `review_L3` | L3 | 32 | 45 | **18 min** |
-| `review_ladder` | L0+L1+L2+L3 | 6 | 160 | **24 min** |
+| `review_L0` | L0 | 166 | 179 | **12 min** |
+| `review_L1` | L1 | 166 | 179 | **12 min** |
+| `review_L2` | L2 | 166 | 179 | **1.1 h** |
+| `review_L3` | L3 | 166 | 179 | **1.1 h** |
+| `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | **8.8 h** |
 | `review` | L0 | 166 | 511 | **36 min** |
 | `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | **6.2 h** |
 | `v0_L0` | L0 | 166 | 5110 | 515 h (**21.5 days**) |

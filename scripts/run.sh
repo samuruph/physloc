@@ -75,6 +75,21 @@
 # the complexity ladder (README section 8), and `v0`/`v1` are what a published
 # dataset is CALLED, set by the config's outdir.
 #
+# FASTER, WHEN THE PIXELS MAY MOVE. Kubric leaves adaptive sampling off and
+# uses Blender's legacy NLM denoiser, which together cost about half of every
+# frame. `scripts/run_fast.sh` is this script with the measured pair pre-set --
+# 2.10x at L0, 1.53x at L2, at an error still far below one 8-bit level:
+#
+#   bash scripts/run_fast.sh review_L0
+#
+# ...or set them here and this script inherits them, since docker/kubric.sh
+# forwards both into the container:
+#
+#   PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off bash scripts/run.sh review_L0
+#
+# It changes the pixels, so decide it BEFORE a run: a release must not mix
+# backends. README section 13 has the measured table.
+#
 # The config decides tier, complexity, severity, seed and variants; see
 # configs/*.yaml, which document every key. Anything after the config name is
 # forwarded to `generate` and overrides the file.

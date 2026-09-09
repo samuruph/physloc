@@ -60,6 +60,6 @@ defaults:
 
 generate:
   keep_going: true
-  workers: 4
+  workers: 8 #4
   workdir: out/work_severity
   outdir: out/review_severity

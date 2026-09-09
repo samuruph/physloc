@@ -105,7 +105,7 @@ generate:
   #   the per-clip rng is keyed by (seed, family, severity), never by position
   #   in a queue. Measured on this box: 2.50x at four workers, and eight buys
   #   7% more, because Blender already uses every core per render.
-  workers: 4
+  workers: 8 #4
 
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)
   outdir: out/review         # clips, masks, meta.json, overlays

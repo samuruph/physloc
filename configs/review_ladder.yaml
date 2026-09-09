@@ -81,6 +81,6 @@ defaults:
 
 generate:
   keep_going: true
-  workers: 4
+  workers: 8 #4
   workdir: out/work_ladder
   outdir: out/review_ladder

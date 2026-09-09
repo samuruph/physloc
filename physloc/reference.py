@@ -138,9 +138,30 @@ def tiers() -> str:
 #: section is wrapped in `<!-- physloc:NAME -->` ... `<!-- /physloc:NAME -->`,
 #: so the surrounding prose is written by hand and only the tables are
 #: replaced.
+def difficulty() -> str:
+    """The seven detection-difficulty factors and their published cuts.
+
+    Generated, because the thresholds live in `configs/common.yaml`, are
+    pushed into `annotate.difficulty` by `params.apply`, and would otherwise
+    be written down a third time here.
+    """
+    from .annotate import difficulty as D
+
+    rows = []
+    for f in D.FACTORS:
+        op = "&ge;" if f.easier == "high" else "&le;"
+        worse = "&lt;" if f.easier == "high" else "&gt;"
+        rows.append(["`%s`" % f.name, f.question, f.unit,
+                     "%s %g" % (op, f.easy), "%s %g" % (op, f.moderate),
+                     "%s %g" % (worse, f.moderate)])
+    return _table(["factor", "the question it asks", "unit",
+                   "easy", "moderate", "hard"], rows)
+
+
 BLOCKS = {"media": media, "domains": domains, "scenarios": scenarios,
           "ladder": ladder, "conditions": conditions,
-          "materials": materials, "tiers": tiers}
+          "materials": materials, "tiers": tiers,
+          "difficulty": difficulty}
 
 
 def render(name: str) -> str:

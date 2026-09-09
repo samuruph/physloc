@@ -260,6 +260,38 @@ by nothing: it reports `frames_visible: 0` and holds no pixels. Anything that as
 this object resting on" should read `traj`/`bodies`, which is where support lives; the
 segmentation map answers a different question.
 
+### `difficulty` — how hard this clip is to SEE
+
+On the **invalid** twin only; `null` on the valid one, which has no violation to detect and
+belongs to no evaluation set.
+
+```json
+"difficulty": {
+  "level": "hard", "rank": 2,
+  "binding_factors": ["footprint"],
+  "factors": {
+    "footprint": {"value": 0.0041, "level": "hard"},
+    "severity":  {"value": 0.98,   "level": "easy"}
+  }
+}
+```
+
+Seven factors, each with two published thresholds, and **the clip takes its worst** — KITTI's
+Easy/Moderate/Hard construction. `rank` is the index into `["easy", "moderate", "hard"]` and
+is what you filter on, because the sets nest: `rank <= 1` is the moderate evaluation set.
+`binding_factors` names the axes that produced the label, so a failure can be attributed
+rather than only counted.
+
+`footprint` and `occlusion` are measured from the rendered masks, and their raw values are
+also stored at `violation.difficulty_inputs` so that re-deriving a label from `meta.json`
+alone returns exactly what the clip was labelled with. A factor that cannot be measured
+scores `moderate`, never `easy` — an absence must not move a clip into the strictest set.
+
+The thresholds are in `configs/common.yaml` and the resolved values ride in `params`, so a
+clip always records what it was labelled under. They are frozen once a release is published.
+The complexity level, the family and the scenario are deliberately **not** factors: they are
+their own axes, and folding them in would destroy the ablation they exist for.
+
 ### Render passes — segmentation tracks, depth, flow
 
 All shipped for **both** twins, straight from the renderer with no re-encoding. They cost

@@ -220,7 +220,110 @@ unanswerable from the clip, and every violation here is a claim about object mot
 moving camera, `flow` and `depth` stop being pure object motion — the per-frame extrinsics
 ship in `meta.json` so you can undo it.
 
-## 7. What else varies
+## 7. Detection difficulty — easy, moderate, hard
+
+Section 6 is the **knob**: we asked for a moving camera, or for clutter, and the sampler
+delivered it. This is the **measurement**: what actually came out. A clip built with eight
+distractors whose culprit still fills a quarter of the frame is not hard, and a `standard`
+clip whose two-frame violation happens behind a screen is.
+
+> **`difficulty` is to `condition` what `peak_severity` is to `magnitude`.** The same
+> refusal to conflate the knob with the measurement, one axis over.
+
+Every **invalid** clip carries one label. A valid twin has no violation to detect, so it has
+no difficulty and belongs to no evaluation set.
+
+```json
+"difficulty": {
+  "level": "hard", "rank": 2,
+  "binding_factors": ["footprint"],
+  "factors": {"footprint": {"value": 0.0041, "level": "hard"},
+              "severity":  {"value": 0.98,   "level": "easy"}, "...": {}}
+}
+```
+
+### Seven factors, and the clip takes its worst
+
+<!-- physloc:difficulty -->
+| factor | the question it asks | unit | easy | moderate | hard |
+|---|---|---|---|---|---|
+| `footprint` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.05 | &ge; 0.012 | &lt; 0.012 |
+| `occlusion` | how much of the violation happens while the culprit is hidden? | fraction of the violation window | &le; 0.05 | &le; 0.5 | &gt; 0.5 |
+| `duration` | how long is the violation observable? | fraction of the clip | &ge; 0.35 | &ge; 0.15 | &lt; 0.15 |
+| `severity` | how far from lawful does the physics actually get? | bounded residual, 0-1 | &ge; 0.9 | &ge; 0.4 | &lt; 0.4 |
+| `clutter` | how many bodies must a model consider? | count | &le; 2 | &le; 6 | &gt; 6 |
+| `culprits` | how many of them are violating? | count | &le; 1 | &le; 3 | &gt; 3 |
+| `camera` | how far does the camera travel? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
+<!-- /physloc:difficulty -->
+
+A clip is `easy` only when it is easy on **every** axis; one small footprint makes it hard
+however clean the rest of it is. That is KITTI's Easy/Moderate/Hard construction, and it is
+chosen over a weighted score for three reasons:
+
+- **It says why.** `binding_factors` names the axes that set the label. A model that fails on
+  occlusion-bound clips and passes on footprint-bound ones has told you something; a single
+  number has not.
+- **The sets nest.** easy ⊂ moderate ⊂ hard, so *"at moderate"* means every clip of
+  `rank <= 1` and the three numbers are comparable to each other. A weighted score gives three
+  disjoint buckets whose members share nothing.
+- **A sum hides trade-offs.** Averaging a tiny footprint against a static camera claims the
+  two cancel. They do not.
+
+```python
+df[df.difficulty_rank <= 1]                       # the "moderate" evaluation set
+df[df.difficulty == "hard"].binding_factors        # and what made them hard
+```
+
+### What is deliberately *not* a factor
+
+**The complexity level.** L3 is harder to parse than L0 — and it is already its own axis,
+with its own share of the release and its own directory. Folding it in would correlate the two
+and destroy the ablation both exist for. Report **`difficulty × complexity` as a grid**; that
+grid is the interesting result, and it only exists if the two are measured apart.
+`physloc stats` plots it. **The family and the scenario** are excluded for the same reason,
+and **`magnitude`** because it is the knob — `severity` is its measured counterpart and is the
+one that belongs here.
+
+### Where the thresholds come from, and how to change them
+
+Four are **fitted**, at the tertiles of 431 invalid clips from the review corpus. Three are
+**chosen**, because the corpus could not answer: every review config holds one window setting,
+so `duration`'s tertiles would encode the config rather than the difficulty, and 60% of clips
+are `standard`, so `clutter` and `culprits` mostly report 1. Which is which is recorded per
+factor in `physloc/annotate/difficulty.py` — a fitted threshold describes *this* dataset, a
+chosen one makes a claim about detection, and the two age differently.
+
+They live in **`configs/common.yaml`**, written `[easy, moderate]` and always in the
+easier-is-better direction:
+
+```yaml
+difficulty:
+  footprint: [0.05, 0.012]     # easy at or ABOVE 0.05 of the frame
+  occlusion: [0.05, 0.5]       # easy at or BELOW 0.05 of the window
+  clutter:   [2, 6]
+```
+
+Which way a factor runs belongs to the factor, not the config. To refit against your own
+corpus:
+
+```bash
+python scripts/fit_difficulty.py out/review_conditions out/review_severity
+```
+
+It prints each factor's tertiles and what the current cuts do to that corpus, so a change
+starts from data rather than from taste.
+
+> **Freeze them once you publish.** A benchmark whose difficulty labels move between releases
+> cannot be compared with itself. They are editable because a dataset with different geometry
+> or a different window policy will want different cuts — and because the resolved values ride
+> in every `meta.json`, so a clip always says what it was labelled under. Changing them is a
+> new release, not a bug fix.
+
+**A granular medium counts once.** `pour` has 80 grains and nobody is asked which grain is
+wrong, so `clutter` and `culprits` see one thing rather than eighty. A family that acts on a
+genuine *subset* of the medium keeps its count, because then the question really is "which".
+
+## 8. What else varies
 
 Every free parameter is drawn per clip from the seed: object shape, size, colour, mass,
 starting position and velocity, floor and backdrop colour, camera pose, and **the frame the
@@ -283,7 +386,7 @@ from its material.
 `python -m physloc.cli randomisation` reports distinct values per axis, so *"is it actually
 varied"* is a number rather than an impression.
 
-## 8. Splits
+## 9. Splits
 
 `main` **75%** · `held_out` **20%** · `debug` **5%**.
 
@@ -297,7 +400,7 @@ release reproduces its splits.
 and you can score any clip. If you need a genuinely blind held-out set for a leaderboard,
 strip the annotations at that point — nothing has to be regenerated.
 
-## 9. The index
+## 10. The index
 
 `index.parquet` is one row per clip, with the video embedded so it plays inline in the
 HuggingFace viewer. A breakdown is a groupby, not a crawl over thousands of `meta.json`:
@@ -310,16 +413,24 @@ df.groupby(["domain", "severity_bin"]).peak_severity.mean()
 df.groupby("condition").size()                       # standard / camera / multi / ...
 df[df.complexity == "L3"].groupby("family").size()   # what survives the hardest level
 df[df.n_culprits > 1]                                # the multi-object clips
+
+df[df.difficulty_rank <= 1]                          # the "moderate" evaluation set
+df.groupby(["complexity", "difficulty"]).size()      # the grid worth reporting
+df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_counts()
 ```
 
 Columns: identity (`clip_uid`, `pair_uid`, `twin_uid`, `label`, `split`), taxonomy
 (`scenario`, `family`, `domain`, `medium`), violation (`severity_bin`, `magnitude`,
-`peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag`), scene
+`peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag`), difficulty
+(`difficulty`, `difficulty_rank`, `binding_factors`), scene
 (`complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`,
 `actor_shape`, `actor_material`, `actor_mass`), and geometry (`tier`, `num_frames`, `fps`,
 `seed`, `variant`).
 
-## 10. Evaluating on it
+`difficulty` is what you group by; **`difficulty_rank` is what you filter by**, because the
+sets nest and a string comparison cannot say `rank <= 1`.
+
+## 11. Evaluating on it
 
 Report **per family (23)**, aggregate to **domain (8)**, and cross with **severity**,
 **complexity** and **condition**.
@@ -339,7 +450,7 @@ Report **per family (23)**, aggregate to **domain (8)**, and cross with **severi
 
 # Part II — Building it
 
-## 11. Setup (once)
+## 12. Setup (once)
 
 ```bash
 # Host environment: annotation, severity, grids, validation, viz.
@@ -355,7 +466,7 @@ bash scripts/fetch_refs.sh                # optional, read-only Kubric source
 2.93.4 / PyBullet (Python 3.9) and does simulation + rendering. The `physloc` conda env
 (Python 3.11) does everything else. They meet at the trajectory seam, `traj.npz`.
 
-## 12. The runs
+## 13. The runs
 
 **Each config answers ONE question**, which is what keeps them all minutes rather than hours —
 a check you will not run is a check you do not have.
@@ -388,9 +499,31 @@ so N machines is N× faster. Split with `--scenario a,b,c` per machine, or a lev
 python -m physloc.cli generate --config review_severity
 python -m physloc.cli validate  out/review_severity      # must exit 0
 python -m physloc.cli audit     out/review_severity      # cells depicting nothing
+python -m physloc.cli stats     out/review_severity      # the distributions, plotted
 python -m physloc.cli viz       out/review_severity      # grids + sheets, one folder
 python -m physloc.cli coverage  out/review_severity      # every cell, one video
 ```
+
+**`stats` is how you check the run came out in the shape it declares.** `validate` says a
+release is well formed and `audit` says every cell depicts something; neither says what the
+*distributions* look like, and those are what a benchmark is judged on. It reads `meta.json`
+and nothing else, so it runs in seconds over a full release.
+
+```
+out/review_severity/stats/
+  difficulty.png          the three labels, and which factor set each one
+  difficulty_factors.png  each factor's histogram with its two cuts drawn on it
+  composition.png         levels; conditions measured vs declared; difficulty x complexity
+  severity.png            measured peak score per declared bin, and the counts
+  coverage.png            clips per family and per scenario
+  stats.json              the numbers behind all five, so a regression is diffed
+```
+
+It earns its place immediately. On `review_ladder` the levels come out **80 / 40 / 24 / 16** —
+exactly the declared 1.00 / 0.50 / 0.30 / 0.20 — while the conditions come out
+**60 / 5 / 10 / 15 / 10** against a declared 60/10/10/10/10: the per-level spread does not hit
+its marginals when each level gets only a few variants. One glance at the middle panel; not
+visible in any amount of log reading.
 
 **`viz` is how you look at a finished run**, and it re-reads clips already on
 disk — nothing is rendered again, so it takes seconds and can be re-run after
@@ -432,7 +565,7 @@ PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --sce
 and eight buys 7% more — Blender already uses every core per render, so workers
 oversubscribe. Output is byte-identical at any worker count.
 
-## 13. Tiers
+## 14. Tiers
 
 A tier is a **geometry** — how big and how long. Nothing else. Difficulty is the complexity
 ladder; `v0`/`v1` are what a published dataset is *called*, set by `--outdir`.
@@ -447,7 +580,7 @@ ladder; `v0`/`v1` are what a published dataset is *called*, set by `--outdir`.
 `debug` is never published. Frame counts are `4k+1` so they map exactly onto a video VAE's
 temporal stride.
 
-## 14. Output layout
+## 15. Output layout
 
 ```
 out/release/
@@ -482,7 +615,7 @@ a fix, or shipping a smaller dataset that is only ever L0. Nothing collides when
 are merged: the clip path is keyed by level already, and every level draws from its own seed
 block.
 
-## 15. Publishing
+## 16. Publishing
 
 ```bash
 python -m physloc.cli export out/physloc_v0 --push-to <user>/physloc
@@ -493,7 +626,7 @@ repeatable and uploading is neither. `run.sh` does both if `PHYSLOC_PUSH_TO` is 
 (`PHYSLOC_PUSH_PRIVATE=1` for a private repo). What lands: the dataset card, `index.parquet`
 with videos playable inline, `taxonomy.json`, `splits/`, `LICENSE` and the WebDataset shards.
 
-## 16. The generation knobs
+## 17. The generation knobs
 
 Shares, counts and bands used to be module constants spread across three files. They are now
 **`configs/common.yaml`** — one place to see them and one place to change them.
@@ -523,7 +656,7 @@ nobody can change.
 They cross the container seam as **JSON, not YAML** — the render container has Kubric's
 pinned packages and no PyYAML, and scene sampling happens there.
 
-## 17. Keeping the tables honest
+## 18. Keeping the tables honest
 
 The taxonomy, ladder, condition and tier tables in Part I are **generated** from
 `physloc/taxonomy.py` and `physloc/scenarios/base.py` — prose copies of these numbers have
@@ -537,7 +670,7 @@ python -m physloc.reference --write    # regenerate the tables in place
 `tests/test_reference.py` fails if they are stale, and the HuggingFace card is generated from
 the same functions, so the two documents cannot disagree.
 
-## 18. Repo layout
+## 19. Repo layout
 
 ```
 physloc/scenarios/    13 scenario builders + the ladder and conditions (base.py)
@@ -551,7 +684,7 @@ docs/PLAN.md          the design document
 docs/roadmap.md       what is next and why
 ```
 
-## 19. Papers
+## 20. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). The IntPhys 2 category and LikePhys

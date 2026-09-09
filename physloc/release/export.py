@@ -195,6 +195,16 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
         "magnitude": (v.get("intervention") or {}).get("magnitude"),
         "peak_severity": (v.get("peak_residual") or {}).get("score"),
+        # THE MEASURED DETECTION DIFFICULTY, and what set it. Two columns
+        # rather than one: `difficulty` is what you group by, `difficulty_rank`
+        # is what you FILTER by, because the sets nest -- `rank <= 1` is the
+        # moderate evaluation set, and a string comparison cannot say that.
+        # `binding_factors` is why a clip landed where it did, which is the
+        # column that turns a score into a diagnosis.
+        "difficulty": (meta.get("difficulty") or {}).get("level"),
+        "difficulty_rank": (meta.get("difficulty") or {}).get("rank"),
+        "binding_factors": ",".join(
+            (meta.get("difficulty") or {}).get("binding_factors") or ()),
         "t_event_frame": v.get("t_event_frame"),
         "violation_windows": json.dumps(windows),
         "observability_lag": v.get("observability_lag_frames"),
@@ -411,6 +421,7 @@ INDEX_COLUMNS = (
     "clip_uid", "rgb", "overlay",
     "label", "split", "scenario", "family", "domain", "medium",
     "severity_bin", "magnitude", "peak_severity",
+    "difficulty", "difficulty_rank", "binding_factors",
     "t_event_frame", "violation_windows", "observability_lag",
     "complexity", "condition", "camera_motion", "n_distractors",
     "n_actors", "n_culprits",

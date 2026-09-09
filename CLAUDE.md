@@ -23,8 +23,8 @@ publication. Nothing has been published yet.
 - **Kubric** (Blender + PyBullet in docker) for v0. MuJoCo replaces PyBullet later, behind
   the trajectory seam.
 - **Two tiers, because there are only two geometries.** `debug`: 128×128, 12 fps, 25
-  frames, 16 spp — **~8 s per clip**, never published; this is what you iterate on.
-  `release`: **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip. 30 fps so a release
+  frames, 16 spp — **~8 s per render**, never published; this is what you iterate on.
+  `release`: **512×512, 30 fps, 89 frames = 2.97 s**, ~695 s/render. 30 fps so a release
   downsamples cleanly to 15 and 10; 89 rather than 90 because every frame count must be
   `4k+1` for VAE latent alignment.
 
@@ -278,10 +278,16 @@ template this project adapts (PLAN Part 0.5). The clone is ~4 years newer than t
 
 ## Measured, not assumed
 
-Blender 2.93.4 / Python 3.9.5 / kubric 2022.4.1 in the image. **1.75 s per 256² frame,
-7.16 s per 512²**, linear in frames, all seven passes. Frame time fits
-`T = 1.29 + 0.0074·spp` at 256² → only ~26% is sampling, so OptiX caps at ~1.37×.
-`sim_seconds` is 0.0 — physics is free at v0 scale.
+Blender 2.93.4 / Python 3.9.5 / kubric 2022.4.1 in the image, all seven passes, spp 64.
+Per 512² frame, by level: **L0 7.69, L1 7.93, L2 19.31, L3 21.61 s**. The step is the
+HDRI **dome**, which encloses the scene so rays that miss an object bounce instead of
+escaping — not the environment map itself. Frame time fits `T = 1.29 + 0.0074·spp` at 256²
+→ only ~26% is sampling, so OptiX caps at ~1.37×. `sim_seconds` is 0.0 — physics is free
+at v0 scale.
+
+**Nothing on this box is a clean measurement while another session is running jobs.** Check
+`docker ps` before believing a timing, and prefer `probe_cost.py` (one scene, four frames)
+over a whole job when you only need a per-frame number.
 
 Clip-level parallelism, measured on this box (8 cores) over 8 jobs of 14 cells each:
 **1826 s at one worker, 729 s at four, 685 s at eight** — so 2.50× at four, and doubling to

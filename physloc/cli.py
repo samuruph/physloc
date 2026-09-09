@@ -67,29 +67,46 @@ def cmd_taxonomy(a) -> int:
     return 0
 
 
-#: Measured wall-clock per rendered clip, including annotation and the overlay
-#: video. the release tier is 4x the pixels and ~2x the frames of the debug tier; L1's HDRI
-#: environment costs about 5.5x an L0 render.
-#: Wall clock per clip, from the per-frame renders measured in CLAUDE.md --
-#: 1.75 s at 256sq and 7.16 s at 512sq, all seven passes -- times the tier's
-#: frame count, and times ~4.6 for L1's HDRI environment. Both published tiers
-#: are 512sq now, so both are priced off the same 7.16 s.
-#: Measured on this box (8 cores), 8 independent jobs of 14 cells each:
-#: 1826 s at one worker, 729 s at four, 685 s at eight. Blender already uses
-#: every core per render, so workers oversubscribe and the curve flattens hard
-#: after four -- doubling to eight buys 7%.
+#: Clip-level parallelism, measured on this box (8 cores) over 8 independent
+#: jobs of 14 cells each: 1826 s at one worker, 729 s at four, 685 s at eight.
+#: Blender already uses every core per render, so workers oversubscribe and the
+#: curve flattens hard after four -- doubling to eight buys 7%.
 SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
 
-#: Keyed by (tier, background). The HDRI environment is the expensive dial --
-#: about 5.5x a solid background -- and it arrives at L2, so levels are mapped
-#: onto their background rather than listed one by one.
+#: Keyed by (tier, background), and each value is the tier's frame count times
+#: the MEASURED per-frame render cost for that background. Rendering is what a
+#: run spends its time on; build, simulate, annotate and overlay are not in
+#: here, so a printed price is a floor and a real job runs somewhat over it.
+#:
+#: Per 512sq frame, spp 64, all seven passes, one scene, idle box:
+#:
+#:      L0 7.69   L1 7.93   |   L2 19.31   L3 21.61
+#:
+#: which is 7.81 s a frame on a solid background and 20.46 with an HDRI, so
+#: 89 frames come to 695 s and 1821 s. The step is the DOME, not the
+#: environment map: L2 and L3 project their HDRI onto one, and a dome encloses
+#: the scene, so rays that miss an object bounce instead of escaping.
+#:
+#: The debug pair is 25 frames at the per-frame cost measured at 128sq, and
+#: predates the dome -- which is why it still holds: the ground is a cube slab
+#: at every level again (`_common.ground`, see docs/roadmap.md), so L0 and L1
+#: render the same geometry those numbers were taken on.
+#:
+#: WHAT WAS WRONG BEFORE: hdri was 2930 s, and was never measured at release
+#: geometry at all -- it was the debug tier's 5.5x ratio scaled up. At 128sq
+#: the fixed per-frame cost of an environment map dominates and that ratio is
+#: real; at 512sq the sampling cost dominates and the true ratio is 2.6x. The
+#: guess was 60% high, on the quarter of the dataset that is L2 and L3.
+#:
+#: `physloc/render/probe_cost.py` reproduces every per-frame number here, and
+#: needs an IDLE box to do it -- check `docker ps` first.
 SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
-                    ("release", "solid"): 637.0, ("release", "hdri"): 2930.0}
+                    ("release", "solid"): 695.0, ("release", "hdri"): 1821.0}
 
 
 #: How far apart each complexity level's seed block sits. Wide enough that no
 #: run's variant count can reach the next block, so `--complexity all` produces
-#: independent scenes per level rather than one scene ladder-ed four ways, and
+#: independent scenes per level rather than one scene laddered four ways, and
 #: narrow enough to stay readable in a directory listing.
 LEVEL_SEED_STRIDE = 1_000_000
 

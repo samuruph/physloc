@@ -16,6 +16,9 @@ re-running one command:
 from __future__ import annotations
 
 import collections
+import re
+import subprocess
+import sys
 from typing import List
 
 
@@ -138,6 +141,31 @@ def tiers() -> str:
 #: section is wrapped in `<!-- physloc:NAME -->` ... `<!-- /physloc:NAME -->`,
 #: so the surrounding prose is written by hand and only the tables are
 #: replaced.
+#: One line of `taxonomy`'s per-level breakdown:
+#:     L0  x10    1660 invalid +  130 valid =  1790 renders @  678.7 s = 337.4 h
+_LEVEL_ROW = re.compile(
+    r"^\s+(L\d)\s+x(\d+)\s+(\d+) invalid \+\s+(\d+) valid ="
+    r"\s+(\d+) renders @\s+([\d.]+) s =\s+([\d.]+) h", re.M)
+
+
+def _price(name: str) -> str:
+    """`taxonomy --config <name>`, as text. One subprocess, because the CLI is
+    the thing that owns the arithmetic and a second copy of it here is a second
+    thing to keep in step."""
+    return subprocess.run(
+        [sys.executable, "-m", "physloc.cli", "taxonomy", "--config", name],
+        capture_output=True, text=True).stdout
+
+
+def _hours(h: float) -> str:
+    """Wall time at whatever scale reads: minutes, hours, or hours and days."""
+    if h < 1.0:
+        return "**%.0f min**" % (h * 60)
+    if h < 48:
+        return "**%.1f h**" % h
+    return "%.0f h (**%.1f days**)" % (h, h / 24)
+
+
 def difficulty() -> str:
     """The seven detection-difficulty factors and their published cuts.
 
@@ -158,10 +186,70 @@ def difficulty() -> str:
                    "easy", "moderate", "hard"], rows)
 
 
+def costs() -> str:
+    """What each shipped config costs, priced from the measured constants.
+
+    Generated rather than written down, for the reason every other table here
+    is: the last hand-written cost table was wrong in both directions at once
+    and nobody could tell, because the two errors cancelled in the run people
+    actually looked at.
+    """
+    order = ["review_severity", "review_conditions", "review_L0", "review_L1",
+             "review_L2", "review_L3", "review_ladder", "review", "v0_mini",
+             "v0_L0", "v0_L1", "v0_L2", "v0_L3", "v0_release"]
+    rows = []
+    for name in order:
+        out = _price(name)
+        h = re.search(r"~([\d.]+) h at the measured", out)
+        cells = re.search(r"BUILD cells: (\d+)", out)
+        renders = re.search(r"(\d+) renders total", out)
+        if not (h and cells and renders):
+            continue
+        levels = "+".join(m.group(1) for m in _LEVEL_ROW.finditer(out)) or "--"
+        rows.append(["`%s`" % name, levels, cells.group(1), renders.group(1),
+                     _hours(float(h.group(1)))])
+    return _table(["config", "levels", "cells", "renders", "at 4 workers"],
+                  rows)
+
+
+def costs_ladder() -> str:
+    """Where a full release's time actually goes, level by level.
+
+    `costs` gives one number per config, which answers "can I start this
+    tonight" and not "why is L0 most of it". A level's cost is its variant
+    count times its per-render rate, and those pull in opposite directions --
+    L0 gets ten variants at the cheap solid rate, L3 two at the expensive HDRI
+    one -- so neither the share nor the rate predicts the answer on its own.
+
+    Parallel hours are the serial figure `taxonomy` prints divided by the
+    measured speedup at four workers, which is the arithmetic the run total
+    uses; quoting serial for the levels and parallel for the total is how a
+    cost table stops adding up.
+    """
+    from .cli import SPEEDUP
+
+    out = _price("v0_release")
+    speedup = SPEEDUP[4]
+    seen = []
+    for m in _LEVEL_ROW.finditer(out):
+        level, nv, _inv, _val, renders, rate, serial = m.groups()
+        seen.append((level, nv, int(renders), float(rate),
+                     float(serial) / speedup))
+    total = sum(h for *_, h in seen)
+    rows = [["**%s**" % lvl, nv, str(n), "%.0f s" % rate, _hours(h),
+             "%.0f%%" % (100.0 * h / total)]
+            for lvl, nv, n, rate, h in seen]
+    rows.append(["**all four**", "--", str(sum(n for _, _, n, _, _ in seen)),
+                 "--", _hours(total), "100%"])
+    return _table(["level", "variants", "renders", "per render",
+                   "at 4 workers", "share of the run"], rows)
+
+
 BLOCKS = {"media": media, "domains": domains, "scenarios": scenarios,
           "ladder": ladder, "conditions": conditions,
-          "materials": materials, "tiers": tiers,
-          "difficulty": difficulty}
+          "materials": materials, "tiers": tiers, "costs": costs,
+          "difficulty": difficulty,
+          "costs_ladder": costs_ladder}
 
 
 def render(name: str) -> str:

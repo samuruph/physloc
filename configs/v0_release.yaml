@@ -40,8 +40,8 @@
 # numbers `taxonomy --config v0_release` prints, not a promise:
 #
 #     variants   ladder gives                    parallel (4 workers)
-#        3        L0 3, L1 2, L2 1, L3 1           ~670 h   2 of 5 conditions
-#       10        L0 10, L1 5, L2 3, L3 2         ~1795 h   5 of 5
+#        3        L0 3, L1 2, L2 1, L3 1           ~528 h   2 of 5 conditions
+#       10        L0 10, L1 5, L2 3, L3 2         ~1448 h   5 of 5
 #
 # THIS IS WEEKS ON ONE BOX. It is also embarrassingly parallel: jobs are
 # independent by (scenario, seed, level) and the per-clip rng is keyed by
@@ -51,7 +51,7 @@
 #
 defaults:
   seed: 20260824
-  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s, ~637 s a clip
+  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s, ~695 s a render
   complexity: all      # the whole BUILT ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
   # TEN, and it is forced rather than chosen. The condition cycle has ten slots

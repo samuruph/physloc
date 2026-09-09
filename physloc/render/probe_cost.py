@@ -1,7 +1,7 @@
 """Where does a release frame's time actually go?
 
-`SECONDS_PER_CLIP` says 637 s for a solid background and 2930 s for an HDRI at
-release geometry -- 4.6x -- and that ratio decides whether a full v0 run is
+`SECONDS_PER_CLIP` says 695 s for a solid background and 1821 s for an HDRI at
+release geometry -- 2.6x -- and that ratio decides whether a full v0 run is
 days or weeks. What it does NOT say is WHY, and the answer changes what is
 worth doing about it:
 

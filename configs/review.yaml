@@ -63,8 +63,8 @@ defaults:
   complexity: L0
 
   # tier: the resolution/length ladder, and the ONLY thing a tier says.
-  #     debug    128x128, 12 fps, 25 frames, 16 spp -- ~8 s a clip, never published
-  #     release  512x512, 30 fps, 89 frames, 64 spp -- ~637 s a clip
+  #     debug    128x128, 12 fps, 25 frames, 16 spp -- ~8 s a render, never published
+  #     release  512x512, 30 fps, 89 frames, 64 spp -- ~695 s a render
   #   Individual dials under `generate` override one field of a tier without
   #   inventing a new one.
   tier: debug

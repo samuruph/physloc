@@ -472,16 +472,20 @@ bash scripts/fetch_refs.sh                # optional, read-only Kubric source
 a check you will not run is a check you do not have.
 `python -m physloc.cli taxonomy --config <name>` prices any of them exactly, first.
 
-| config | the question it answers | cost |
-|---|---|---|
-| `review_severity` | do **weak / medium / strong** differ, for every family? | ~8 min |
-| `review_conditions` | do the **five conditions** do what they claim? | ~5 min |
-| `review_L0` … `review_L3` | does **this level** render every scene correctly? | ~3–18 min |
-| `review_ladder` | do the levels come out in their **declared proportions**? | ~18 min |
-| `review` | does **every cell** build? | ~35 min |
-| `v0_mini` | **the whole dataset in miniature** — every family, level, condition and bin | **~6 h** |
-| `v0_release` | the published dataset, whole ladder, 10 variants | **~1795 h — read below** |
-| `v0_L0` … `v0_L3` | one level of that release, on its own | the four **sum to** `v0_release` |
+| config | the question it answers |
+|---|---|
+| `review_severity` | do **weak / medium / strong** differ, for every family? |
+| `review_conditions` | do the **five conditions** do what they claim? |
+| `review_L0` … `review_L3` | does **this level** render every scene correctly? |
+| `review_ladder` | do the levels come out in their **declared proportions**? |
+| `review` | does **every cell** build? |
+| `v0_mini` | **the whole dataset in miniature** — every family, level, condition and bin |
+| `v0_release` | the published dataset, whole ladder, 10 variants |
+| `v0_L0` … `v0_L3` | one level of that release, on its own — the four **sum to** `v0_release` |
+
+**What each costs is [one section down](#what-each-config-costs)**, and generated there from
+the measured constants. It used to be a column here as well; the two copies disagreed within
+a day of being written, which is the whole reason the tables in this file are generated.
 
 **`v0_mini` is not a review sweep** — it is the same structure as the release, made small, so
 what you learn from it transfers. It is small in *cells*, not variants, and that is forced:
@@ -564,6 +568,106 @@ PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --sce
 `--workers N` runs N container jobs at once. Measured on an 8-core box: **2.50× at four**,
 and eight buys 7% more — Blender already uses every core per render, so workers
 oversubscribe. Output is byte-identical at any worker count.
+
+### What each config costs
+
+Every number below is **priced from measured constants**, not estimated — and generated from
+them, so it cannot go stale silently. `python -m physloc.cli taxonomy --config <name>` prints
+the same figure for any config, with the per-level split.
+
+<!-- physloc:costs -->
+| config | levels | cells | renders | at 4 workers |
+|---|---|---|---|---|
+| `review_severity` | L0 | 41 | 126 | **6 min** |
+| `review_conditions` | L0 | 6 | 80 | **6 min** |
+| `review_L0` | L0 | 32 | 45 | **6 min** |
+| `review_L1` | L1 | 32 | 45 | **6 min** |
+| `review_L2` | L2 | 32 | 45 | **18 min** |
+| `review_L3` | L3 | 32 | 45 | **18 min** |
+| `review_ladder` | L0+L1+L2+L3 | 6 | 160 | **24 min** |
+| `review` | L0 | 166 | 511 | **36 min** |
+| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | **6.2 h** |
+| `v0_L0` | L0 | 166 | 5110 | 515 h (**21.5 days**) |
+| `v0_L1` | L1 | 166 | 2555 | 258 h (**10.7 days**) |
+| `v0_L2` | L2 | 166 | 1533 | 405 h (**16.9 days**) |
+| `v0_L3` | L3 | 166 | 1022 | 270 h (**11.3 days**) |
+| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 1448 h (**60.4 days**) |
+<!-- /physloc:costs -->
+
+Scale by workers: these assume four, which measures **2.50×** on an 8-core box. Eight buys 7%
+more, because Blender already uses every core per render. Across N machines it is genuinely
+N× — jobs are independent by `(scenario, seed, level)`.
+
+### Where a release's time goes
+
+A level's cost is its variant count times its per-render rate, and those pull in opposite
+directions: L0 gets ten variants at the cheap solid rate, L3 two at the expensive HDRI one.
+Neither the declared share nor the rate predicts the answer alone, so here it is.
+
+<!-- physloc:costs_ladder -->
+| level | variants | renders | per render | at 4 workers | share of the run |
+|---|---|---|---|---|---|
+| **L0** | 10 | 5110 | 908 s | 515 h (**21.5 days**) | 36% |
+| **L1** | 5 | 2555 | 908 s | 258 h (**10.7 days**) | 18% |
+| **L2** | 3 | 1533 | 2378 s | 405 h (**16.9 days**) | 28% |
+| **L3** | 2 | 1022 | 2378 s | 270 h (**11.3 days**) | 19% |
+| **all four** | -- | 10220 | -- | 1448 h (**60.3 days**) | 100% |
+<!-- /physloc:costs_ladder -->
+
+**Three quarters of the renders are the cheap half of the bill.** L0 and L1 are 7665 of the
+10220 renders and 54% of the time; L2 and L3 are the remaining quarter and 46%, because the
+dome charges each of them 2.6× a slab. The ladder's shares put the breadth where it is
+cheapest, deliberately — the baseline is what every other level is compared against, so it
+should be the largest stratum.
+
+On one machine, `v0_L0` alone is 21 days and is a complete, publishable dataset by itself;
+`v0_L2` and `v0_L3` are 675 h together and are what you add when there is capacity for them.
+The four **partition** the release, so nothing is wasted and nothing collides.
+
+**Where the numbers come from.** `SECONDS_PER_CLIP` in `physloc/cli.py` is a tier's frame
+count times the measured per-frame cost of its background, and `physloc/render/probe_cost.py`
+reproduces every per-frame number in it:
+
+| | s/render | frames × measured s/frame |
+|---|---|---|
+| `debug` solid | **8** | 25 × 0.32, at 128², 16 spp |
+| `debug` hdri | **44** | 25 × 1.76 — at 128² the environment map's fixed cost dominates |
+| `release` solid | **695** | 89 × 7.81, the mean of L0 and L1 below |
+| `release` hdri | **1821** | 89 × 20.46, the mean of L2 and L3 |
+
+The per-render rates in the two tables above are higher than these — 908 s where the constant
+says 695 — because `DISTRACTOR_COST` scales every estimate by the extra bodies the average
+clip carries: `distractors` and `multi` add 3–10 of them, on 30% of the clips.
+
+**This prices the render and nothing else.** Build, simulation, annotation and the overlay
+video are real and are not in the constant, so what `taxonomy` prints is a floor and a run
+comes in over it. That is the trade for a number `probe_cost` can reproduce in four frames.
+
+Per frame, at 512², spp 64, all seven passes, on an idle box:
+
+| | L0 | L1 | L2 | L3 |
+|---|---|---|---|---|
+| s/frame | **7.69** | **7.93** | **19.31** | **21.61** |
+
+The step is the **dome**, not the environment map. L2 and L3 project their HDRI onto a
+KuBasic dome, and a dome *encloses* the scene: every ray that misses an object hits it and
+bounces, where a flat slab lets those rays escape. L0 and L1 have no dome and cost a third as
+much.
+
+**The HDRI rate was the stale one.** It was 2930 s a clip and had never been measured at
+release geometry at all — it was the debug tier's 5.5× ratio scaled up, which is exactly the
+kind of copy this file's generated tables exist to prevent. At 128² that ratio is real,
+because an environment map's fixed per-frame cost dominates a cheap frame; at 512² sampling
+dominates and the true ratio is 2.6×. The guess was 60% high, on the quarter of the dataset
+that is L2 and L3.
+
+**And the size of the dome is why the levels split at all.** The ground used to be that dome at
+*every* level — the fix for a real bug, that a cube below the HDRI level and a dome at it are
+different collision shapes, so the same seed did not roll the same way and a level comparison
+measured lighting plus a changed floor. It worked, and it charged L0 and L1 **27.54 s/frame
+against a slab's 8.69** for a backdrop they are not even lit by. The dome is now a render-only
+backdrop at L2 and L3 (`_common.backdrop`, collisions disabled), the ground is a slab
+everywhere, and level isolation is unchanged: 0 of 13 scenarios differ.
 
 ## 14. Tiers
 

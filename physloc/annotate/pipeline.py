@@ -23,6 +23,7 @@ from ..residuals import energy as energy_mod
 from ..prompts import compose_prompt
 from ..sim.trajectory import Trajectory
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of
+from . import difficulty as diff_mod
 from . import grids as grids_mod
 from . import masks as masks_mod
 from . import severity as sev_mod
@@ -492,6 +493,23 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                            energy_summary,
                            _instance_table(spec_d, plan_d, seg_here), r_strong,
                            spec=spec)
+        # HOW HARD IS THIS ONE TO SEE -- measured, after the fact, from the
+        # masks that were just written. Last, because it reads the finished
+        # `meta` rather than any single ingredient: the footprint comes from
+        # the mask, the occlusion from the invalid segmentation, and the other
+        # five from fields `_build_meta` has only now assembled.
+        #
+        # The two array-derived values are stored beside the label so that a
+        # consumer re-deriving a difficulty from `meta.json` alone gets the
+        # numbers the clip was labelled with, rather than a `None` and a
+        # silently different answer. `assess` returns None on a valid twin,
+        # which has no violation to detect.
+        if meta.get("violation"):
+            meta["violation"]["difficulty_inputs"] = diff_mod.inputs_for_meta(
+                vmask, seg_i, meta)
+        meta["difficulty"] = diff_mod.assess(
+            meta, vmask if label == "invalid" else None,
+            seg_i if label == "invalid" else None)
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir

@@ -112,16 +112,32 @@ def assign_splits(pair_uids: Iterable[str]) -> Dict[str, str]:
     if not uids:
         return {}
 
-    # STRATIFIED BY SCENARIO. A pair uid is `<release>/<scenario>/<seed>`, and
-    # cutting the whole population at once lets a scenario land entirely in one
-    # split -- which for a 13-scenario release is likely, and makes the held-out
-    # set measure "have you seen `pour` before" rather than "do you understand
-    # pouring". Splitting within each scenario keeps every split a picture of
-    # the same benchmark.
+    # STRATIFIED BY SCENARIO. Cutting the whole population at once lets a
+    # scenario land entirely in one split -- which for a 13-scenario release is
+    # likely, and makes the held-out set measure "have you seen `pour` before"
+    # rather than "do you understand pouring". Splitting within each scenario
+    # keeps every split a picture of the same benchmark.
+    #
+    # **THE SCENARIO IS THE SECOND-FROM-LAST SEGMENT, and counting from the
+    # front silently stopped finding it.** This read `parts[1]` against a uid
+    # documented as `<release>/<scenario>/<seed>`; the level then became part of
+    # a clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`, see
+    # CLAUDE.md) and every uid grew a segment. `parts[1]` has been `"L0"` ever
+    # since -- ONE group holding every scenario, so the stratification this
+    # function exists for has not happened, and the held-out set is whole
+    # scenarios again.
+    #
+    # It also silently emptied the overlay column. `_cut` sends a group of
+    # fewer than three pairs entirely to `debug`, which is the only split that
+    # carries `overlay.mp4`; a review sweep has one pair per scenario, so every
+    # scenario used to qualify and every clip shipped an overlay. Collapsed into
+    # one group of fourteen the rule never fires, and `review_L0` published with
+    # an overlay on 1 row of 179. Counting from the back is right for both the
+    # three-segment form and the four-segment one.
     by_scenario: Dict[str, List[str]] = {}
     for uid in uids:
         parts = uid.split("/")
-        by_scenario.setdefault(parts[1] if len(parts) > 2 else "", []).append(uid)
+        by_scenario.setdefault(parts[-2] if len(parts) > 2 else "", []).append(uid)
     out: Dict[str, str] = {}
     for group in by_scenario.values():
         out.update(_cut(sorted(group, key=_hash_unit), names))
@@ -469,7 +485,7 @@ def _write_index(rows: List[Dict], outdir: str,
                     blob = {"bytes": fh.read(), "path": "%s.mp4" % name}
             videos[name].append(blob)
 
-    table = pa.Table.from_pylist(rows)
+    table = _typed(pa, pa.Table.from_pylist(rows))
     for name in ("rgb", "overlay"):
         if any(v is not None for v in videos[name]):
             table = table.append_column(
@@ -486,6 +502,42 @@ def _write_index(rows: List[Dict], outdir: str,
     table = table.replace_schema_metadata(_video_schema_metadata(table))
     pq.write_table(table, path)
     return path
+
+
+#: What an index column IS, for the columns a release can leave entirely empty.
+#:
+#: `pa.Table.from_pylist` infers from the VALUES, so a column nothing filled in
+#: comes out `null`-typed. `actor_material` on an L0 sweep is exactly that --
+#: L0 is flat colours and no body has a material -- and it published as
+#: `{"dtype": "null", "_type": "Value"}`, which is not a type `datasets`
+#: describes or the hub's column statistics can profile.
+#:
+#: It also makes two levels of one release schema-INCOMPATIBLE: `actor_material`
+#: is `null` in `review_L0` and `string` in `review_L1`, so the two cannot be
+#: concatenated -- which is the whole point of generating a ladder.
+#:
+#: Only columns that can come out empty need declaring. Guessing from the name
+#: is not good enough: `magnitude` and `peak_severity` are null on every VALID
+#: clip, so a valid-only release would infer them as text.
+INDEX_TYPES = {
+    "magnitude": "double", "peak_severity": "double", "actor_mass": "double",
+    "difficulty_rank": "int64", "t_event_frame": "int64",
+    "observability_lag": "int64", "n_distractors": "int64",
+    "n_actors": "int64", "n_culprits": "int64", "num_frames": "int64",
+    "fps": "int64", "seed": "int64", "variant": "int64",
+}
+
+
+def _typed(pa, table):
+    """Give every empty column its declared type instead of `null`."""
+    kinds = {"double": pa.float64(), "int64": pa.int64(), "string": pa.string()}
+    for i, field in enumerate(table.schema):
+        if not pa.types.is_null(field.type):
+            continue
+        want = kinds[INDEX_TYPES.get(field.name, "string")]
+        table = table.set_column(i, pa.field(field.name, want),
+                                 table.column(i).cast(want))
+    return table
 
 
 def _video_schema_metadata(table) -> Dict[bytes, bytes]:

@@ -936,6 +936,11 @@ class Fusion(Injector):
         out = self._clone(traj)
         draw = int(plan.notes["draw_in"])
         T = traj.num_frames
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        absorbed_ids = [int(i) for i in plan.notes["absorbed"]]
+        # (keeper, resume frame, fused velocity) -- see the note where this is
+        # spent, below the draw-in loop.
+        resume = []
         for keep_id, gone_id, frame in zip(plan.notes["keepers"],
                                            plan.notes["absorbed"],
                                            plan.notes["merge_frames"]):
@@ -961,6 +966,38 @@ class Fusion(Injector):
                 out.scale_mul[t + n:, ki, :] = float(self.SWELL)
             if t + n < T:
                 out.present[t + n:, gi] = False
+                # WHAT IS LEFT IS ONE BODY, and one body cannot collide with
+                # something that no longer exists. Momentum is conserved across
+                # a perfectly inelastic merge, which is what a merge IS, and the
+                # survivor's mass follows the volume it just swallowed -- the
+                # `SWELL` cube root above -- so the two halves of the bookkeeping
+                # already agree.
+                mk = float(traj.mass[ki])
+                mg = float(traj.mass[gi])
+                vk = traj.lin_vel[t + n - 1, ki].astype(np.float64)
+                vg = traj.lin_vel[t + n - 1, gi].astype(np.float64)
+                v_f = (mk * vk + mg * vg) / max(mk + mg, 1e-9)
+                resume.append((by_id[int(keep_id)], t + n, v_f))
+
+        # **THE SURVIVOR HAS TO BE RE-INTEGRATED, or it keeps the collision.**
+        # This edited only the absorbed body's path and the survivor's SIZE, so
+        # the survivor kept its lawful trajectory verbatim -- including the
+        # impact with the body it had just swallowed. Measured on
+        # `collision x 0777`: the absorbed ball is drawn in and removed by frame
+        # 6, and `ball_a` still decelerates from 1.94 to 0.42 m/s at frame 12,
+        # rebounding off nothing. Its invalid path was byte-identical to the
+        # valid one for the whole clip. You reported it as the fused object
+        # behaving as though it were still colliding.
+        #
+        # The absorbed bodies are excluded from the obstacle set for the same
+        # reason: they are gone, and a merged body must not bounce off its own
+        # other half.
+        for body, t_res, v_f in resume:
+            self._rewrite_from(
+                spec, traj, out, body, t_res, v0=v_f,
+                obstacles=_geom.Obstacles(
+                    spec, traj,
+                    exclude_ids=[int(body.segmentation_id)] + absorbed_ids))
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

@@ -137,9 +137,9 @@ class Tier:
 #: and `v0`/`v1` are what a published DATASET is called -- set by the outdir,
 #: recorded as `release` in every `meta.json`.
 TIERS: Dict[str, Tier] = {
-    #                              res  fps  frames  spp  F_lat  HW_lat  publish
-    "debug":   Tier("debug",   128, 12, 25, 16, 7, 8, False),
-    "release": Tier("release", 512, 30, 89, 64, 23, 16, True),
+    #                          res  fps  frames  spp  F_lat  HW_lat  publish
+    "debug":   Tier("debug",   128, 12,  25,     16,  7,     8,      False),
+    "release": Tier("release", 512, 30,  89,     64,  23,    16,     True),
 }
 # `release` is 512x512 / 30 fps / 89 frames = 2.97 s.
 #

@@ -71,7 +71,8 @@ def invalid_mask(seg_invalid: np.ndarray, dynamic_causal_ids: Sequence[int],
 def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                 primary_ids: Sequence[int], secondary_ids: Sequence[int],
                 active: np.ndarray, neighbourhood: int = 3,
-                static_ids: Sequence[int] = ()) -> np.ndarray:
+                static_ids: Sequence[int] = (),
+                secondary_active=None) -> np.ndarray:
     """uint8 [T,H,W]: 0 = nothing, 1 = the culprit, 2 = a body it disturbed.
 
     **Invalid side only.** The question this array answers is "who did it, and
@@ -96,15 +97,24 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
             # A surface only counts where the culprit is passing through it:
             # otherwise "the floor" becomes the whole plane.
             sec |= (footprint(seg_invalid, static_near)
-                    & _dilate(prim, neighbourhood))
-        if moving:
+                    & _dilate(prim, neighbourhood) & gate)
+        # **EACH BODY ON ITS OWN CLOCK.** One shared gate turned every affected
+        # body blue over the same frames, so a body knocked at the end of the
+        # clip was painted from the start of the window -- before anything had
+        # reached it. `secondary_active` carries the frame each body actually
+        # became a consequence; without it this falls back to the shared gate.
+        for bid in moving:
             # A body that was knocked away is a consequence *wherever it went*.
             # Restricting it to a neighbourhood of the culprit deleted it
             # exactly when it mattered -- the further a struck ball travels, the
             # more clearly it is an effect, and the more certainly it fell
             # outside the box.
-            sec |= footprint(seg_invalid, moving)
-        out[sec & gate & ~prim] = 2
+            own = footprint(seg_invalid, [int(bid)])
+            per = (secondary_active or {}).get(int(bid))
+            own &= (gate if per is None
+                    else np.asarray(per, bool)[:, None, None])
+            sec |= own
+        out[sec & ~prim] = 2
     return out
 
 

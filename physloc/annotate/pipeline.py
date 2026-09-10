@@ -318,7 +318,25 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # body whose trajectory provably departs from the valid twin without being
     # a culprit itself. That turns "affected" from a hand-maintained list into a
     # comparison, and it is the same comparison the bystander guard runs.
-    affected = list(static_ids) + _disturbed_bodies(traj_v, traj_i, causal_ids)
+    #
+    # DISTURBED **AND** REACHED. Moving differently is necessary and not
+    # sufficient: in a `multi` or `distractors` scene the solver's own
+    # divergence nudges bodies the violation never touched, and every one of
+    # them was painted blue. `_causal_touch_frames` is the second half -- did
+    # something carrying the violation actually reach this body, at or after
+    # `t_event`.
+    t_ev = int((plan_d or {}).get("t_event_frame", 0))
+    # EVERY static body in the scene, not just the ones the plan named: the
+    # floor must not relay causality even when no family declared it.
+    scene_static = [int(b.segmentation_id) for b in spec.bodies if b.static]
+    driven = [int(b.segmentation_id) for b in spec.bodies
+              if getattr(b, "scripted", False)]
+    touched = _causal_touch_frames((traj_i, traj_v), causal_ids, t_ev,
+                                   scene_static, driven)
+    onset = _divergence_onset(traj_v, traj_i)
+    affected = list(static_ids) + [
+        b for b in _disturbed_bodies(traj_v, traj_i, causal_ids)
+        if int(b) in touched]
     # CONSEQUENCES, so gated on the consequence window rather than the scored
     # one. For an event family the scored window is the handful of frames the
     # change takes, and the causal mask was disappearing with it -- but "what
@@ -337,10 +355,23 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # do, which is the same comparison level 2 already uses to decide *who* was
     # affected, now deciding *when* as well.
     diverged = _diverged_frames(traj_v, traj_i, causal_ids + affected,
-                                int((plan_d or {}).get("t_event_frame", 0)), T)
+                                t_ev, T)
     causal_gate = (consequence | diverged) & observable
+    # PER BODY, from the frame it was reached AND began to behave differently.
+    # The shared gate painted a body blue over the whole window including the
+    # frames before anything got to it -- a struck ball marked as a consequence
+    # while it was still sitting untouched.
+    frames = np.arange(T)
+    secondary_active = {}
+    for b in affected:
+        if int(b) in static_ids:
+            continue
+        start = max(int(touched.get(int(b), t_ev)),
+                    int(onset.get(int(b), t_ev)))
+        secondary_active[int(b)] = (frames >= start) & causal_gate
     cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected,
-                                  causal_gate, static_ids=static_ids)
+                                  causal_gate, static_ids=static_ids,
+                                  secondary_active=secondary_active)
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
@@ -601,6 +632,86 @@ def _disturbed_bodies(traj_v, traj_i, causal_ids, tol: float = 1e-3) -> List[int
         b = np.asarray(traj_i.pos[:, j, :], np.float64)
         if a.shape == b.shape and float(np.abs(a - b).max()) > tol:
             out.append(int(bid))
+    return out
+
+
+def _causal_touch_frames(trajs, culprit_ids, t_event: int,
+                         static_ids, driven_ids=()) -> Dict[int, int]:
+    """{body_id: the frame it first became causally connected to a culprit}.
+
+    **Touched, and touched AFTER the violation started.** `_disturbed_bodies`
+    answers "did this body move differently", which is necessary and nowhere
+    near sufficient: in a `multi` or `distractors` scene the solver's own
+    divergence moves bodies the culprit never came near, and they were painted
+    blue. Your rule, and it is the right one -- a body is a consequence only
+    once something carrying the violation has actually reached it.
+
+    It also settles the ordering question: contacts BEFORE `t_event` are
+    skipped, because a collision that already happened is a lawful collision
+    and the body it struck is not a consequence of anything.
+
+    Causality travels through MOVING bodies only. A culprit resting on the
+    floor makes the floor a contact of a culprit, and if the floor could pass
+    causality on then every object standing on it would be a consequence --
+    which is the whole scene. A static body can BE reached (that is how a
+    surface being passed through gets its mask) and cannot relay.
+
+    **BOTH TWINS**, because a PREVENTED collision is a consequence too. On
+    `collision x permanence` the striker is removed and the target is never
+    touched in the invalid clip -- yet it is affected precisely BY not being
+    struck, and it is the clearest consequence in the scene. Reading only the
+    invalid contacts silently dropped it, and with it every family whose whole
+    content is a collision that did not happen. The valid twin says when the
+    contact would have been; the earlier of the two is when the body's fate was
+    decided.
+
+    One forward pass over contacts in frame order is enough for the transitive
+    case, since a relay can only happen at or after the frame its relayer was
+    itself reached.
+    """
+    stat = {int(i) for i in (static_ids or ())}
+    reached = {int(i): int(t_event) for i in culprit_ids}
+    # A DRIVEN BODY IS A CONSEQUENCE BY CONSTRUCTION, not by contact.
+    # `pendulum_swing`'s rod and `shadow_track`'s shadow have their pose
+    # computed from the actor by `Scenario.rescript`, and both carry
+    # `collides=False` -- they touch nothing, ever, so a contact test drops
+    # them however plainly they move with the body they are drawn from.
+    # Contact is simply the wrong question for a body the scene drives.
+    reached.update({int(i): int(t_event) for i in (driven_ids or ())})
+    for traj in trajs:
+        c = getattr(traj, "contacts", None)
+        if c is None or not len(getattr(c, "frame", ())):
+            continue
+        seen = dict(reached)
+        frames = np.asarray(c.frame, int)
+        for k in np.argsort(frames, kind="stable"):
+            f = int(frames[k])
+            if f < int(t_event):
+                continue
+            a, b = int(c.body_a[k]), int(c.body_b[k])
+            for src, dst in ((a, b), (b, a)):
+                got = seen.get(src)
+                if got is None or got > f or src in stat:
+                    continue
+                if dst not in seen or seen[dst] > f:
+                    seen[dst] = f
+        for k, v in seen.items():
+            if k not in reached or reached[k] > v:
+                reached[k] = v
+    return reached
+
+
+def _divergence_onset(traj_v, traj_i, tol: float = 1e-3) -> Dict[int, int]:
+    """{body_id: the first frame its path departs from the valid twin}."""
+    out: Dict[int, int] = {}
+    for j, bid in enumerate(np.asarray(traj_v.body_ids, int)):
+        a = np.asarray(traj_v.pos[:, j, :], np.float64)
+        b = np.asarray(traj_i.pos[:, j, :], np.float64)
+        if a.shape != b.shape:
+            continue
+        moved = np.flatnonzero(np.abs(a - b).max(axis=1) > tol)
+        if moved.size:
+            out[int(bid)] = int(moved[0])
     return out
 
 

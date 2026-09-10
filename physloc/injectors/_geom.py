@@ -885,7 +885,22 @@ def acting_frame(spec, traj, body_id: int, num_frames: int,
         return int(want)
     lo, hi = int(run[0]), int(run[1])
     latest = hi - int(round(share * max(hi - lo, 0)))
-    earliest = max(lo + 1, 1, int(round(floor_fraction * num_frames)))
+    earliest = max(lo + 1, 1)
+    # **ROOM AHEAD WINS WHEN THE RUN IS TOO SHORT TO HONOUR BOTH.** The clip
+    # fraction keeps a lawful prefix, which is a nicety; `share` keeps free
+    # flight after the event, which is the whole reason this function exists.
+    # Taking the max of the two silently inverted the band on a short run and
+    # then clamped to `earliest` -- the LATEST usable frame, which is the
+    # failure the docstring above describes and this was written to prevent.
+    #
+    # Measured on `pyramid_impact`: the cube is airborne for six frames and
+    # strikes the pyramid on frame 6, so `latest` is 3 and a floor of a sixth
+    # of a 25-frame clip is 4. The shove landed on frame 4, two frames before
+    # impact, and read as simultaneous with it -- you reported that the impulse
+    # should happen before the falling object touches the pyramid.
+    floor = int(round(floor_fraction * num_frames))
+    if earliest <= floor <= latest:
+        earliest = floor
     # Honour `want` when it already lands inside the usable band; otherwise
     # place it within the band rather than clamping to whichever edge it
     # overshot, which is how a family ends up firing on one frame forever.

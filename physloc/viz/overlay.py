@@ -359,6 +359,17 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     bits = [str(meta.get("complexity", {}).get("name") or ""), sev_bin]
     if cond:
         bits.append(cond)
+    # HOW MANY BODIES ARE WRONG, when it is more than one. `multi` is the
+    # condition that asks "which of these is wrong", but it is not the only way
+    # a clip ends up with several culprits: `superelastic` boosts BOTH bodies of
+    # a two-body collision, because boosting one would add a momentum
+    # violation the clip does not annotate; `fission` and `fusion` name both
+    # halves. So a `standard` clip can carry two culprits, and nothing on the
+    # frame said so -- you found it on L3 `stack_topple x superelastic`, where
+    # the severity landed on two blocks under a label that did not mention it.
+    nc = meta.get("n_culprits")
+    if isinstance(nc, int) and nc > 1:
+        bits.append("%d culprits" % nc)
     bits += ["seed %s" % meta.get("seed"), "tier %s" % meta.get("tier")]
     for k in range(len(bits), 0, -1):
         mid = "   ".join(x for x in bits[:k] if x)

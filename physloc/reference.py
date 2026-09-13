@@ -203,13 +203,14 @@ def costs() -> str:
         h = re.search(r"~([\d.]+) h at the measured", out)
         cells = re.search(r"BUILD cells: (\d+)", out)
         renders = re.search(r"(\d+) renders total", out)
-        if not (h and cells and renders):
+        workers = re.search(r"on (\d+) worker", out)
+        if not (h and cells and renders and workers):
             continue
         levels = "+".join(m.group(1) for m in _LEVEL_ROW.finditer(out)) or "--"
         rows.append(["`%s`" % name, levels, cells.group(1), renders.group(1),
-                     _hours(float(h.group(1)))])
-    return _table(["config", "levels", "cells", "renders", "at 4 workers"],
-                  rows)
+                     workers.group(1), _hours(float(h.group(1)))])
+    return _table(["config", "levels", "cells", "renders", "workers",
+                   "wall clock"], rows)
 
 
 def costs_ladder() -> str:
@@ -222,19 +223,21 @@ def costs_ladder() -> str:
     one -- so neither the share nor the rate predicts the answer on its own.
 
     Parallel hours are the serial figure `taxonomy` prints divided by the
-    measured speedup at four workers, which is the arithmetic the run total
-    uses; quoting serial for the levels and parallel for the total is how a
-    cost table stops adding up.
+    measured speedup for that level's background at the config's worker
+    count, which is the arithmetic the run total uses; quoting serial for the
+    levels and parallel for the total is how a cost table stops adding up.
     """
-    from .cli import SPEEDUP
+    from .cli import speedup_for
+    from .scenarios.base import COMPLEXITY
 
     out = _price("v0_release")
-    speedup = SPEEDUP[4]
+    workers = int(re.search(r"on (\d+) worker", out).group(1))
     seen = []
     for m in _LEVEL_ROW.finditer(out):
         level, nv, _inv, _val, renders, rate, serial = m.groups()
+        bg = COMPLEXITY[level].background
         seen.append((level, nv, int(renders), float(rate),
-                     float(serial) / speedup))
+                     float(serial) / speedup_for(workers, bg)))
     total = sum(h for *_, h in seen)
     rows = [["**%s**" % lvl, nv, str(n), "%.0f s" % rate, _hours(h),
              "%.0f%%" % (100.0 * h / total)]
@@ -242,7 +245,7 @@ def costs_ladder() -> str:
     rows.append(["**all four**", "--", str(sum(n for _, _, n, _, _ in seen)),
                  "--", _hours(total), "100%"])
     return _table(["level", "variants", "renders", "per render",
-                   "at 4 workers", "share of the run"], rows)
+                   "at %d workers" % workers, "share of the run"], rows)
 
 
 BLOCKS = {"media": media, "domains": domains, "scenarios": scenarios,

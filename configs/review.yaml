@@ -103,8 +103,8 @@ generate:
   #   --variants 1` is a single job however high you set it. Output is
   #   byte-identical at any worker count: each job writes its own directory and
   #   the per-clip rng is keyed by (seed, family, severity), never by position
-  #   in a queue. Measured on this box: 2.50x at four workers, and eight buys
-  #   7% more, because Blender already uses every core per render.
+  #   in a queue. `auto` is one per core. How far it scales is measured in the
+  #   README, "Scaling across cores and machines".
   workers: 8 #4
 
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)

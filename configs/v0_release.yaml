@@ -36,14 +36,14 @@
 
 # Sizing at 512x512. The severity ladder costs 3x the invalid clips, but the
 # valid twin and the scene build are shared across bins, so it is the cheapest
-# breadth available. Price the exact run before starting it -- these are the
-# numbers `taxonomy --config v0_release` prints, not a promise:
+# breadth available. Price the exact run before starting it, on the box that
+# will run it -- `taxonomy --config v0_release` prints the hours:
 #
-#     variants   ladder gives                    parallel (4 workers)
-#        3        L0 3, L1 2, L2 1, L3 1           ~528 h   2 of 5 conditions
-#       10        L0 10, L1 5, L2 3, L3 2         ~1448 h   5 of 5
+#     variants   ladder gives                    conditions
+#        3        L0 3, L1 2, L2 1, L3 1           2 of 5
+#       10        L0 10, L1 5, L2 3, L3 2          5 of 5
 #
-# THIS IS WEEKS ON ONE BOX. It is also embarrassingly parallel: jobs are
+# THIS IS DAYS TO WEEKS ON ONE BOX (README, "Scaling across cores and machines"). It is also embarrassingly parallel: jobs are
 # independent by (scenario, seed, level) and the per-clip rng is keyed by
 # content rather than queue position, so N machines is N times faster. Split
 # with `--scenario a,b,c` per machine, or a level apiece with v0_L0..v0_L3, and
@@ -51,7 +51,7 @@
 #
 defaults:
   seed: 20260824
-  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s, ~695 s a render
+  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s
   complexity: all      # the whole BUILT ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
   # TEN, and it is forced rather than chosen. The condition cycle has ten slots
@@ -63,6 +63,6 @@ defaults:
 
 generate:
   keep_going: true
-  workers: 4
+  workers: auto        # one per core; see README "Scaling across cores and machines"
   workdir: out/work_v0
   outdir: out/physloc_v0

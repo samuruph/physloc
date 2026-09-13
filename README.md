@@ -494,10 +494,41 @@ variants** before all four levels and all five conditions appear at all. Three s
 (`pour`, `shadow_track`, `drop`) cover all 23 families between them, which is 41 cells
 instead of 166.
 
-**`v0_release` is weeks on one box**, and embarrassingly parallel: jobs are independent by
-`(scenario, seed, level)` and the per-clip rng is keyed by content rather than queue position,
-so N machines is N× faster. Split with `--scenario a,b,c` per machine, or a level apiece with
-`v0_L0`…`v0_L3`, and merge the clip trees — nothing collides.
+**`v0_release` is days to weeks on one box** (see [Scaling](#scaling)), and embarrassingly
+parallel: jobs are independent by `(scenario, seed, level)` and the per-clip rng is keyed by
+content rather than queue position, so N machines is N× faster. Split with `--scenario a,b,c`
+per machine, or a level apiece with `v0_L0`…`v0_L3`, and merge the clip trees — nothing collides.
+
+**Running the full release.** Nothing needs editing first: the `v0_*` configs use
+`workers: auto`, so a run uses one worker per core on whatever machine it lands on, and the
+render backend is the default (64 spp, NLM, adaptive off).
+
+```bash
+# 1. Price it on the machine that will run it.
+python -m physloc.cli taxonomy --config v0_release
+
+# 2. Once per new machine: measure the one memory figure that is still an estimate
+#    (release L3 `pour`, set to ~60 GB). Watch `docker stats` in a second terminal.
+python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \
+    --severity strong --variants 1 --workers 1 \
+    --outdir out/_pour_l3_probe --workdir out/_pour_l3_probe_work
+
+# 3. Run it detached and resumable -- a spot reclaim, a full disk or a Ctrl-C loses only
+#    the jobs in flight. Generate, validate, viz and export, into out/physloc_v0.
+mkdir -p out/logs
+nohup bash scripts/run.sh v0_release --resume > out/logs/v0_release.txt 2>&1 &
+tail -f out/logs/v0_release.txt       # one line per finished job, with a weighted ETA
+
+# ...or split across machines, one level each (see "Generating one level at a time").
+nohup bash scripts/run.sh v0_L0 --resume > out/logs/v0_L0.txt 2>&1 &    # machine 1
+nohup bash scripts/run.sh v0_L2 --resume > out/logs/v0_L2.txt 2>&1 &    # machine 2 ...
+```
+
+Re-running the same command resumes: a job is skipped only when its recorded request —
+config, dials and render backend — matches, so resuming across a changed setting re-renders
+rather than mixing. The run ends with a stage profile whose **occupancy** line says how many
+workers were busy on average; far below the worker count means jobs were queueing for memory
+rather than for cores.
 
 ```bash
 python -m physloc.cli generate --config review_severity
@@ -565,11 +596,20 @@ python -m physloc.cli generate --config review --complexity all --variants 10
 PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --scenario drop
 ```
 
-`--workers N` runs N container jobs at once. Measured on an 8-core box: **2.50× at four**,
-and eight buys 7% more — Blender already uses every core per render, so workers
-oversubscribe. Output is byte-identical at any worker count.
+`--workers N` runs N container jobs at once; `--workers auto` (what the `v0_*` configs use) is
+one per core. Each worker gets its own core slice and a matching Blender thread count, and a
+job only starts once its measured peak memory fits. Output is byte-identical at any worker
+count. How far that scales, and what to expect on a bigger machine, is measured in
+[Scaling across cores and machines](#scaling).
 
 ### Render backend — buying time back from the denoiser
+
+**The release uses the default backend: 64 spp, the NLM denoiser, adaptive sampling off.** That
+was chosen on measurement. Against a 512-spp reference of the same clip (`drop × solidity`, L2,
+512², 25 frames), 64 spp has RMSE 0.63 on a 0–255 scale with 99% of pixels within 2 levels, and
+costs a third of the time (5.8 s a frame against 18.0). Adaptive sampling at 64 spp moved the
+image by RMSE 4.6 from that default — seven times the default's own error — so it is not used.
+Nothing below changes a run unless you set it; it is here for experiments.
 
 Kubric constructs its renderer with **adaptive sampling off** and the **legacy NLM** denoiser,
 and neither was ever revisited. Both are measurable, and both are expensive.
@@ -603,13 +643,8 @@ Set them as environment variables — `scripts/run.sh` and `generate` both inher
 `docker/kubric.sh` forwards them into the container:
 
 ```bash
-# the recommended pair, on any config or script
-export PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off
-bash scripts/run.sh review_L0 --spp 128
-
-# ...or one line, without exporting
-PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off \
-  python -m physloc.cli generate --config v0_release --spp 128 --resume
+# an experiment on a review sweep -- never mix backends inside a release
+PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off bash scripts/run.sh review_L0 --spp 128
 
 # scripts/run_fast.sh is the same two variables, pre-set
 bash scripts/run_fast.sh review_L0 --spp 128
@@ -647,27 +682,126 @@ them, so it cannot go stale silently. `python -m physloc.cli taxonomy --config <
 the same figure for any config, with the per-level split.
 
 <!-- physloc:costs -->
-| config | levels | cells | renders | at 4 workers |
-|---|---|---|---|---|
-| `review_severity` | L0 | 166 | 511 | **36 min** |
-| `review_conditions` | L0 | 6 | 80 | **6 min** |
-| `review_L0` | L0 | 166 | 179 | **12 min** |
-| `review_L1` | L1 | 166 | 179 | **12 min** |
-| `review_L2` | L2 | 166 | 179 | **1.1 h** |
-| `review_L3` | L3 | 166 | 179 | **1.1 h** |
-| `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | **8.8 h** |
-| `review` | L0 | 166 | 511 | **36 min** |
-| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 515 h (**21.5 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 258 h (**10.7 days**) |
-| `v0_L2` | L2 | 166 | 1533 | 405 h (**16.9 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 270 h (**11.3 days**) |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 1448 h (**60.4 days**) |
+| config | levels | cells | renders | workers | wall clock |
+|---|---|---|---|---|---|
+| `review_severity` | L0 | 166 | 511 | 8 | **36 min** |
+| `review_conditions` | L0 | 6 | 80 | 8 | **6 min** |
+| `review_L0` | L0 | 166 | 179 | 8 | **12 min** |
+| `review_L1` | L1 | 166 | 179 | 8 | **12 min** |
+| `review_L2` | L2 | 166 | 179 | 8 | **1.3 h** |
+| `review_L3` | L3 | 166 | 179 | 8 | **1.3 h** |
+| `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | 8 | **9.4 h** |
+| `review` | L0 | 166 | 511 | 8 | **36 min** |
+| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
+| `v0_L0` | L0 | 166 | 5110 | 32 | 145 h (**6.0 days**) |
+| `v0_L1` | L1 | 166 | 2555 | 32 | 72 h (**3.0 days**) |
+| `v0_L2` | L2 | 166 | 1533 | 32 | 123 h (**5.1 days**) |
+| `v0_L3` | L3 | 166 | 1022 | 32 | 82 h (**3.4 days**) |
+| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 422 h (**17.6 days**) |
 <!-- /physloc:costs -->
 
-Scale by workers: these assume four, which measures **2.50×** on an 8-core box. Eight buys 7%
-more, because Blender already uses every core per render. Across N machines it is genuinely
-N× — jobs are independent by `(scenario, seed, level)`.
+Each row is priced at that config's own `workers`, on the box the constants were measured on
+(32 vCPU). A different machine is a different price — see the next section.
+
+<a name="scaling"></a>
+### Scaling across cores and machines
+
+Measured on a 32-vCPU box (Intel Xeon Platinum 8488C: **16 physical cores** + hyperthreads,
+61 GB), release geometry (512², 64 spp, all seven passes), idle apart from the run itself.
+
+**One render cannot use a big box.** Most of a frame is serial — scene sync, pass writing, the
+NLM denoiser — so threads buy little past a handful:
+
+| Blender threads | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|---|
+| s / frame (L0) | 17.15 | 9.42 | 5.56 | 3.68 | 2.81 | 2.58 |
+| speedup | 1.0× | 1.8× | 3.1× | 4.7× | 6.1× | 6.6× |
+
+**Narrow renders side by side are what scale.** N workers, each pinned to `cores/N` with a
+matching thread count; throughput relative to one container using the whole box:
+
+| workers × threads | 1 × 32 | 2 × 16 | 4 × 8 | 8 × 4 | 16 × 2 | 32 × 1 |
+|---|---|---|---|---|---|---|
+| L0 s / frame per container | 2.56 | 3.35 | 4.89 | 8.03 | 14.43 | 28.06 |
+| L0 throughput | 1.00× | 1.53× | 2.09× | 2.55× | 2.84× | **2.92×** |
+| L2 (HDRI dome) s / frame | 5.82 | – | – | 20.80 | 39.54 | – |
+| L2 throughput | 1.00× | – | – | 2.24× | 2.35× | – |
+| CPU busy | 32% | 47% | 64% | 79% | 89% | 96% |
+
+It flattens near **3×** because the box has 16 physical cores: sixteen one-thread renders
+pinned to those alone run at the isolated 17.3 s a frame — no contention at all — and the
+hyperthreads add only ~20% on top. **Throughput follows physical cores, not vCPUs.** Pinning
+itself buys nothing measurable (sixteen workers: 14.61 s a frame unpinned, 14.43 pinned); it
+is there to keep each container's thread count honest. An HDRI frame costs 2.3× a solid one
+on an idle box and **2.74× under full load**, and `SPEEDUP` in `physloc/cli.py` is kept per
+background for that reason.
+
+*A caveat on the multi-worker rows.* They were taken with `probe_cost.py` before it gave each
+run its own scratch folder, so the concurrent containers wrote their frames into one shared
+folder. Every container rendered the same resolution and frame count, and the render — which
+dominates at 16 frames — is real work either way; what was not isolated is Kubric reading the
+passes back, which globs every EXR in the folder. The single-container rows were clean.
+
+**Never fewer than two threads, never a one-core slice.** Cycles 2.93 hangs on the first frame
+of a real worker job with one render thread, or when pinned to a single core whatever the
+thread count — the main thread spins in `sched_yield` inside `_cycles.render` and the render
+threads never run. Two threads on two or more cores, or AUTO, render normally. `_cpu_slots`
+enforces it: at 32 workers on 32 vCPUs each worker runs unpinned with two threads.
+
+**Memory, not CPU, is what a crowded box runs out of — and one cell drives it.** Peak memory of
+a single worker job:
+
+| job | L0 | L1 | L2 | L3 |
+|---|---|---|---|---|
+| `pour`, debug | 2.7 GB | 2.7 GB | 3.5 GB | **26.4 GB** |
+| `pour`, release | 5.9 GB | – | – | ~60 GB (estimate) |
+| `drop`, release | 2.6 GB | – | – | – |
+
+Every other scenario measured 0.3–2.6 GB at any level, and memory is flat in the number of
+renders (one `drop` job rendering 43 clips stayed at 0.8 GB). The outlier is L3 `pour`: from
+L3 up every moving body becomes a scanned GSO mesh, and in `pour` every grain moves, so 96
+grains are 96 textured meshes and 96 mesh colliders. On this box three `pour` jobs among 32
+workers got one OOM-killed. `generate` therefore admits jobs through a memory budget (host RAM
+minus 6 GB, first in first out) and caps every container at that budget, so an overrun kills
+one job rather than letting the host's OOM killer choose. Only the cells in `JOB_MEMORY_GB` are
+charged their measured peak; every other job is charged 1 GB, what one typically holds — 32
+release containers rendering together averaged ~0.6 GB each. Charging every job its peak was
+tried and left most of the pool idle: replaying the `v0_release` queue on 96 workers and 186 GB,
+32.4 h against 22.1 h.
+
+**The release L3 `pour` figure is the number to measure before a big run.** It is the debug
+value scaled by grain count (212 against 96) — ~60 GB, set high on purpose and not measured —
+and it now drives most of the remaining queueing: at 60 GB a job, a 186 GB budget runs two of
+them while everything else shares the rest, and on this 61 GB box one of them runs alone. One
+`bash docker/kubric.sh physloc/render/worker.py --scenario pour --tier release --complexity L3
+--family continuity --severity strong` under `docker stats` on the target machine settles it.
+
+**What a full `v0_release` should take.** From the measured constants: 1114 render-hours on one
+container of this box, 2.64× at 32 workers, plus ~10% for scene build, simulation, container
+start and annotation, scaled to other machines by physical cores. Rough — the per-core speed of
+a different CPU and memory bandwidth on a bigger one are not measured:
+
+| machine | expected | pessimistic (+25%) |
+|---|---|---|
+| 32 vCPU = 16 cores + HT (this box) | 464 h (**19.3 days**) | 24.2 days |
+| 64 vCPU = 32 cores + HT | 232 h (**9.7 days**) | 12.1 days |
+| 96 vCPU = 48 cores + HT (e.g. c7i.24xlarge) | 155 h (**6.4 days**) | 8.1 days |
+| 96 vCPU = 96 cores, no HT (e.g. c7a.24xlarge) | 95 h (**4.0 days**) | 5.0 days |
+| 192 vCPU = 96 cores + HT (e.g. c7i.48xlarge) | 77 h (**3.2 days**) | 4.0 days |
+| 4 × 96 vCPU (48 cores + HT each) | 39 h (**1.6 days**) | 2.0 days |
+
+On a new machine:
+
+1. **Prefer physical cores.** A 96-vCPU instance with no hyperthreading should do ~1.6× the work
+   of one with 48 cores + HT.
+2. **Use `workers: auto`**, and give it at least 2 GB of RAM per vCPU so memory admission rarely
+   queues anything but L3 `pour`.
+3. **Measure before trusting a table.** `physloc/render/probe_cost.py` gives the per-frame cost of
+   one container, and every `generate` ends with a stage profile and an **occupancy** line: how
+   many of its workers were busy on average. Far under the worker count means jobs are waiting
+   on memory or on a straggler, not on cores.
+4. **Across machines it is genuinely N×.** Jobs are independent by `(scenario, seed, level)`:
+   split with `v0_L0` … `v0_L3` or `--scenario`, and merge the clip trees — nothing collides.
 
 ### Where a release's time goes
 
@@ -676,23 +810,23 @@ directions: L0 gets ten variants at the cheap solid rate, L3 two at the expensiv
 Neither the declared share nor the rate predicts the answer alone, so here it is.
 
 <!-- physloc:costs_ladder -->
-| level | variants | renders | per render | at 4 workers | share of the run |
+| level | variants | renders | per render | at 32 workers | share of the run |
 |---|---|---|---|---|---|
-| **L0** | 10 | 5110 | 908 s | 515 h (**21.5 days**) | 36% |
-| **L1** | 5 | 2555 | 908 s | 258 h (**10.7 days**) | 18% |
-| **L2** | 3 | 1533 | 2378 s | 405 h (**16.9 days**) | 28% |
-| **L3** | 2 | 1022 | 2378 s | 270 h (**11.3 days**) | 19% |
-| **all four** | -- | 10220 | -- | 1448 h (**60.3 days**) | 100% |
+| **L0** | 10 | 5110 | 298 s | 145 h (**6.0 days**) | 34% |
+| **L1** | 5 | 2555 | 298 s | 72 h (**3.0 days**) | 17% |
+| **L2** | 3 | 1533 | 677 s | 123 h (**5.1 days**) | 29% |
+| **L3** | 2 | 1022 | 677 s | 82 h (**3.4 days**) | 19% |
+| **all four** | -- | 10220 | -- | 421 h (**17.6 days**) | 100% |
 <!-- /physloc:costs_ladder -->
 
-**Three quarters of the renders are the cheap half of the bill.** L0 and L1 are 7665 of the
-10220 renders and 54% of the time; L2 and L3 are the remaining quarter and 46%, because the
-dome charges each of them 2.6× a slab. The ladder's shares put the breadth where it is
-cheapest, deliberately — the baseline is what every other level is compared against, so it
-should be the largest stratum.
+**Three quarters of the renders are half of the bill.** L0 and L1 are 7665 of the 10220
+renders and about half the time; L2 and L3 are the remaining quarter and the other half,
+because the dome charges each of them 2.3× a slab. The ladder's shares put the breadth where
+it is cheapest, deliberately — the baseline is what every other level is compared against, so
+it should be the largest stratum.
 
-On one machine, `v0_L0` alone is 21 days and is a complete, publishable dataset by itself;
-`v0_L2` and `v0_L3` are 675 h together and are what you add when there is capacity for them.
+On the 32-vCPU box, `v0_L0` alone is 6 days and is a complete, publishable dataset by itself;
+`v0_L2` and `v0_L3` are 205 h together and are what you add when there is capacity for them.
 The four **partition** the release, so nothing is wasted and nothing collides.
 
 **Where the numbers come from.** `SECONDS_PER_CLIP` in `physloc/cli.py` is a tier's frame
@@ -701,14 +835,16 @@ reproduces every per-frame number in it:
 
 | | s/render | frames × measured s/frame |
 |---|---|---|
-| `debug` solid | **8** | 25 × 0.32, at 128², 16 spp |
-| `debug` hdri | **44** | 25 × 1.76 — at 128² the environment map's fixed cost dominates |
-| `release` solid | **695** | 89 × 7.81, the mean of L0 and L1 below |
-| `release` hdri | **1821** | 89 × 20.46, the mean of L2 and L3 |
+| `debug` solid | **8** | 25 × 0.32, at 128², 16 spp — on the previous 8-core box |
+| `debug` hdri | **44** | 25 × 1.76 — on the previous 8-core box; at 128² the environment map's fixed cost dominates |
+| `release` solid | **228** | 89 × 2.56, one container on the 32-vCPU box |
+| `release` hdri | **518** | 89 × 5.82, one container on the 32-vCPU box |
 
-The per-render rates in the two tables above are higher than these — 908 s where the constant
-says 695 — because `DISTRACTOR_COST` scales every estimate by the extra bodies the average
-clip carries: `distractors` and `multi` add 3–10 of them, on 30% of the clips.
+The debug pair was not re-measured on the new box, so the `review_*` rows above are priced
+from the old one. The per-render rates in the two tables above are higher than these — 298 s
+where the constant says 228 — because `DISTRACTOR_COST` scales every estimate by the extra
+bodies the average clip carries: `distractors` and `multi` add 3–10 of them, on 30% of the
+clips.
 
 **This prices the render and nothing else.** Build, simulation, annotation and the overlay
 video are real and are not in the constant, so what `taxonomy` prints is a floor and a run

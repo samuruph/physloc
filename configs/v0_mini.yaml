@@ -8,8 +8,8 @@
 #
 # NOT a review sweep -- the same structure as the release, made small. Every
 # family, every complexity level, every difficulty condition and every severity
-# bin, so what you learn from it transfers to the real thing. Roughly 15 h at
-# four workers.
+# bin, so what you learn from it transfers to the real thing. Price it with
+# `taxonomy --config v0_mini` on the box that will run it.
 #
 # It is small in CELLS, not in variants, and that is forced rather than chosen.
 # The condition cycle has ten slots and the levels take a share of them, so it
@@ -46,6 +46,6 @@ defaults:
 
 generate:
   keep_going: true
-  workers: 4
+  workers: auto
   workdir: out/work_v0_mini
   outdir: out/physloc_v0_mini

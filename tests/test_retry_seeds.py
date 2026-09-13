@@ -30,7 +30,7 @@ def _run(monkeypatch, argv, declines_while):
 
     def fake_worker(scenario, seed, tier, family, severity, workdir,
                     complexity="L0", window=None, dials=None, variant=0,
-                    n_variants=None, params_path=None):
+                    n_variants=None, params_path=None, env=None):
         off = seed % cli.LEVEL_SEED_STRIDE - BASE
         seen.append({"level": complexity, "variant": variant, "off": off,
                      "scenario": scenario, "seed": seed, "n_v": n_variants,

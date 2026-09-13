@@ -67,25 +67,56 @@ def cmd_taxonomy(a) -> int:
     return 0
 
 
-#: Clip-level parallelism, measured on this box (8 cores) over 8 independent
-#: jobs of 14 cells each: 1826 s at one worker, 729 s at four, 685 s at eight.
-#: Blender already uses every core per render, so workers oversubscribe and the
-#: curve flattens hard after four -- doubling to eight buys 7%.
-SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
+#: Throughput of N parallel workers over ONE, by background. Measured on a
+#: 32-vCPU box (Xeon 8488C: 16 cores + hyperthreads), release geometry, each
+#: worker pinned to its own cores//N slice with Blender capped to match.
+#: Seconds per frame PER CONTAINER while all N run:
+#:
+#:   workers     1      2      4      8      16     32
+#:   solid     2.56   3.35   4.89   8.03  14.43  28.06
+#:   hdri      5.82     -      -   20.80  39.54     -
+#:
+#: One render cannot use the box: 17.15 s a frame on one thread, 2.58 on 32 --
+#: 6.6x from 32x the cores, because most of a frame is serial. Narrow renders
+#: side by side are what buy throughput, and they top out near 3x because the
+#: box has 16 PHYSICAL cores: sixteen one-thread renders pinned to those alone
+#: run at the isolated 17.3 s a frame, and the hyperthreads add only ~20%.
+#: Throughput follows physical cores -- re-measure on a different box.
+#:
+#: A worker count between two measurements prices at the lower one.
+SPEEDUP = {"solid": {1: 1.0, 2: 1.53, 4: 2.09, 8: 2.55, 16: 2.84, 32: 2.92},
+           "hdri": {1: 1.0, 8: 2.24, 16: 2.35}}
+
+
+def speedup_for(workers: int, background: str = "solid") -> float:
+    table = SPEEDUP.get(background, SPEEDUP["solid"])
+    return table[max(k for k in table if k <= max(1, int(workers)))]
+
+
+def _workers(value) -> int:
+    """`--workers auto` (or `workers: auto` in a config) is one per usable core."""
+    if str(value).strip().lower() == "auto":
+        try:
+            return len(os.sched_getaffinity(0))
+        except AttributeError:
+            return os.cpu_count() or 1
+    return max(1, int(value))
 
 #: Keyed by (tier, background), and each value is the tier's frame count times
 #: the MEASURED per-frame render cost for that background. Rendering is what a
 #: run spends its time on; build, simulate, annotate and overlay are not in
 #: here, so a printed price is a floor and a real job runs somewhat over it.
 #:
-#: Per 512sq frame, spp 64, all seven passes, one scene, idle box:
+#: Per 512sq frame, spp 64, all seven passes, one scene, ONE container on an
+#: idle 32-vCPU box (Xeon 8488C, the box `SPEEDUP` was measured on):
 #:
-#:      L0 7.69   L1 7.93   |   L2 19.31   L3 21.61
+#:      L0 2.56   |   L2 5.82
 #:
-#: which is 7.81 s a frame on a solid background and 20.46 with an HDRI, so
-#: 89 frames come to 695 s and 1821 s. The step is the DOME, not the
+#: so 89 frames come to 228 s and 518 s. The step is the DOME, not the
 #: environment map: L2 and L3 project their HDRI onto one, and a dome encloses
-#: the scene, so rays that miss an object bounce instead of escaping.
+#: the scene, so rays that miss an object bounce instead of escaping. L1 and L3
+#: are priced as L0 and L2; on the previous 8-core box they measured within 3%
+#: and 12% of them (7.69/7.93 and 19.31/21.61 s there).
 #:
 #: The debug pair is 25 frames at the per-frame cost measured at 128sq, and
 #: predates the dome -- which is why it still holds: the ground is a cube slab
@@ -101,7 +132,31 @@ SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
 #: `physloc/render/probe_cost.py` reproduces every per-frame number here, and
 #: needs an IDLE box to do it -- check `docker ps` first.
 SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
-                    ("release", "solid"): 695.0, ("release", "hdri"): 1821.0}
+                    ("release", "solid"): 228.0, ("release", "hdri"): 518.0}
+
+
+#: What a scenario's job costs beyond what `progress.job_weight` models (level,
+#: background, families x bins). Measured at release L0, one container, the
+#: same valid + one invalid render: `pour` 973 s against `drop` 499 s.
+SCENARIO_COST = {"pour": 2.0}
+
+
+def _longest_first(jobs, tier, n_bins):
+    """The job queue ordered by predicted cost, most expensive first.
+
+    Stable, so jobs of equal cost keep the order they were emitted in. The
+    order changes nothing a job produces -- only which workers are busy when.
+    """
+    from .progress import job_weight
+    from .scenarios.base import COMPLEXITY
+
+    def cost(job):
+        _seed, scenario, families, _variant, level, _n = job
+        return (job_weight(level, tier, SECONDS_PER_CLIP, COMPLEXITY,
+                           n_families=len(families), n_bins=n_bins)
+                * SCENARIO_COST.get(scenario, 1.0))
+
+    return sorted(jobs, key=cost, reverse=True)
 
 
 #: How far apart each complexity level's seed block sits. Wide enough that no
@@ -144,6 +199,7 @@ def _print_release_size(cells, a) -> None:
     levels = _levels_for(a.complexity, variants)
     invalid = valid = renders = 0
     serial = 0.0
+    serial_bg = {}
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
           % (a.tier, a.complexity, a.severity, variants))
     for level, n_v in levels:
@@ -169,6 +225,7 @@ def _print_release_size(cells, a) -> None:
         valid += val
         renders += inv + val
         serial += (inv + val) * rate
+        serial_bg[bg] = serial_bg.get(bg, 0.0) + (inv + val) * rate
         print("   %-3s x%-3d %5d invalid + %4d valid = %5d renders "
               "@ %6.1f s = %5.1f h" % (level, n_v, inv, val, inv + val, rate,
                                        (inv + val) * rate / 3600.0))
@@ -176,10 +233,12 @@ def _print_release_size(cells, a) -> None:
           "\n   (valid twins are one per scenario+seed, shared across families"
           "\n    and bins because the prefix is bit-identical)"
           % (len(cells), n_bins, renders))
-    workers = max(1, int(getattr(a, "workers", 0) or 4))
-    speedup = SPEEDUP.get(workers, SPEEDUP[max(SPEEDUP)])
+    workers = _workers(getattr(a, "workers", 0) or 4)
+    # Per background, because an HDRI frame scales worse than a solid one.
+    parallel = sum(s / speedup_for(workers, bg) for bg, s in serial_bg.items())
     print("   ~%.1f h serial, ~%.1f h at the measured %.2fx on %d worker(s)"
-          % (serial / 3600.0, serial / 3600.0 / speedup, speedup, workers))
+          % (serial / 3600.0, parallel / 3600.0,
+             serial / parallel if parallel else 1.0, workers))
     print("   media: %s" % ", ".join(
         "%s %d" % (m, sum(1 for s, _ in cells
                           if SCENARIOS[s].physics_medium == m))
@@ -521,6 +580,12 @@ def cmd_generate(a) -> int:
 
     n_bins = len(SEVERITY_BINS) if a.severity == "all" else len(
         [x for x in str(a.severity).split(",") if x])
+    # LONGEST JOBS FIRST. The ladder emits its levels in blocks, L0 to L3, so
+    # the expensive HDRI and scanned-object jobs all land at the end of the
+    # queue -- where a few long ones run while every other worker sits idle.
+    # Output is unchanged: a job's seed, variant and directory never depend on
+    # its position.
+    jobs = _longest_first(jobs, tier, n_bins)
     weights = [job_weight(level, tier, SECONDS_PER_CLIP, COMPLEXITY,
                           n_families=len(families), n_bins=n_bins)
                for _seed, _scen, families, _v, level, _n in jobs]
@@ -533,14 +598,24 @@ def cmd_generate(a) -> int:
         # the scratch paths cannot collide -- but a ladder run's scratch is
         # easier to read, and to delete a level from, when it is grouped.
         here = work if len(levels) == 1 else os.path.join(work, level)
-        with prof.timer("worker"):
-            rc, info = _run_worker(scenario, seed, tier, ",".join(families),
-                                   a.severity, here, complexity=level,
-                                   window=a.window, variant=variant,
-                                   n_variants=n_v, params_path=params_path,
-                                   dials={"resolution": a.resolution,
-                                          "fps": a.fps,
-                                          "frames": a.frames, "spp": a.spp})
+        # Memory first, then a core slice -- always in that order, so two
+        # threads can never each hold what the other is waiting for.
+        held = memory.acquire(job_memory_gb(scenario, tier, level))
+        env = slots.get()
+        try:
+            with prof.timer("worker"):
+                rc, info = _run_worker(scenario, seed, tier, ",".join(families),
+                                       a.severity, here, complexity=level,
+                                       window=a.window, variant=variant,
+                                       n_variants=n_v, params_path=params_path,
+                                       dials={"resolution": a.resolution,
+                                              "fps": a.fps,
+                                              "frames": a.frames,
+                                              "spp": a.spp},
+                                       env=dict(env, **container_cap))
+        finally:
+            slots.put(env)
+            memory.release(held)
         # The worker reports what Blender itself spent, per render. Recording
         # it beside the container round trip is what separates "the renderer is
         # slow" from "everything around the renderer is slow" -- and the
@@ -598,21 +673,33 @@ def cmd_generate(a) -> int:
                         ok=out["rc"] == 0)
         return out
 
-    workers = max(1, int(getattr(a, "workers", 1) or 1))
-    if workers > 1 and len(jobs) > 1:
-        # The FIRST job runs alone. Kubric fetches its assets from
-        # gs://kubric-public on demand and caches them, and two containers
-        # racing on a cold cache both fail reading a half-written PNG -- two of
-        # eight jobs died that way, taking 28 cells with them, and the run
-        # carried on under --keep-going without anyone noticing. One serial job
-        # populates the cache; everything after it reads.
-        from concurrent.futures import ThreadPoolExecutor
-        outcomes = [run_and_report(jobs[0])]
-        if len(jobs) > 1:
+    workers = _workers(getattr(a, "workers", 1) or 1)
+    slots = _cpu_slots(workers)
+    # The whole budget is also every container's hard cap: a job that blows
+    # past its estimate is then killed by docker on its own, instead of the
+    # host OOM killer choosing a victim -- which, measured, was a system
+    # service before it was the worker.
+    budget_gb = max(4.0, _host_memory_gb() - HOST_RESERVE_GB)
+    memory = MemoryBudget(budget_gb)
+    container_cap = {"PHYSLOC_MEMORY": "%dg" % int(budget_gb)}
+    print("  memory budget %.0f GB for %d worker(s); a job waits until its "
+          "measured peak fits" % (budget_gb, workers), flush=True)
+
+    def run_all(batch, total=None):
+        if workers > 1 and len(batch) > 1:
+            from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                outcomes += list(pool.map(run_and_report, jobs[1:]))
-    else:
-        outcomes = [run_and_report(j) for j in jobs]
+                return list(pool.map(lambda j: run_and_report(j, total),
+                                     batch))
+        return [run_and_report(j, total) for j in batch]
+
+    # NO SERIAL WARM-UP JOB. One used to run alone "to populate Kubric's asset
+    # cache", but the pinned Kubric has no shared cache: `AssetSource` copies
+    # every asset into its own `tempfile.mkdtemp()` inside a `--rm` container,
+    # so there is nothing for two containers to race on. At release geometry
+    # that one job is ~40 renders, which held a 32-core box at one container
+    # for most of half a day.
+    outcomes = run_all(jobs)
 
     # A cell that DECLINED THIS SAMPLE gets another one.
     #
@@ -666,8 +753,10 @@ def cmd_generate(a) -> int:
         print("  retrying %d declined cell(s) on %d clip(s), attempt %d"
               % (len(declined), len(retry_jobs), attempt + 1), flush=True)
         total = len(jobs) + len(retry_jobs)
-        for job in retry_jobs:
-            out = run_and_report(job, total=total)
+        # Through the pool like the main pass. A release declines hundreds of
+        # cells and each retry is a whole container job, so running them one
+        # at a time left every other worker idle for the length of the tail.
+        for out in run_all(retry_jobs, total=total):
             outcomes.append(out)
             if out["rc"] != 0:
                 continue
@@ -767,9 +856,154 @@ def _levels_for(spec: str, variants: int):
     return [(lv, n) for lv, n in out if n > 0]
 
 
+def _cpu_slots(workers: int):
+    """A queue of per-worker container environments: a disjoint core slice each.
+
+    Blender sizes its Cycles thread pool from the HOST's core count, so without
+    this every container on a 32-core box starts 32 threads and N workers run
+    32N threads on 32 cores. A render is mostly NOT sampling -- scene sync,
+    pass writing and the denoiser are largely serial -- so one render cannot
+    use many cores well, and splitting the box into narrow slices, one render
+    each, is what turns cores into throughput.
+
+    One worker gets no slice and keeps Blender's own AUTO.
+
+    NEVER ONE THREAD, AND NEVER ONE CORE. Cycles 2.93 hangs on the worker's
+    first frame -- the main thread spins in `sched_yield` inside
+    `_cycles.render`, and the render threads never run -- whenever it has fewer
+    than two threads OR fewer than two cores. Measured on the worker path
+    (`drop x solidity` L2 and a 32-worker L3 `generate`, debug tier):
+
+        threads 1, all cores      hangs        threads 2, all cores   renders
+        threads 1, one core       hangs        AUTO,      all cores   renders
+        threads 2, one core       hangs
+
+    So a slice narrower than MIN_RENDER_THREADS cores is not pinned at all:
+    the worker runs on every core with two threads. Nothing is lost by it --
+    sixteen workers measured 14.61 s a frame unpinned and 14.43 pinned; the
+    throughput comes from running renders side by side, not from the pinning.
+    """
+    import queue
+
+    slots = queue.Queue()
+    try:
+        cores = sorted(os.sched_getaffinity(0))
+    except AttributeError:
+        cores = list(range(os.cpu_count() or 1))
+    if workers <= 1:
+        slots.put({})
+        return slots
+    per = len(cores) // workers
+    threads = str(max(MIN_RENDER_THREADS, per))
+    for i in range(workers):
+        if per >= MIN_RENDER_THREADS:
+            chunk = cores[i * per:(i + 1) * per]
+            slots.put({"PHYSLOC_THREADS": threads,
+                       "PHYSLOC_CPUSET": ",".join(str(c) for c in chunk)})
+        else:
+            slots.put({"PHYSLOC_THREADS": threads})
+    return slots
+
+
+#: See `_cpu_slots`: Cycles 2.93 hangs below two threads or two cores.
+#: `render.worker` applies the same floor to a hand-set `PHYSLOC_THREADS`.
+MIN_RENDER_THREADS = 2
+
+
+#: Peak memory of ONE worker job, GB, by (scenario, tier, level). Measured with
+#: `docker stats` on real worker runs, one container on an otherwise idle box.
+#:
+#: It is flat in the number of renders: one `drop` job rendering all 43 of its
+#: family x severity clips stayed between 0.79 and 0.82 GB throughout. What moves it is WHAT
+#: IS IN THE SCENE, and one cell is the outlier: `pour` at L3. From L3 up every
+#: moving body becomes a scanned GSO mesh (`scenarios.base._swap_in_gso`), and
+#: in `pour` every grain moves -- so 96 grains are 96 textured meshes in
+#: Blender and 96 mesh colliders in PyBullet, grinding against each other:
+#:
+#:      pour, debug:    L0 2.7   L1 2.7   L2 3.5   L3 26.4
+#:      pour, release:  L0 5.9
+#:      drop, release:  L0 2.6
+#:
+#: The release-tier L2 and L3 `pour` values are ESTIMATES, deliberately high:
+#: the measured debug value scaled by the grain count (212 against 96). A job
+#: that overruns its estimate is still capped per container (`PHYSLOC_MEMORY`),
+#: so a low guess costs one retried job, never the host.
+JOB_MEMORY_GB = {
+    ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
+    ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
+    ("pour", "release", "L0"): 6.5, ("pour", "release", "L1"): 6.5,
+    ("pour", "release", "L2"): 8.0, ("pour", "release", "L3"): 60.0,
+}
+
+#: Anything not in the table is charged what a job TYPICALLY holds, not its
+#: peak. Every other scenario peaked at 0.3-2.6 GB, but peaks are brief and
+#: rarely coincide: 32 release-geometry containers rendering at once held ~0.6
+#: GB each above the host baseline. Charging peaks instead left most of the pool
+#: idle -- replaying the v0_release queue, 32 workers on 55 GB ran 8 of 32 busy
+#: at a 4 GB charge against 12 at 1 GB, and 96 workers on 186 GB went from 32.4
+#: to 22.1 h. Only the cells in the table are charged their measured peak.
+DEFAULT_JOB_MEMORY_GB = {"debug": 1.0, "release": 1.0}
+
+#: Left for the host itself -- the annotator, an editor, the docker daemon.
+HOST_RESERVE_GB = 6.0
+
+
+def job_memory_gb(scenario: str, tier: str, level: str = "L0") -> float:
+    return JOB_MEMORY_GB.get((scenario, tier, level),
+                             DEFAULT_JOB_MEMORY_GB.get(tier, 4.0))
+
+
+def _host_memory_gb() -> float:
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / (1024.0 * 1024.0)
+    except OSError:
+        pass
+    return 0.0
+
+
+class MemoryBudget:
+    """Admit a job only once its measured peak fits in the memory left.
+
+    Workers alone bound CPU, not memory, and memory is what a crowded box runs
+    out of first: see `JOB_MEMORY_GB`. Admission is FIRST IN, FIRST OUT -- a
+    20 GB `pour` job waiting behind a stream of 2 GB ones would otherwise never
+    see 20 GB free -- and a job larger than the whole budget is admitted alone
+    rather than never.
+    """
+
+    def __init__(self, total_gb: float):
+        import collections
+        import threading
+
+        self.total = max(0.0, float(total_gb))
+        self.free = self.total
+        self._cv = threading.Condition()
+        self._queue = collections.deque()
+
+    def acquire(self, gb: float) -> float:
+        gb = min(max(0.0, float(gb)), self.total)
+        me = object()
+        with self._cv:
+            self._queue.append(me)
+            while self._queue[0] is not me or self.free < gb:
+                self._cv.wait()
+            self._queue.popleft()
+            self.free -= gb
+            self._cv.notify_all()
+        return gb
+
+    def release(self, gb: float) -> None:
+        with self._cv:
+            self.free += gb
+            self._cv.notify_all()
+
+
 def _run_worker(scenario, seed, tier, family, severity, workdir,
                 complexity="L0", window=None, dials=None, variant=0,
-                n_variants=None, params_path=None):
+                n_variants=None, params_path=None, env=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
@@ -784,7 +1018,8 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
     for flag, value in (dials or {}).items():
         if value is not None:
             cmd += ["--%s" % flag, str(value)]
-    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
+                       env=dict(os.environ, **env) if env else None)
     for line in p.stdout.splitlines():
         if line.startswith("PHASE0 "):
             info = json.loads(line[len("PHASE0 "):])
@@ -1091,7 +1326,7 @@ def _build(suppress: bool = False):
     p.add_argument("--family", help="price only these families (comma list)")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
-    p.add_argument("--workers", type=int, default=4,
+    p.add_argument("--workers", type=_workers, default=4,
                    help="price the run at this many parallel workers")
     p.set_defaults(fn=cmd_taxonomy)
 
@@ -1108,11 +1343,11 @@ def _build(suppress: bool = False):
     p.add_argument("--seed", type=int, default=91731)
     p.add_argument("--scenario", help="restrict to one scenario")
     p.add_argument("--family", help="restrict to one family")
-    p.add_argument("--workers", type=int, default=1,
-                   help="container runs in parallel. Each render already uses "
-                        "every core, so N workers oversubscribe -- measured "
-                        "1.92x at 4 on this box, not 4x. Output is identical "
-                        "at any N.")
+    p.add_argument("--workers", type=_workers, default=1,
+                   help="container runs in parallel. Each is pinned to its "
+                        "own cores//N slice with Blender capped to match, so N "
+                        "up to the core count scales. Output is identical at "
+                        "any N.")
     p.add_argument("--keep-going", action="store_true",
                    help="carry on past a failing cell and list them at the end")
     p.add_argument("--severity", default="strong",
@@ -1287,6 +1522,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     for key, value in settings.items():
         if key not in typed:
             setattr(a, key, value)
+    # `workers` is a setting of the GENERATE block, so pricing a config would
+    # otherwise quote it at taxonomy's default whatever the file says it runs at.
+    if a.cmd == "taxonomy" and "workers" not in typed and "workers" not in settings:
+        gen_valid = {ac.dest for ac in subs["generate"]._actions} - {"help", "config"}
+        try:
+            gen = config.load(getattr(a, "config", None), "generate", gen_valid)
+        except config.ConfigError:
+            gen = {}
+        if "workers" in gen:
+            a.workers = gen["workers"]
     return a.fn(a)
 
 

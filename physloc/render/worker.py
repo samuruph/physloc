@@ -105,6 +105,15 @@ def _blender_argv():
 #:     in `docker/Dockerfile.gpu`, and it FAILS LOUDLY rather than falling back
 #:     to CPU, because a GPU run that silently rendered on the CPU would be
 #:     reported as a GPU measurement.
+#:   * PHYSLOC_THREADS -- Cycles' CPU thread count. Blender's AUTO asks the
+#:     kernel how many cores the HOST has, not how many this container was
+#:     pinned to, so without it every parallel worker starts one render
+#:     thread per host core and N workers run N x cores threads on the same
+#:     cores. `physloc generate --workers N` sets it to cores // N, and never
+#:     below TWO: with one thread -- or pinned to one core by PHYSLOC_CPUSET,
+#:     whatever the thread count -- Cycles 2.93 hangs on the first frame (main
+#:     thread spinning in `sched_yield`, render threads never run). A value of
+#:     1 is raised to 2 here; a one-core cpuset is avoided by `_cpu_slots`.
 def _render_backend(renderer) -> dict:
     """Apply the env-var render dials to a built renderer. Returns what it did.
 
@@ -139,6 +148,12 @@ def _render_backend(renderer) -> dict:
             chosen["denoiser"] = denoiser
     elif cycles.use_denoising:
         chosen["denoiser"] = cycles.denoiser
+
+    threads = os.environ.get("PHYSLOC_THREADS", "").strip()
+    if threads and int(threads) > 0:
+        bpy.context.scene.render.threads_mode = "FIXED"
+        bpy.context.scene.render.threads = max(2, int(threads))
+    chosen["threads"] = bpy.context.scene.render.threads
 
     if os.environ.get("PHYSLOC_GPU", "").strip() not in ("", "0", "false"):
         prefs = bpy.context.preferences.addons["cycles"].preferences

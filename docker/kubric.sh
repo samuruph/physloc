@@ -49,14 +49,31 @@ if [ -n "${PHYSLOC_GPU:-}" ] && [ "${PHYSLOC_GPU}" != "0" ]; then
   GPU_ARGS=(--gpus all)
 fi
 
+# PHYSLOC_CPUSET pins the container to a slice of cores ("0-3"). A parallel
+# `generate` hands each worker its own slice and sets PHYSLOC_THREADS to its
+# width, because Blender sizes its thread pool from the HOST's core count and
+# would otherwise start one thread per host core in every container.
+CPU_ARGS=()
+if [ -n "${PHYSLOC_CPUSET:-}" ]; then
+  CPU_ARGS=(--cpuset-cpus "$PHYSLOC_CPUSET")
+fi
+# PHYSLOC_MEMORY caps the container ("40g"), swap included. A job that exceeds
+# it is killed ALONE (exit 137). Without it the host's OOM killer picks its own
+# victim, and on a crowded box it took system services before the worker.
+if [ -n "${PHYSLOC_MEMORY:-}" ]; then
+  CPU_ARGS+=(--memory "$PHYSLOC_MEMORY" --memory-swap "$PHYSLOC_MEMORY")
+fi
+
 exec docker run --rm --interactive \
   "${GPU_ARGS[@]}" \
+  "${CPU_ARGS[@]}" \
   --user "$(id -u):$(id -g)" \
   --env PHYSLOC_CAMERA_MOTION \
   --env PHYSLOC_ADAPTIVE \
   --env PHYSLOC_DENOISER \
   --env PHYSLOC_GPU \
   --env PHYSLOC_GPU_BACKEND \
+  --env PHYSLOC_THREADS \
   --volume "$REPO_ROOT:/kubric" \
   --workdir /kubric \
   "$IMAGE" \

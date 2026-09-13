@@ -354,17 +354,35 @@ class ColourShift(Injector):
         # evaluations per bisection step is nothing, and taking the best can
         # never do worse than hue on its own.
         lifts = (0.0, 0.35, -0.35) if float(target) > 0.9 else (0.0,)
+        # **AND SATURATION, because most of L1 is grey.** Rotating the hue of a
+        # colour with no chroma moves it nowhere, and the +0.12 above is all the
+        # chroma this ever added. Measured over twenty draws of every material:
+        # steel, aluminium, rubber, stone and ice reach 0.15-0.22 Lab at EVERY
+        # bin -- `medium` no further than `weak` -- and ten of fourteen
+        # materials top out between 0.38 and 0.52 against a `strong` target of
+        # 1.30. Only saturated plastic reached it. You reported that on some
+        # materials the strongest bin showed nothing at all, and this is why.
+        #
+        # A grey body can only become perceptually far by gaining colour, so
+        # the candidate may saturate as the turn grows. It is also the change
+        # that survives the material: a metal's base colour tints everything it
+        # reflects, and a transmissive body's tints the light through it, so a
+        # chromatic target shows on steel and glass where a grey one cannot.
+        sats = (sat,) if float(target) <= 0.3 else (sat, max(sat, 0.55), 0.85)
 
         def at(turn):
             best_rgb, best_d = None, -1.0
+            grow = min(1.0, turn / 0.25)
             for lift in lifts:
-                out = np.asarray(colorsys.hsv_to_rgb(
-                    (h + sign * turn) % 1.0, sat,
-                    float(np.clip(val + lift * turn / 0.5, 0.05, 1.0))),
-                    np.float64)
-                d = float(np.linalg.norm(_srgb_to_lab(out) - base) / 100.0)
-                if d > best_d:
-                    best_rgb, best_d = out, d
+                for s_to in sats:
+                    s_now = sat + (s_to - sat) * grow
+                    out = np.asarray(colorsys.hsv_to_rgb(
+                        (h + sign * turn) % 1.0, float(np.clip(s_now, 0.0, 1.0)),
+                        float(np.clip(val + lift * turn / 0.5, 0.05, 1.0))),
+                        np.float64)
+                    d = float(np.linalg.norm(_srgb_to_lab(out) - base) / 100.0)
+                    if d > best_d:
+                        best_rgb, best_d = out, d
             return best_rgb, best_d
 
         lo, hi = 0.0, 0.5

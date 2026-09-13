@@ -33,6 +33,10 @@ class PhantomImpulse(Injector):
     DV_BY_BIN = {"weak": 1.6, "medium": 3.6, "strong": 7.0}      # m/s
     #: Frames the culprit may spend off camera before the fit weakens the shove.
     FRAME_TOLERANCE = 4
+    #: Frames a settled medium must have left after the shove for it to be
+    #: shoved there rather than in flight -- a third of the debug tier, enough
+    #: for a spilled pile to leave the box and land.
+    MEDIUM_ROOM = 8
 
     def strong_residual_reference(self, spec) -> float:
         g_dt = 9.81 / float(spec.tier.fps)
@@ -55,6 +59,21 @@ class PhantomImpulse(Injector):
         # the answer on every seed: the family fired on frame 8 of 25 in every
         # clip of ten different scenarios.
         t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T)
+        # **A MEDIUM IS SHOVED ONCE IT IS STILL.** `acting_frame` looks for
+        # free flight, which for one body is where a shove reads best and for a
+        # pour is exactly where it reads worst: at frame 4 of `pour x 0777`, 58
+        # of 96 grains are still falling at 3 m/s, so the shove is aimed mostly
+        # up and spends itself slowing a fall -- a pour that arrives a little
+        # late. You reported it as barely visible even after the fit stopped
+        # clamping it. A heap sitting motionless that then leaps sideways, over
+        # walls its top already stands above, is unmistakably uncaused.
+        #
+        # Only when the settled pile leaves room for the consequence; otherwise
+        # the free-flight moment stands.
+        if len(targets) > 1:
+            rest = _geom.medium_at_rest(traj, targets)
+            if rest is not None and rest <= T - self.MEDIUM_ROOM:
+                t0 = rest
         if t0 is None or not (1 <= t0 < T - 1):
             return None
         # ON A CONSTRAINT, kick it where it is already moving. The intervention

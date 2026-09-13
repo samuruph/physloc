@@ -1014,6 +1014,38 @@ def hidden_behind_static(spec, point) -> bool:
     return False
 
 
+def medium_at_rest(traj, bodies, median_speed: float = 0.05,
+                   p90_speed: float = 0.30) -> Optional[int]:
+    """The first frame a medium of many bodies has come to rest, or None.
+
+    The counterpart to `before_medium_lands`, for the families whose violation
+    reads best on something STILL. A heap that is sitting motionless and then
+    leaps is unmistakably uncaused; the same push delivered to grains that are
+    still falling mostly cancels part of their fall, and reads as a pour that
+    arrived a little late. Measured on `pour x 0777`: 58 of 96 grains are
+    airborne at frame 4, the median grain is at rest by frame 9 and the slowest
+    tenth by frame 11.
+
+    Both a median and a 90th percentile, because a pile settles from the bottom
+    up: the median alone calls it settled while the last grains are still
+    rolling down its flank.
+    """
+    idx = []
+    for body in bodies:
+        try:
+            idx.append(traj.index_of(int(body.segmentation_id)))
+        except Exception:                                     # noqa: BLE001
+            continue
+    if len(idx) < 2:
+        return None
+    speed = np.linalg.norm(np.asarray(traj.lin_vel[:, idx, :], np.float64),
+                           axis=2)
+    still = np.flatnonzero((np.median(speed, axis=1) <= median_speed)
+                           & (np.percentile(speed, 90, axis=1) <= p90_speed))
+    still = still[still >= 1]
+    return int(still[0]) if still.size else None
+
+
 def before_medium_lands(spec, traj, bodies, margin: int = 1):
     """The frame just before the FIRST of `bodies` reaches what holds it up.
 

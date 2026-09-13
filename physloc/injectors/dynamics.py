@@ -120,9 +120,33 @@ class PhantomImpulse(Injector):
         # visible" you reported. Letting the actor drift out of shot for the
         # last frame or two costs the tail of the mask; a shove nobody can see
         # costs the whole clip.
+        # **A MEDIUM IS FITTED AS A MEDIUM.** `stage` adds the push to EVERY
+        # target, and this fitted it on `targets[0]` alone, re-integrated on
+        # its own with nothing around it -- one grain launched out of the box
+        # with no walls, no neighbours and no pile to land in. That grain left
+        # the shot at every rung, so on `pour` the fit bottomed out at 0.28 and
+        # the strongest bin delivered 2.0 m/s of a nominal 7.0 to a pile that
+        # the box then held in place. You reported it as barely visible.
+        #
+        # `_rewrite_group` steps the whole medium together against the scene's
+        # obstacles, and `_offscreen_frames` already judges a group by the
+        # share of it still in shot rather than by its most adventurous member.
+        if len(targets) > 1:
+            def build(k):
+                out = self._clone(traj)
+                self._rewrite_group(
+                    spec, traj, out, targets, t0,
+                    v0_by_body={int(b.segmentation_id):
+                                traj.lin_vel[t0 - 1, traj.index_of(
+                                    int(b.segmentation_id))].astype(np.float64)
+                                + strongest * k for b in targets})
+                return out
+            fit_bodies = targets
+        else:
+            build = lambda k: self._shoved(spec, traj, actor, t0, strongest * k)
+            fit_bodies = [actor]
         scale, _ = self._fit_to_frame(
-            spec, traj, [actor], t0, strongest,
-            lambda k: self._shoved(spec, traj, actor, t0, strongest * k),
+            spec, traj, fit_bodies, t0, strongest, build,
             tolerance=self.FRAME_TOLERANCE)
         push = unit * self.DV_BY_BIN[severity_bin] * scale
         dv = float(np.linalg.norm(push))

@@ -89,8 +89,21 @@ def main() -> int:
                     b, kind="dome", position=(0.0, 0.0, 0.0),
                     scale=(1.0, 1.0, 1.0))
 
+    # A FRESH SCRATCH PER RUN. Kubric's `postprocess` reads back every `*.exr`
+    # in the scratch folder, not just the frames this render wrote, so a shared
+    # folder made a 4-frame probe decode the 16 frames a previous run left there
+    # -- measured, it inflated L0 from 2.6 to 9.9 s a frame, and 128sq leftovers
+    # beside 512sq frames crashed postprocess outright. Per CONTAINER, so
+    # concurrent probes cannot read -- or delete -- each other's frames: the
+    # hostname is the container id, and the pid alone is 1 in every container.
+    import shutil
+    import socket
+
+    scratch = os.path.join("out", "_probe_cost",
+                           "%s-%d" % (socket.gethostname(), os.getpid()))
+    shutil.rmtree(scratch, ignore_errors=True)
     t0 = time.perf_counter()
-    scene, sim, renderer, objs = build_scene(spec, "out/_probe_cost")
+    scene, sim, renderer, objs = build_scene(spec, scratch)
     build = time.perf_counter() - t0
 
     scene.frame_start, scene.frame_end = 0, max(0, a.frames - 1)
@@ -108,11 +121,12 @@ def main() -> int:
     # that omitted them would be unattributable an hour after it scrolled past.
     backend = spec.notes.get("render_backend", {})
     print("COST %s floor=%-6s res=%d spp=%d cond=%-13s extras=%2d "
-          "build=%.2f per_frame=%.3f adaptive=%s denoiser=%s device=%s"
+          "build=%.2f per_frame=%.3f adaptive=%s denoiser=%s device=%s "
+          "threads=%s"
           % (a.complexity, a.floor, a.resolution, a.spp,
              spec.condition, extras, build, render / max(1, a.frames),
              backend.get("adaptive"), backend.get("denoiser"),
-             backend.get("device")))
+             backend.get("device"), backend.get("threads")))
     return 0
 
 

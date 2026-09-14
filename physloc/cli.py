@@ -159,6 +159,29 @@ def _longest_first(jobs, tier, n_bins):
     return sorted(jobs, key=cost, reverse=True)
 
 
+#: Where every generated tree lives: gitignored, and never the repository root.
+OUTPUT_ROOT = "out"
+
+
+def _under_out(path):
+    """A relative output path, placed under `out/` unless it already is there.
+
+    `generate --outdir r --workdir w` used to create `r/` and `w/` in the
+    repository root, beside the source code. A bare or relative name now lands
+    in `out/r` and `out/w`; a path already under `out/` is unchanged. Absolute
+    paths, and relative ones that climb out with `..`, are left as given --
+    those are an explicit choice of somewhere else.
+    """
+    if not path or os.path.isabs(path):
+        return path
+    norm = os.path.normpath(path)
+    if norm == os.pardir or norm.startswith(os.pardir + os.sep):
+        return norm
+    if norm == OUTPUT_ROOT or norm.startswith(OUTPUT_ROOT + os.sep):
+        return norm
+    return os.path.join(OUTPUT_ROOT, norm)
+
+
 def _renders_for(families, severity) -> int:
     """How many renders one worker job makes, decided as `render.worker` does.
 
@@ -456,7 +479,7 @@ def cmd_generate(a) -> int:
     for scenario, family in cells:
         by_scenario.setdefault(scenario, []).append(family)
 
-    work = a.workdir or os.path.join("out", "work")
+    work = _under_out(a.workdir) or os.path.join(OUTPUT_ROOT, "work")
     # THE KNOBS, RESOLVED ONCE for the whole run and written where the
     # container can read them. `common.yaml` plus this config's own `params:`
     # block; the worker gets a path, not a parse, because the container has no
@@ -468,7 +491,12 @@ def cmd_generate(a) -> int:
     params_path = _params.write(tunables, work)
     _params.apply(tunables)
     print("-- params: %s" % params_path)
-    rel = a.outdir or os.path.join("out", "release")
+    rel = _under_out(a.outdir) or os.path.join(OUTPUT_ROOT, "release")
+    for flag, given, used in (("--workdir", a.workdir, work),
+                              ("--outdir", a.outdir, rel)):
+        if given and os.path.normpath(given) != used:
+            print("-- %s %s -> %s  (generated output lives under %s/)"
+                  % (flag, given, used, OUTPUT_ROOT))
 
     done, failed, t0 = [], [], time.perf_counter()
     # One (variant, scenario) is one container run writing to its own
@@ -1292,7 +1320,9 @@ def cmd_config_path(a) -> int:
         except config.ConfigError as exc:
             print("config error: %s" % exc, file=sys.stderr)
             return 2
-    print(outdir or "out/release")
+    # The same placement `generate` applies, or run.sh would validate and
+    # package a different directory than the one it just generated into.
+    print(_under_out(outdir) or os.path.join(OUTPUT_ROOT, "release"))
     return 0
 
 
@@ -1434,8 +1464,12 @@ def _build(suppress: bool = False):
                    help="L0..L3, a comma list, or `all` to walk the whole "
                         "ladder in one run at the declared shares "
                         "(see the README's Complexity ladder section)")
-    p.add_argument("--workdir")
-    p.add_argument("--outdir")
+    p.add_argument("--workdir",
+                   help="raw passes and trajectories; a relative path is placed "
+                        "under out/ (e.g. `w` -> out/w)")
+    p.add_argument("--outdir",
+                   help="clips, masks and meta.json; a relative path is placed "
+                        "under out/ (e.g. `r` -> out/r)")
     p.add_argument("--no-overlay", action="store_true")
     p.add_argument("--resume", action="store_true",
                    help="skip jobs this outdir has already completed. Safe to "

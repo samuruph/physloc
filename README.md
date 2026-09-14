@@ -510,6 +510,10 @@ PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --sce
 `--workers N` runs N render containers at once, and `--workers auto` (used by the `v0_*` configs)
 is one per core. Output is byte-identical at any worker count.
 
+Generated output always lives under `out/`: a relative `--outdir` or `--workdir` is placed there
+(`--outdir my_run` writes `out/my_run`), so nothing is ever written into the repository root.
+Absolute paths are used as given.
+
 ### Generating one level at a time
 
 `v0_L0` … `v0_L3` **partition** `v0_release`: each carries the variants that level gets in a full

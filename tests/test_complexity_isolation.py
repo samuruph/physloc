@@ -160,11 +160,15 @@ def test_the_gso_level_actually_changes_the_objects(name):
     """The other half: a level whose objects are indistinguishable from the
     level below measures nothing.
 
-    L3 swaps every moving body for a scanned asset, sized so its LONGEST AXIS
-    matches what the primitive was drawn at -- MOVi's normalisation
-    (`movi_c_worker.py:167-170`). Without that the level would change the
-    scene's scale as well as its geometry, and two axes would move at once.
+    L3 swaps every moving body for a scanned asset, sized by `gso_scale_ladder`:
+    its bounding VOLUME matched to the primitive's, its longest axis no shorter
+    than MOVi's normalisation (`movi_c_worker.py:167-170`) and no longer than
+    `GSO_MAX_ELONGATION` times the primitive's. Without some normalisation the
+    level would change the scene's scale as well as its geometry, and two axes
+    would move at once.
     """
+    from physloc.scenarios.base import GSO_MAX_ELONGATION
+
     gso = [k for k, v in COMPLEXITY.items()
            if v.implemented and v.actor_assets == "gso"]
     if not gso:
@@ -178,12 +182,12 @@ def test_the_gso_level_actually_changes_the_objects(name):
     for before, after in zip(plain.bodies, scanned.bodies):
         if after.kind != "gso":
             continue
-        # The DRAWN size is preserved; `scale` is a normalising factor and
-        # says nothing on its own -- a 30 mm block scaled to 0.4 m carries
-        # scale 13.
-        assert 2 * max(after.extents) == pytest.approx(
-            2 * max(before.extents), rel=0.02), (
-            "%s: %s changed size across the level" % (name, after.name))
+        # The DRAWN size is bounded; `scale` is a normalising factor and says
+        # nothing on its own -- a 30 mm block scaled to 0.4 m carries scale 13.
+        longest, was = max(after.extents), max(before.extents)
+        assert was * 0.98 <= longest <= was * GSO_MAX_ELONGATION * 1.02, (
+            "%s: %s changed size across the level (%.3f -> %.3f)"
+            % (name, after.name, was, longest))
 
 
 # --------------------------------------------------------------------------
@@ -238,8 +242,9 @@ def test_the_backdrop_is_never_a_surface(name):
 def test_scanned_objects_still_rest_on_what_they_rested_on(name):
     """A swapped body keeps its UNDERSIDE, not its centre.
 
-    A scan is normalised by its longest axis, so its other half-extents shrink;
-    keeping the centre therefore lifts it off its support. Measured at seed 777:
+    A scan has a different height from the primitive it replaces -- shorter
+    under the old longest-axis rule, either way under the volume match -- so
+    keeping the centre lifts it off its support or buries it. Measured at seed 777:
     `resting_table`'s mug started 0.18 m above the table and `collision`'s balls
     0.034 m above the floor, so both clips opened with the actor settling --
     which is what you see as an object dropping through the ground.
@@ -254,11 +259,17 @@ def test_scanned_objects_still_rest_on_what_they_rested_on(name):
     sc = scenarios.get(name)
     plain = sc.sample(SEED, TIERS["release"], "L0")
     scanned = sc.sample(SEED, TIERS["release"], gso[0])
+    # Every surface a body could be standing on, as the scanned scene has it:
+    # a stack re-seats all the way up, so a block's underside follows the NEW
+    # top of the one below it, not its own old height.
+    tops = [b.centre[2] + b.extents[2] for b in scanned.bodies
+            if b.collides and not b.dormant and b.role not in ("backdrop", "shadow")]
     for before, after in zip(plain.bodies, scanned.bodies):
         if after.kind != "gso":
             continue
-        kept_bottom = abs((after.centre[2] - after.extents[2])
-                          - (before.centre[2] - before.extents[2])) < 1e-6
+        bottom = after.centre[2] - after.extents[2]
+        kept_bottom = (abs(bottom - (before.centre[2] - before.extents[2])) < 1e-6
+                       or any(abs(bottom - t) < 1e-6 for t in tops))
         kept_centre = abs(after.centre[2] - before.centre[2]) < 1e-6
         assert kept_bottom or kept_centre, (
             "%s: %s is neither seated nor centred -- bottom %+.4f, centre %+.4f"

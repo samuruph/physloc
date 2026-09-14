@@ -418,12 +418,12 @@ class BodySpec:
         way -- every caller is a clearance or framing margin, where erring
         large is safe.
 
-        For a GSO asset it CANNOT be `scale`. Following MOVi, a scanned object
-        is normalised -- `scale = target / longest mesh axis` -- so `scale` is a
-        unitless factor that says nothing about how big the thing is drawn: a
-        30 mm toy block scaled to 0.4 m carries `scale = 13`. Its real
-        half-extent is the answer, and it is still an over-estimate of the
-        radius in any direction but the longest.
+        For a GSO asset it CANNOT be `scale`. A scanned object is normalised
+        -- see `gso_scale_ladder` -- so `scale` is a unitless factor that says
+        nothing about how big the thing is drawn: a 30 mm toy block scaled to
+        0.4 m carries `scale = 13`. Its real half-extent is the answer, and it
+        is still an over-estimate of the radius in any direction but the
+        longest.
         """
         if self.kind == "gso":
             return float(max(self.extents))
@@ -817,12 +817,25 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     it is lit. A GSO asset is real photogrammetry: irregular, textured, and
     shaped like nothing the physics has a primitive for.
 
-    THE DRAWN SIZE IS PRESERVED. Following MOVi
-    (`movi_c_worker.py:167-170`), the asset is normalised by its own longest
-    axis -- `scale = target / max(bounds[1] - bounds[0])` -- so a body that was
-    a 0.4 m sphere becomes a 0.4 m teapot rather than whatever size the scan
-    happened to be. Without that the level would change the scene's SCALE as
-    well as its geometry, and two axes would move at once.
+    THE OCCUPIED VOLUME IS PRESERVED, not the longest axis. MOVi
+    (`movi_c_worker.py:167-170`) normalises a scan by its longest axis, and this
+    did too -- which made L3 objects visibly SMALLER than the primitives they
+    replace: a sphere fills its whole bounding cube, a scan matches it on one
+    axis only, and across the 140 curated assets the median scan occupied 51%
+    of the primitive's bounding volume (10th percentile 28%). So the scale now
+    matches the geometric mean of the scan's bounding box to the primitive's,
+    capped at `GSO_MAX_ELONGATION` times the primitive's longest extent so a
+    long thin scan does not become a pole. Without some normalisation the level
+    would change the scene's SCALE as well as its geometry, and two axes would
+    move at once; this one keeps that promise about the thing a viewer sees.
+
+    A LARGER SCAN MUST NOT START INSIDE ITS NEIGHBOUR. Scenes staged at the
+    primitive's size -- a pyramid of touching spheres, a table of props -- have
+    no room for a scan that is longer on some axis. Where a swapped body
+    overlaps another more than the primitives did, its look steps down
+    `GSO_FIT_RUNGS` towards the old longest-axis scale, which by construction
+    fits wherever the primitive did. Granular media keep that scale outright:
+    grain size is bounded by the residual laws (CLAUDE.md, `pour`).
 
     EVERY MOVING BODY, not only the culprit. This used to be `actor` and
     `distractor` alone, which left `stack_topple` scanning one block and
@@ -889,8 +902,9 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     # The signature is what a viewer could tell apart before the swap, so the
     # grouping is exactly as fine as the distinction it has to preserve.
     picked = {}
-    seated = set()
     was_placed = {id(b): (b.centre, b.extents) for b in spec.bodies}
+    granular = spec.physics_medium == "granular"
+    swaps = []
     for body in spec.bodies:
         if body.static or not body.collides:
             continue
@@ -910,35 +924,119 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
             picked[look] = str(GSO_IDS[int(rng.randint(0, len(GSO_IDS)))])
         aid = picked[look]
         lo, hi = np.asarray(GSO_ASSETS[aid]["bounds"], np.float64)
-        longest = float(np.max(hi - lo))
-        if longest <= 1e-6:
+        if float(np.max(hi - lo)) <= 1e-6:
             continue
         # The size it was DRAWN at, not its `scale` -- for a primitive those
         # agree, and for what it is about to become they do not.
-        target = 2.0 * float(max(body.extents))
-        f = target / longest
-        # Read before the swap: where the primitive's middle was, and what it
-        # was standing on.
-        was = body.centre
-        seat = _seat_under(spec, body, was_placed, seated)
-        if seat is not None:
-            seated.add(id(body))
-        body.kind = "gso"
-        body.asset_id = aid
-        body.scale = (f, f, f)
-        body.render_scale = None
-        # Kubric places an asset by its ORIGIN, and a scan's origin is wherever
-        # the scan was authored -- a few millimetres off the middle of its own
-        # bounding box. `position` is therefore offset so that the body's
-        # `centre` lands where it is wanted, which is what every geometry
-        # helper on the host reads.
-        off = (lo + hi) / 2.0 * f
-        z = was[2] if seat is None else seat + float(body.extents[2])
-        body.position = (float(was[0]) - float(off[0]),
-                         float(was[1]) - float(off[1]),
-                         float(z) - float(off[2]))
+        ladder = gso_scale_ladder((lo, hi), body.extents, granular=granular)
+        swaps.append((body, aid, look, ladder, (lo, hi)))
+
+    # Where each swapped body stood as a primitive, so a retry starts from the
+    # scene the scenario staged rather than from the previous attempt.
+    staged = {id(b): (b.kind, b.asset_id, b.scale, b.render_scale, b.position)
+              for b, *_ in swaps}
+    rung = {look: 0 for _, _, look, _, _ in swaps}
+    for _ in range(len(rung) * GSO_FIT_RUNGS + 1):
+        for body, *_ in swaps:
+            (body.kind, body.asset_id, body.scale, body.render_scale,
+             body.position) = staged[id(body)]
+        seated = set()
+        for body, aid, look, ladder, (lo, hi) in swaps:
+            f = ladder[min(rung[look], len(ladder) - 1)]
+            # Read before the swap: where the primitive's middle was, and what
+            # it was standing on.
+            was = body.centre
+            seat = _seat_under(spec, body, was_placed, seated)
+            if seat is not None:
+                seated.add(id(body))
+            body.kind = "gso"
+            body.asset_id = aid
+            body.scale = (f, f, f)
+            body.render_scale = None
+            # Kubric places an asset by its ORIGIN, and a scan's origin is
+            # wherever the scan was authored -- a few millimetres off the middle
+            # of its own bounding box. `position` is therefore offset so that
+            # the body's `centre` lands where it is wanted, which is what every
+            # geometry helper on the host reads.
+            off = (lo + hi) / 2.0 * f
+            z = was[2] if seat is None else seat + float(body.extents[2])
+            body.position = (float(was[0]) - float(off[0]),
+                             float(was[1]) - float(off[1]),
+                             float(z) - float(off[2]))
+        looks = {id(b): look for b, _, look, _, _ in swaps}
+        crowded = {looks[i] for pair in _gso_clashes(spec, was_placed, looks)
+                   for i in pair if i in looks}
+        crowded = {lk for lk in crowded
+                   if rung[lk] < GSO_FIT_RUNGS - 1}
+        if not crowded:
+            break
+        for lk in crowded:
+            rung[lk] += 1
     spec.notes["gso_assets"] = sorted(
         {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
+
+
+#: How much longer than the primitive's longest extent a scan may be drawn. A
+#: volume match alone turns a pencil-thin scan into a pole several times the
+#: primitive's length; the curated set is at most 3.2:1, and 1.5 keeps the
+#: longest axis inside the room scenarios leave around an actor.
+GSO_MAX_ELONGATION = 1.5
+
+#: Steps from the volume-matched scale down to the longest-axis scale. The last
+#: rung is the old MOVi rule, which fits anywhere the primitive fitted.
+GSO_FIT_RUNGS = 5
+
+#: How much deeper a swapped pair may overlap than the primitives did, in
+#: metres, before the scan is stepped down. Scenarios rest bodies against each
+#: other, so a hair of extra box overlap is contact rather than a collision.
+GSO_OVERLAP_TOLERANCE = 0.01
+
+
+def gso_scale_ladder(bounds, primitive_extents, granular: bool = False):
+    """Uniform scale factors for one scan, largest first.
+
+    The first rung matches the scan's bounding-box VOLUME to the primitive's,
+    capped so the scan's longest axis is at most `GSO_MAX_ELONGATION` times the
+    primitive's; the last is MOVi's longest-axis rule. A granular medium gets
+    the last rung only -- see `_swap_in_gso`.
+    """
+    lo, hi = (np.asarray(v, np.float64) for v in bounds)
+    dims = np.maximum(hi - lo, 1e-9)
+    ext = np.asarray(primitive_extents, np.float64)
+    longest_target = 2.0 * float(np.max(ext))
+    f_long = longest_target / float(np.max(dims))
+    if granular:
+        return [f_long]
+    f_vol = (2.0 * float(np.cbrt(np.prod(ext)))) / float(np.cbrt(np.prod(dims)))
+    f_vol = min(f_vol, GSO_MAX_ELONGATION * f_long)
+    f_vol = max(f_vol, f_long)
+    n = GSO_FIT_RUNGS
+    return [f_vol + (f_long - f_vol) * k / float(n - 1) for k in range(n)]
+
+
+def _box_overlap(c0, e0, c1, e1) -> float:
+    """Penetration depth of two axis-aligned boxes: the smallest per-axis
+    overlap, negative when they are apart."""
+    return float(min(float(a) + float(b) - abs(float(p) - float(q))
+                     for p, q, a, b in zip(c0, c1, e0, e1)))
+
+
+def _gso_clashes(spec: SceneSpec, was_placed, swapped_ids):
+    """Pairs, by `id`, where a swapped scan overlaps a neighbour more than the
+    two primitives did. Axis-aligned, like every other placement test here."""
+    bodies = [b for b in spec.bodies
+              if not b.static and b.collides and not b.dormant
+              and b.role in ("actor", "distractor", "prop")]
+    out = []
+    for i, a in enumerate(bodies):
+        for b in bodies[i + 1:]:
+            if id(a) not in swapped_ids and id(b) not in swapped_ids:
+                continue
+            before = _box_overlap(*was_placed[id(a)], *was_placed[id(b)])
+            after = _box_overlap(a.centre, a.extents, b.centre, b.extents)
+            if after > max(before, 0.0) + GSO_OVERLAP_TOLERANCE:
+                out.append((id(a), id(b)))
+    return out
 
 
 #: How far a body's underside may be from a surface and still count as sitting

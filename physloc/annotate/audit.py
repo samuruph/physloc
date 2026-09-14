@@ -17,12 +17,13 @@ because each of them misses cases the others catch:
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 from typing import Dict, List
 
 import numpy as np
+
+from . import layout
 
 #: A cell is flagged when it fails ALL of these. Any one of them passing means
 #: there is something there, and the cell stays.
@@ -33,10 +34,11 @@ MIN_EVIDENCE = 0.02          # peak |valid - invalid| inside the mask, 0..1
 
 def measure_clip(cdir: str) -> Dict[str, object]:
     """Severity, observability and pixel evidence for one invalid clip."""
-    meta = json.load(open(os.path.join(cdir, "meta.json")))
+    meta = layout.read(cdir)
+    md = layout.identity(meta)
     v = meta.get("violation") or {}
     out = {
-        "scenario": meta.get("scenario"), "family": meta.get("family"),
+        "scenario": md.get("scenario"), "family": md.get("family"),
         "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
         "peak_severity": 0.0, "observable_frames": 0, "evidence": 0.0,
     }
@@ -78,10 +80,10 @@ def is_unscored(row: Dict[str, object]) -> bool:
 
 def audit(release_root: str) -> List[Dict[str, object]]:
     rows = []
-    for mp in sorted(glob.glob(os.path.join(release_root, "clips", "**",
-                                            "meta.json"), recursive=True)):
-        meta = json.load(open(mp))
-        if meta.get("label") != "invalid":
+    for mp in layout.find(release_root):
+        with open(mp) as fh:
+            meta = json.load(fh)
+        if layout.identity(meta).get("label") != "invalid":
             continue
         rows.append(measure_clip(os.path.dirname(mp)))
     return rows

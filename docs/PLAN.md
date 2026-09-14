@@ -12,7 +12,7 @@ docs, and the repo skeleton listed fifteen files that do not exist. For anything
 |---|---|
 | how to run anything | [../README.md](../README.md) |
 | counts, families, scenarios, cells | `python -m physloc.cli taxonomy` |
-| what a `meta.json` field means | [schema.md](schema.md) |
+| what a `metadata.json` field means | [schema.md](schema.md) |
 | locked decisions and traps | [../CLAUDE.md](../CLAUDE.md) |
 | what is next, and what is undecided | [roadmap.md](roadmap.md) |
 
@@ -111,7 +111,7 @@ accident.
 | known | **before** simulating — we chose it | **after** simulating, from `traj.npz` |
 | exact? | yes, by construction | up to the noise floor |
 | shape | one scalar per clip | per body, per frame → `[T,H,W]` field |
-| lives in | `meta.json:violation.intervention.magnitude` | `residuals.npz`, `severity_map.npz`, `severity_t` |
+| lives in | `metadata.json:violation.intervention.magnitude` | `residuals.npz`, `severity_map.npz`, `severity_t` |
 | used for | building weak/medium/strong splits | training targets, difficulty analysis |
 
 They are **not** the same number and the mapping between them is not the identity — a large
@@ -130,13 +130,13 @@ This is the contribution. Grouped by the question each annotation answers.
 
 | group | answers | files |
 |---|---|---|
-| 3.1 labels | *what* and *whether* | `meta.json` |
-| 3.2 temporal | ***when***, and ***for how long*** | `meta.json`, `timelines.npz` |
-| 3.3 spatiotemporal masks | ***where***, per frame | `violation_mask.npz`, `causal_mask.npz`, `seg.npz` |
+| 3.1 labels | *what* and *whether* | `metadata.json` |
+| 3.2 temporal | ***when***, and ***for how long*** | `metadata.json`, `timelines.npz` |
+| 3.3 spatiotemporal masks | ***where***, per frame | `violation_mask.npz`, `causal_mask.npz`, `segmentations.npz` |
 | 3.4 severity fields | ***how badly***, localised in space and time | `severity_map.npz`, `severity_t`, `residuals.npz` |
-| 3.5 geometry | scene structure, free from Kubric | `depth`, `flow_fwd`, `flow_bwd`, `normals`, `object_coords` |
+| 3.5 geometry | scene structure, free from Kubric | `depth`, `forward_flow`, `backward_flow`, `normal`, `object_coordinates` |
 | 3.6 token grids | ready-to-train reductions | `grids.npz` |
-| 3.7 raw physics + provenance | reproducibility | `traj.npz`, `meta.json:provenance` |
+| 3.7 raw physics + provenance | reproducibility | `traj.npz`, `metadata.json:provenance` |
 
 ### 3.1 Clip-level labels
 
@@ -378,7 +378,7 @@ mid-window — that disagreement is real physics, not a bug.
 
 ### 3.5 Geometry passes
 
-`depth`, `flow_fwd`, `flow_bwd`, `normals`, `object_coords`, all `[T,H,W,·]`, straight from
+`depth`, `forward_flow`, `backward_flow`, `normal`, `object_coordinates`, all `[T,H,W,·]`, straight from
 Kubric's exporters at no extra cost. Shipped because they make the dataset useful for work
 that is not about violations at all.
 

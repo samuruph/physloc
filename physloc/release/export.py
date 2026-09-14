@@ -36,15 +36,19 @@ import os
 import tarfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ..annotate import layout
+
 #: Files that go in the core shards -- what a model trains on.
-CORE_FILES = ("meta.json", "rgb.mp4", "violation_mask.npz", "mask_invalid.npz",
-              "reference_mask.npz", "causal_mask.npz", "severity_map.npz",
-              "timelines.npz", "residuals.npz", "seg.npz", "energy.npz",
-              "bodies.npz", "traj.npz", "grids.npz")
+CORE_FILES = (layout.METADATA, layout.VIDEO, "violation_mask.npz",
+              "mask_invalid.npz", "reference_mask.npz", "causal_mask.npz",
+              "violation_ids.npz", "causal_ids.npz", "severity_map.npz",
+              "timelines.npz", "residuals.npz", layout.SEGMENTATIONS,
+              layout.INSTANCES, "energy.npz", "bodies.npz", "traj.npz",
+              "grids.npz")
 
 #: Files that go in the optional shards -- the raw geometry passes.
-PASS_FILES = ("depth.npz", "flow_fwd.npz", "flow_bwd.npz", "normals.npz",
-              "object_coords.npz", "energy_map.npz", "divergence_map.npz")
+PASS_FILES = tuple("%s.npz" % name for name in layout.PASSES.values()) + (
+    "energy_map.npz", "divergence_map.npz")
 
 #: Roughly how large a shard should get before starting another. 400 MB is the
 #: usual WebDataset advice: big enough that sequential reads dominate, small
@@ -82,9 +86,7 @@ SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
 
 
 def _clip_dirs(root: str) -> List[str]:
-    return sorted(os.path.dirname(p) for p in
-                  glob.glob(os.path.join(root, "clips", "**", "meta.json"),
-                            recursive=True))
+    return sorted(os.path.dirname(p) for p in layout.find(root))
 
 
 def _hash_unit(pair_uid: str) -> float:
@@ -185,6 +187,7 @@ def _cut(ordered: List[str], names: List[str]) -> Dict[str, str]:
 
 def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
     """One flat record per clip, for the index."""
+    md = layout.identity(meta)
     v = meta.get("violation") or {}
     cam = meta.get("camera") or {}
     # `instances`, not `assets`: the asset list is the licence record and
@@ -200,14 +203,14 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         block in others; the index wants the name either way."""
         return x.get("name") if isinstance(x, dict) else x
     return {
-        "clip_uid": meta.get("clip_uid"),
-        "pair_uid": meta.get("pair_uid"),
-        "twin_uid": meta.get("twin_uid"),
-        "label": meta.get("label"),
-        "scenario": meta.get("scenario"),
-        "family": meta.get("family"),
-        "domain": meta.get("domain"),
-        "medium": meta.get("physics_medium"),
+        "clip_uid": md.get("clip_uid"),
+        "pair_uid": md.get("pair_uid"),
+        "twin_uid": md.get("twin_uid"),
+        "label": md.get("label"),
+        "scenario": md.get("scenario"),
+        "family": md.get("family"),
+        "domain": md.get("domain"),
+        "medium": md.get("physics_medium"),
         "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
         "magnitude": (v.get("intervention") or {}).get("magnitude"),
         "peak_severity": (v.get("peak_residual") or {}).get("score"),
@@ -224,22 +227,25 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         "t_event_frame": v.get("t_event_frame"),
         "violation_windows": json.dumps(windows),
         "observability_lag": v.get("observability_lag_frames"),
-        "seed": meta.get("seed"),
-        "variant": meta.get("variant"),
-        "tier": _name(meta.get("tier")),
-        "complexity": _name(meta.get("complexity")),
-        "condition": meta.get("condition"),
-        "n_distractors": meta.get("n_distractors"),
-        "n_actors": meta.get("n_actors"),
-        "n_culprits": meta.get("n_culprits"),
-        "num_frames": meta.get("num_frames"),
-        "fps": meta.get("fps"),
+        "seed": md.get("seed"),
+        "variant": md.get("variant"),
+        "tier": _name(md.get("tier")),
+        "complexity": _name(md.get("complexity")),
+        "condition": md.get("condition"),
+        "n_distractors": md.get("n_distractors"),
+        "n_actors": md.get("n_actors"),
+        "n_culprits": md.get("n_culprits"),
+        # Whether a clip's culprits broke the law at their own moments or at
+        # one -- the column that finds the staggered `multi` clips.
+        "culprit_timing": v.get("culprit_timing"),
+        "num_frames": md.get("num_frames"),
+        "frame_rate": md.get("frame_rate"),
         "camera_motion": cam.get("motion"),
         "actor_shape": actor.get("category"),
         "actor_material": actor.get("material"),
-        "actor_mass": actor.get("mass_kg"),
-        "prompt": meta.get("prompt"),
-        "split": splits.get(str(meta.get("pair_uid")), "train"),
+        "actor_mass": actor.get("mass"),
+        "prompt": md.get("prompt"),
+        "split": splits.get(str(md.get("pair_uid")), "train"),
     }
 
 
@@ -256,7 +262,7 @@ def _write_shards(clips: Sequence[Tuple[str, Dict]], outdir: str, prefix: str,
     size = 0
     try:
         for cdir, meta in clips:
-            key = str(meta["clip_uid"]).replace("/", "__")
+            key = str(layout.identity(meta)["clip_uid"]).replace("/", "__")
             present = [(m, os.path.join(cdir, m)) for m in members
                        if os.path.exists(os.path.join(cdir, m))]
             if not present:
@@ -288,11 +294,11 @@ def export(root: str, outdir: str, with_passes: bool = False,
 
     clips: List[Tuple[str, Dict]] = []
     for cdir in clip_dirs:
-        with open(os.path.join(cdir, "meta.json")) as fh:
-            clips.append((cdir, json.load(fh)))
+        clips.append((cdir, layout.read(cdir)))
 
     os.makedirs(outdir, exist_ok=True)
-    splits = assign_splits(str(m.get("pair_uid")) for _, m in clips)
+    splits = assign_splits(str(layout.identity(m).get("pair_uid"))
+                           for _, m in clips)
     rows = [_row(m, splits) for _, m in clips]
 
     # Splits, by PAIR. Writing the clip uids out per split rather than the pair
@@ -310,7 +316,7 @@ def export(root: str, outdir: str, with_passes: bool = False,
     shards: Dict[str, List[str]] = {}
     for name, _ in SPLIT_FRACTIONS:
         part = [(d, m) for d, m in clips
-                if splits.get(str(m.get("pair_uid"))) == name]
+                if splits.get(str(layout.identity(m).get("pair_uid"))) == name]
         if not part:
             continue
         shards[name] = _write_shards(part, shard_dir, name, CORE_FILES,
@@ -411,7 +417,7 @@ def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
 
 #: Which splits get the nine-panel overlay embedded beside the RGB.
 #:
-#: `overlay.mp4` is 24x the size of `rgb.mp4` -- 261 KB against 11 KB at debug
+#: `overlay.mp4` is 24x the size of `video.mp4` -- 261 KB against 11 KB at debug
 #: geometry, and about 5.3 MB against 0.2 MB at v0 -- because it is nine panels
 #: wide. Embedding it everywhere would be 8.5 GB on a full v0 release against
 #: 0.3 GB for the RGB alone.
@@ -434,18 +440,21 @@ OVERLAY_IN_SPLITS = ("debug",)
 #: rather than dropped, so adding a field to `_index_row` cannot silently lose
 #: it from the published index.
 INDEX_COLUMNS = (
-    "clip_uid", "rgb", "overlay",
+    "clip_uid", "video", "overlay",
     "label", "split", "scenario", "family", "domain", "medium",
     "severity_bin", "magnitude", "peak_severity",
     "difficulty", "difficulty_rank", "binding_factors",
     "t_event_frame", "violation_windows", "observability_lag",
     "complexity", "condition", "camera_motion", "n_distractors",
-    "n_actors", "n_culprits",
+    "n_actors", "n_culprits", "culprit_timing",
     "actor_shape", "actor_material", "actor_mass",
-    "tier", "num_frames", "fps", "seed", "variant",
+    "tier", "num_frames", "frame_rate", "seed", "variant",
     "pair_uid", "twin_uid",
     "prompt",
 )
+
+#: Index video column -> the clip file it embeds.
+VIDEO_COLUMNS = (("video", layout.VIDEO), ("overlay", layout.OVERLAY))
 
 
 def _write_index(rows: List[Dict], outdir: str,
@@ -472,21 +481,21 @@ def _write_index(rows: List[Dict], outdir: str,
     # told is a video -- so the mp4 BYTES are embedded and the schema is
     # annotated as a `Video` feature. A path is useless here: it resolves on
     # this machine and nowhere else.
-    by_uid = {str(m.get("clip_uid")): d for d, m in clips}
-    videos = {"rgb": [], "overlay": []}
+    by_uid = {str(layout.identity(m).get("clip_uid")): d for d, m in clips}
+    videos = {name: [] for name, _ in VIDEO_COLUMNS}
     for r in rows:
         cdir = by_uid.get(str(r["clip_uid"]))
-        for name in ("rgb", "overlay"):
+        for name, fname in VIDEO_COLUMNS:
             blob = None
-            want = (name == "rgb" or r["split"] in OVERLAY_IN_SPLITS)
-            fp = os.path.join(cdir, "%s.mp4" % name) if cdir and want else None
+            want = (name == "video" or r["split"] in OVERLAY_IN_SPLITS)
+            fp = os.path.join(cdir, fname) if cdir and want else None
             if fp and os.path.exists(fp):
                 with open(fp, "rb") as fh:
-                    blob = {"bytes": fh.read(), "path": "%s.mp4" % name}
+                    blob = {"bytes": fh.read(), "path": fname}
             videos[name].append(blob)
 
     table = _typed(pa, pa.Table.from_pylist(rows))
-    for name in ("rgb", "overlay"):
+    for name, _ in VIDEO_COLUMNS:
         if any(v is not None for v in videos[name]):
             table = table.append_column(
                 name, pa.array(videos[name],
@@ -524,7 +533,7 @@ INDEX_TYPES = {
     "difficulty_rank": "int64", "t_event_frame": "int64",
     "observability_lag": "int64", "n_distractors": "int64",
     "n_actors": "int64", "n_culprits": "int64", "num_frames": "int64",
-    "fps": "int64", "seed": "int64", "variant": "int64",
+    "frame_rate": "int64", "seed": "int64", "variant": "int64",
 }
 
 
@@ -550,7 +559,7 @@ def _video_schema_metadata(table) -> Dict[bytes, bytes]:
     """
     feats = {}
     for field in table.schema:
-        if field.name in ("rgb", "overlay"):
+        if field.name in dict(VIDEO_COLUMNS):
             feats[field.name] = {"_type": "Video"}
         else:
             dtype = {"string": "string", "int64": "int64", "double": "float64"}
@@ -571,7 +580,8 @@ def _write_license(outdir: str, license_name: str) -> None:
             "%s\n\n"
             "The clips in this dataset are rendered from primitive geometry\n"
             "with Kubric (Apache-2.0) and Blender. Per-asset licences are\n"
-            "recorded in every clip's meta.json under `assets[].license`.\n"
+            "recorded in every clip's metadata.json under "
+            "`instances[].license`.\n"
             % license_name)
 
 
@@ -760,8 +770,8 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         'ds = wds.WebDataset("shards/core-000.tar")',
         "for sample in ds:",
-        '    meta = sample["meta.json"]      # bytes -> json.loads',
-        '    video = sample["rgb.mp4"]',
+        '    meta = sample["metadata.json"]  # bytes -> json.loads; MOVi layout',
+        '    video = sample["video.mp4"]',
         '    mask = sample["violation_mask.npz"]',
         "```",
         "",

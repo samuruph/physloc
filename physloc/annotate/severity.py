@@ -43,7 +43,7 @@ class NoiseFloor:
                "sigma_eff": float(self.sigma_eff),
                "n_samples": int(self.n_samples)}
         # The family's residual at its `strong` bin -- the scale every severity
-        # is divided by. It was reaching meta.json as null, which left a reader
+        # is divided by. It was reaching metadata.json as null, which left a reader
         # unable to tell whether a score of 0.4 meant a weak violation or a
         # strong one measured against a large reference.
         if r_strong is not None:
@@ -226,7 +226,7 @@ def temporal_profile(severity_map: np.ndarray) -> np.ndarray:
 
 def peak(residual: np.ndarray, score: np.ndarray, floor: NoiseFloor,
          law: str, t_event: int = 0) -> Dict[str, object]:
-    """The `peak_residual` block of meta.json.
+    """The `peak_residual` block of metadata.json.
 
     **From `t_event` on, never before it.** The prefix is bit-identical across
     the twin by construction, so a residual there is a property of the SCENE --

@@ -430,7 +430,7 @@ def cmd_stats(a) -> int:
 
     `validate` says it is well formed and `audit` says every cell depicts
     something; neither says what the DISTRIBUTIONS look like, and those are
-    what a benchmark is judged on. Reads only `meta.json`, so it runs in
+    what a benchmark is judged on. Reads only `metadata.json`, so it runs in
     seconds over a full release and can be re-run after any annotation change.
     """
     from .release.stats import report
@@ -726,8 +726,10 @@ def cmd_generate(a) -> int:
         # a disk that filled mid-write all leave an entry pointing at nothing,
         # and resuming onto those produces a release with holes in it that
         # `validate` finds days later.
+        from .annotate.layout import METADATA
+
         for clip in entry.get("clips", []):
-            if not os.path.exists(os.path.join(clip, "meta.json")):
+            if not os.path.exists(os.path.join(clip, METADATA)):
                 return None
         return entry.get("outcome")
 
@@ -1411,7 +1413,7 @@ def _annotate(workdir, outroot, overlay=True, only=None):
     # The release NAME comes from where the release is being written. It
     # defaulted to the literal "physloc_v0" and nothing ever passed it, so a
     # v1 run wrote `out/physloc_v1/clips/physloc_v0/...` and stamped
-    # `"release": "physloc_v0"` into every meta.json it produced -- a whole
+    # `"release": "physloc_v0"` into every metadata.json it produced -- a whole
     # release mislabelled as the previous one.
     release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
     results = annotate_work(workdir, outroot, release=release, only=only)
@@ -1506,17 +1508,19 @@ def cmd_sheet(a) -> int:
 
 
 def _condition_in(pair_dir) -> Optional[str]:
-    """The condition a clip pair carries, read from any `meta.json` it has.
+    """The condition a clip pair carries, read from any `metadata.json` it has.
 
     Only needed for runs generated before the condition joined the clip path;
     a current one carries it in the directory name.
     """
     import glob
 
-    for mp in glob.glob(os.path.join(pair_dir, "*", "meta.json")):
+    from .annotate import layout
+
+    for mp in glob.glob(os.path.join(pair_dir, "*", layout.METADATA)):
         try:
             with open(mp) as fh:
-                got = json.load(fh).get("condition")
+                got = layout.identity(json.load(fh)).get("condition")
         except Exception:                                      # noqa: BLE001
             continue
         if got:
@@ -1568,7 +1572,7 @@ def cmd_viz(a) -> int:
     THE CONDITION IS IN THE NAME, and early enough to sort on. Comparing a
     family across conditions is the comparison this axis exists for, and with
     the condition buried -- or absent, as it was -- that means opening
-    `meta.json` per file or memorising which variant index is which. Sorted,
+    `metadata.json` per file or memorising which variant index is which. Sorted,
     every `camera` clip is now adjacent to every other.
 
     Nothing is re-rendered -- it reads the clips already on disk, so it costs
@@ -1813,7 +1817,7 @@ def _build(suppress: bool = False):
                    help="raw passes and trajectories; a relative path is placed "
                         "under out/ (e.g. `w` -> out/w)")
     p.add_argument("--outdir",
-                   help="clips, masks and meta.json; a relative path is placed "
+                   help="clips, masks and metadata.json; a relative path is placed "
                         "under out/ (e.g. `r` -> out/r)")
     p.add_argument("--no-overlay", action="store_true")
     p.add_argument("--resume", action="store_true",
@@ -1821,7 +1825,7 @@ def _build(suppress: bool = False):
                         "leave on: a job is reused only when the RECORDED "
                         "request -- families, severity, tier, dials, render "
                         "backend, overlay -- matches the current one exactly "
-                        "and every clip it claims still has a meta.json. "
+                        "and every clip it claims still has a metadata.json. "
                         "Change any of those and the job is rebuilt. Nothing "
                         "is ever deleted; a resume only declines to redo work.")
     p.set_defaults(fn=cmd_generate)

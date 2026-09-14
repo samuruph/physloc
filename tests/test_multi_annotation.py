@@ -36,11 +36,11 @@ def release(tmp_path_factory):
 
 
 def _invalid_clips(root):
-    for mp in sorted(glob.glob(os.path.join(root, "clips", "**", "meta.json"),
+    for mp in sorted(glob.glob(os.path.join(root, "clips", "**", "metadata.json"),
                                recursive=True)):
         with open(mp) as fh:
             m = json.load(fh)
-        if m["label"] == "invalid":
+        if m["metadata"]["label"] == "invalid":
             yield os.path.dirname(mp), m
 
 
@@ -63,7 +63,7 @@ def test_every_invalid_clip_describes_each_culprit(release):
         for c in culprits:
             assert c["t_event_frame"] <= c["t_observable_frame"]
             for s, e in c["violation_windows"]:
-                assert 0 <= s <= e < m["num_frames"]
+                assert 0 <= s <= e < m["metadata"]["num_frames"]
 
 
 def test_independent_culprits_keep_their_own_windows(release):
@@ -73,7 +73,7 @@ def test_independent_culprits_keep_their_own_windows(release):
         if v["culprit_timing"] != "independent":
             continue
         seen += 1
-        T = m["num_frames"]
+        T = m["metadata"]["num_frames"]
         tl = np.load(os.path.join(cdir, "timelines.npz"))
         assert list(tl["culprit_ids"]) == [c["instance_id"] for c in v["culprits"]]
         for k, c in enumerate(v["culprits"]):

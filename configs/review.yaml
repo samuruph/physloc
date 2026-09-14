@@ -125,7 +125,7 @@ generate:
   workers: 8 #4
 
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)
-  outdir: out/review         # clips, masks, meta.json, overlays
+  outdir: out/review         # clips, masks, metadata.json, overlays
 
   # ---- optional. (resolution, fps, frames and spp live under `defaults`.)
   #

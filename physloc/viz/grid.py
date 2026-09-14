@@ -38,6 +38,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from ..annotate import layout
 from . import overlay as ov
 from . import video as vid
 
@@ -371,12 +372,13 @@ def _wrap(s: str, width: int) -> List[str]:
 
 def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
     cols = []
-    for mp in sorted(glob.glob(os.path.join(pair_dir, "*", "meta.json"))):
+    for mp in sorted(glob.glob(os.path.join(pair_dir, "*", layout.METADATA))):
         cdir = os.path.dirname(mp)
         with open(mp) as fh:
             meta = json.load(fh)
-        is_valid = meta.get("label") == "valid"
-        if not is_valid and family and meta.get("family") != family:
+        md = layout.identity(meta)
+        is_valid = md.get("label") == "valid"
+        if not is_valid and family and md.get("family") != family:
             continue
         v = meta.get("violation") or {}
         sev = (v.get("intervention") or {}).get("severity_bin", "valid")
@@ -385,7 +387,7 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "dir": cdir, "meta": meta, "is_valid": is_valid,
             "label": "VALID" if is_valid else sev,
             "sort": ORDER.get("valid" if is_valid else sev, 9),
-            "rgb": ov._rgb(cdir, int(meta["num_frames"])),
+            "rgb": ov._rgb(cdir, int(md["num_frames"])),
             "mask": ov._npz(cdir, "violation_mask.npz", "mask"),
             "ref": ov._npz(cdir, "reference_mask.npz", "mask"),
             "sev": (lambda a: None if a is None else a.astype(np.float32))(
@@ -396,10 +398,10 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "etrace": ov._energy_trace(cdir),
             "twin_etrace": ov._energy_trace(
                 os.path.join(os.path.dirname(cdir), "valid")),
-            "seg": ov._npz(cdir, "seg.npz", "seg"),
+            "seg": ov._npz(cdir, layout.SEGMENTATIONS, "segmentations"),
             "depth": ov._npz(cdir, "depth.npz", "depth"),
-            "flow": ov._npz(cdir, "flow_fwd.npz", "flow_fwd"),
-            "normals": ov._npz(cdir, "normals.npz", "normals"),
+            "flow": ov._npz(cdir, "forward_flow.npz", "forward_flow"),
+            "normals": ov._npz(cdir, "normal.npz", "normal"),
             "div": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "divergence_map.npz", "divergence")),
             "tl": np.load(tlp) if os.path.exists(tlp) else None,
@@ -429,22 +431,22 @@ def coverage(release_root: str, out_path: Optional[str] = None,
     import cv2
 
     clips: Dict[str, Dict[str, Dict]] = {}
-    for mp in sorted(glob.glob(os.path.join(release_root, "clips", "**",
-                                            "meta.json"), recursive=True)):
+    for mp in layout.find(release_root):
         cdir = os.path.dirname(mp)
         with open(mp) as fh:
             meta = json.load(fh)
-        if meta.get("label") != "invalid":
+        md = layout.identity(meta)
+        if md.get("label") != "invalid":
             continue
         v = meta.get("violation") or {}
         bin_ = (v.get("intervention") or {}).get("severity_bin", "strong")
         if bin_ != severity:
             continue
         tlp = os.path.join(cdir, "timelines.npz")
-        clips.setdefault(meta.get("scenario", "?"), {})[
-            meta.get("family", "?")] = {
+        clips.setdefault(md.get("scenario", "?"), {})[
+            md.get("family", "?")] = {
                 "meta": meta,
-                "rgb": ov._rgb(cdir, int(meta["num_frames"])),
+                "rgb": ov._rgb(cdir, int(md["num_frames"])),
                 "mask": ov._npz(cdir, "violation_mask.npz", "mask"),
                 "ref": ov._npz(cdir, "reference_mask.npz", "mask"),
                 "tl": np.load(tlp) if os.path.exists(tlp) else None,

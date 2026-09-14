@@ -7,7 +7,7 @@
 #   python -m physloc.cli export   out/physloc_v0 --push-to samueleruf/physloc
 #
 # `v0` is what this RELEASE is called -- it is the outdir, and the `release`
-# field stamped into every meta.json. It is NOT a tier and NOT a difficulty.
+# field stamped into every metadata.json. It is NOT a tier and NOT a difficulty.
 # A tier is a geometry (512x512, 30 fps, 89 frames); difficulty is the
 # complexity ladder, and this release contains the WHOLE ladder rather than
 # picking one level.

@@ -85,27 +85,32 @@ One valid twin is shared by every family and severity staged on that scene.
 
 ### What each clip contains
 
+The layout follows Kubric's **MOVi** datasets wherever MOVi has a name for a thing, with
+PhysLoc's annotations beside it — see [docs/schema.md](docs/schema.md).
+
 | file | what it is |
 |---|---|
-| `rgb.mp4` | the video |
+| `video.mp4` | the video |
+| `metadata.json` | MOVi's `metadata`, `camera` (K, per-frame poses), `instances`, `events.collisions`, plus `violation` (with each culprit's own windows), `difficulty`, `energy`, `provenance` |
 | `violation_mask.npz` | **bool [T,H,W] — the primary annotation.** Where the violation can be seen |
 | `severity_map.npz` | **f16 [T,H,W]** — how badly, per pixel per frame, bounded [0,1] |
-| `causal_mask.npz` | uint8 [T,H,W] — 1 = the culprit, 2+ = bodies it disturbed |
-| `reference_mask.npz` | bool [T,H,W] — where the culprit *should* have been (from the valid twin) |
-| `timelines.npz` | per-frame flags: `active`, `observable`, `occluded`, `severity_t` |
-| `meta.json` | labels, taxonomy, windows, magnitudes, provenance — see [docs/schema.md](docs/schema.md) |
-| `seg.npz` | uint16 [T,H,W] — instance ids, stable across frames, so they are object tracks |
-| `depth` · `flow_fwd/bwd` · `normals` · `object_coords` | geometry passes |
+| `causal_mask.npz` | uint8 [T,H,W] — 1 = a culprit, 2 = a body it disturbed |
+| `violation_ids.npz` · `causal_ids.npz` | uint16 [T,H,W] — which culprit each masked pixel belongs to |
+| `reference_mask.npz` | bool [T,H,W] — where the culprits *should* have been (from the valid twin) |
+| `timelines.npz` | per-frame flags for the clip and `[K,T]` for each culprit |
+| `segmentations.npz` | uint16 [T,H,W] — instance ids, stable across frames, so they are object tracks |
+| `instances.npz` | MOVi's per-instance tensors: positions, quaternions, velocities, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
+| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | geometry passes |
 | `energy` · `bodies` · `residuals` | mechanical energy, per-body state, and the raw residuals |
 | `overlay.mp4` | everything above burned into one annotated video |
 
 Every object's track for the whole clip is one comparison:
 
 ```python
-seg  = np.load("seg.npz")["seg"]                 # [T,H,W]
-bods = np.load("bodies.npz")
-for bid, name in zip(bods["body_ids"], bods["body_names"]):
-    track = (seg == bid)                         # [T,H,W] bool
+seg  = np.load("segmentations.npz")["segmentations"]   # [T,H,W]
+meta = json.load(open("metadata.json"))
+for inst in meta["instances"]:
+    track = (seg == inst["id"])                        # [T,H,W] bool
 ```
 
 ### Before you train on it
@@ -267,7 +272,7 @@ a layout, and the two conditions are never combined.
 **Camera motion** is `track` (40%, slides with the aim held), `orbit` (40%, fixed radius) or
 `dolly` (20%) — never a pan, which would make *did the object move or did the camera?*
 unanswerable. Under a moving camera `flow` and `depth` include camera motion; per-frame
-extrinsics ship in `meta.json`.
+camera poses and intrinsics ship in `metadata.json`.
 
 ---
 
@@ -340,7 +345,7 @@ python scripts/fit_difficulty.py out/review_conditions out/review_severity
 ```
 
 > **Freeze them once you publish.** A benchmark whose labels move between releases cannot be
-> compared with itself. The resolved values are recorded in every `meta.json`; changing them is a
+> compared with itself. The resolved values are recorded in every `metadata.json`; changing them is a
 > new release, not a bug fix.
 
 ---
@@ -474,7 +479,7 @@ python -m physloc.cli viz       out/review_severity      # every grid and sheet,
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
 ```
 
-`stats` checks the run came out in the shape it declares; it reads only `meta.json`, so it takes
+`stats` checks the run came out in the shape it declares; it reads only `metadata.json`, so it takes
 seconds over a full release:
 
 ```
@@ -580,7 +585,7 @@ python -m physloc.cli params --config v0_mini   # ...for one run
 | `difficulty` | the detection-difficulty thresholds |
 
 Every layer is validated, so a typo is an error rather than a silently ignored value. The resolved
-values are written to `params.json` and recorded in every `meta.json`.
+values are written to `params.json` and recorded in every `metadata.json`.
 
 ---
 
@@ -637,7 +642,7 @@ python -m physloc.cli taxonomy --config v0_release
   tail -f out/physloc_v0/progress.log
   ```
 
-- **Videos appear as clips finish.** Each clip is annotated — masks, `meta.json`, `rgb.mp4`,
+- **Videos appear as clips finish.** Each clip is annotated — masks, `metadata.json`, `video.mp4`,
   `overlay.mp4` — the moment its render lands in `out/physloc_v0/clips/`, so the first ones show
   up within the first hour, not when a whole job ends. Until then,
   `out/work_v0/<level>/<scenario>/<seed>/_scratch/images/` holds the frames of each clip in
@@ -815,13 +820,13 @@ physloc/injectors/    the violation families, one file per domain
 physloc/render/       the container worker, and probes for render cost
 physloc/sim/          trajectories and the simulation seam
 physloc/residuals/    the physical residuals severity is measured from
-physloc/annotate/     residuals -> masks, severity, timelines, difficulty, meta.json
+physloc/annotate/     residuals -> masks, severity, timelines, difficulty, metadata.json
 physloc/release/      export, splits, dataset card
 physloc/viz/          overlays, grids, sheets; every mp4 is written here
 physloc/cli.py        the `physloc` command line
 configs/              common.yaml and one file per run
 scripts/              run.sh, run_fast.sh, probes and refresh tools
-docs/schema.md        the meta.json field reference
+docs/schema.md        the clip layout and metadata.json reference
 docs/performance.md   how cost and performance were measured
 docs/PLAN.md          the design document
 docs/roadmap.md       what is next

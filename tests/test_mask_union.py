@@ -109,11 +109,11 @@ def test_released_clips_have_nonempty_masks_while_active(which):
     if root is None:
         pytest.skip("no release; run `python -m physloc.cli generate --debug`")
     n = 0
-    for mp in glob.glob(os.path.join(root, "clips", "**", "meta.json"),
+    for mp in glob.glob(os.path.join(root, "clips", "**", "metadata.json"),
                         recursive=True):
         cdir = os.path.dirname(mp)
         with open(mp) as fh:
-            meta = json.load(fh)
+            meta = json.load(fh)["metadata"]
         if meta.get("label") != "invalid":
             continue
         mask = np.load(os.path.join(cdir, "%s.npz" % which))["mask"]

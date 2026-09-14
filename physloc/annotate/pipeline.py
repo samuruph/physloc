@@ -27,12 +27,12 @@ from . import difficulty as diff_mod
 from . import grids as grids_mod
 from . import masks as masks_mod
 from . import severity as sev_mod
+from . import layout
+from . import movi as movi_mod
 from . import windows as win_mod
 
-SCHEMA_VERSION = 0
-PASS_FILES = {"depth": "depth", "forward_flow": "flow_fwd",
-              "backward_flow": "flow_bwd", "normal": "normals",
-              "object_coordinates": "object_coords"}
+SCHEMA_VERSION = layout.SCHEMA_VERSION
+PASS_FILES = layout.PASSES
 
 
 def _seg(passes) -> np.ndarray:
@@ -131,7 +131,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # The variant index matters: camera motion is spread across a scenario's
     # variants, so re-sampling without it can reconstruct a static scene for a
     # clip that was rendered with a moving camera -- and every framing guard
-    # and every camera field in `meta.json` would then describe the wrong shot.
+    # and every camera field in `metadata.json` would then describe the wrong shot.
     # And the framing attempt: a scene the worker resampled because its actors
     # left the frame is a different scene, and re-sampling attempt 0 here would
     # annotate the one that was rejected.
@@ -473,7 +473,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     tinfo["t_consequence_end_frame"] = int(
         max(e for _, e in tinfo["consequence_windows"]))
 
-    # ---- per-culprit records: meta.json, timelines.npz, residuals.npz -----
+    # ---- per-culprit records: metadata.json, timelines.npz, residuals.npz -----
     smap32 = smap.astype(np.float32)
     culprit_meta = []
     for c in culprits:
@@ -537,11 +537,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # THE CONDITION IS IN THE PATH, because a seed is opaque. Browsing a run,
     # `0783_distractors` says what the clip is and `0783` says nothing -- and
     # the condition is the axis you most often want to compare along, so it
-    # should not require opening `meta.json` to find. It sorts after the seed
+    # should not require opening `metadata.json` to find. It sorts after the seed
     # so a scenario's variants stay in generation order.
     pair_uid = "%s/%s/%s/%04d_%s" % (release, level, scenario, seed,
                                      _condition_of(spec_d).replace("+", "-"))
     written = {}
+    # The camera on every frame, as MOVi describes it: one pose track and one
+    # intrinsics matrix, shared by both twins because the render path is.
+    cam_track = movi_mod.camera_track(spec, T)
+    K = movi_mod.intrinsics(resolution=(tier.resolution, tier.resolution))
     for label in ("valid", "invalid"):
         uid = "%s/%s" % (pair_uid, "valid" if label == "valid"
                          else "invalid_%s_%s" % (family, sev_bin))
@@ -551,8 +555,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         traj = traj_v if label == "valid" else traj_i
 
         seg_here = seg_v if label == "valid" else seg_i
-        np.savez_compressed(os.path.join(cdir, "seg.npz"),
-                            seg=seg_here.astype(np.uint16))
+        np.savez_compressed(os.path.join(cdir, layout.SEGMENTATIONS),
+                            segmentations=seg_here.astype(np.uint16))
 
         # Mechanical energy, on BOTH twins -- the valid clip's trace is the
         # baseline every anomaly is judged against, and shipping it means a
@@ -583,6 +587,12 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             if src in p.files:
                 np.savez_compressed(os.path.join(cdir, "%s.npz" % dst), **{dst: p[src]})
         traj.save(os.path.join(cdir, "traj.npz"))
+        # MOVi's per-instance tensors -- poses, velocities, 3D and 2D boxes,
+        # image positions, visibility -- in `spec.bodies` order, which is the
+        # order of `instances` in the metadata.
+        np.savez_compressed(
+            os.path.join(cdir, layout.INSTANCES),
+            **movi_mod.instance_arrays(spec, traj, seg_here, cam_track, K))
 
         if label == "invalid":
             np.savez_compressed(os.path.join(cdir, "violation_mask.npz"), mask=vmask)
@@ -620,14 +630,17 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                                 law=np.array(law_name))
 
         if write_video:
-            _write_mp4(p["rgba"], os.path.join(cdir, "rgb.mp4"), tier.fps)
+            _write_mp4(p["rgba"], os.path.join(cdir, layout.VIDEO), tier.fps)
 
         meta = _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
                            scenario, seed, primary_id, sev_bin, prefix_diff,
                            energy_summary,
-                           _instance_table(spec_d, plan_d, seg_here), r_strong,
-                           spec=spec)
+                           _instance_table(spec_d, plan_d, seg_here, spec),
+                           r_strong, spec=spec,
+                           camera=_camera_block(spec, spec_d, T, cam_track, K),
+                           collisions=movi_mod.collisions(traj.contacts,
+                                                          cam_track, K, T))
         # HOW HARD IS THIS ONE TO SEE -- measured, after the fact, from the
         # masks that were just written. Last, because it reads the finished
         # `meta` rather than any single ingredient: the footprint comes from
@@ -635,7 +648,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # five from fields `_build_meta` has only now assembled.
         #
         # The two array-derived values are stored beside the label so that a
-        # consumer re-deriving a difficulty from `meta.json` alone gets the
+        # consumer re-deriving a difficulty from `metadata.json` alone gets the
         # numbers the clip was labelled with, rather than a `None` and a
         # silently different answer. `assess` returns None on a valid twin,
         # which has no violation to detect.
@@ -645,7 +658,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         meta["difficulty"] = diff_mod.assess(
             meta, vmask if label == "invalid" else None,
             seg_i if label == "invalid" else None)
-        with open(os.path.join(cdir, "meta.json"), "w") as fh:
+        # Last, so it describes every file actually beside it.
+        meta["files"] = _files_block(cdir)
+        with open(os.path.join(cdir, layout.METADATA), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
 
@@ -791,36 +806,56 @@ def _divergence_onset(traj_v, traj_i, tol: float = 1e-3) -> Dict[int, int]:
     return out
 
 
-def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
-    """One record per body: id, name, semantic label, role, and visibility.
+def _instance_table(spec_d, plan_d, seg, spec=None) -> List[Dict[str, object]]:
+    """One record per body, in `spec.bodies` order -- MOVi's `instances`.
 
     Standard practice for a tracking dataset and the thing a segmentation map is
-    useless without. `id` is the pixel value in `seg.npz`; it is stable for the
-    whole clip, so it doubles as the track id and there is no separate
-    association step. Visibility is measured from the rendered map rather than
-    assumed, so a body parked out of frame reports zero rather than looking
-    present.
+    useless without. `id` is the pixel value in `segmentations.npz`; it is
+    stable for the whole clip, so it doubles as the track id and there is no
+    separate association step. Unlike MOVi the list is not re-sorted by
+    visibility: the valid and invalid twins must agree on who is who, and a
+    visibility sort orders them differently. Row `i` here is row `i` of every
+    array in `instances.npz`.
+
+    Visibility is measured from the rendered map rather than assumed, so a body
+    parked out of frame reports zero rather than looking present. Every body
+    carries its own asset source and licence (non-negotiable 7).
     """
-    culprits = {int(i) for i in (plan_d or {}).get("causal_body_ids", [])}
+    causal = [int(i) for i in (plan_d or {}).get("causal_body_ids", [])]
+    assets = ({int(a["segmentation_id"]): a for a in _asset_block(spec, spec_d)}
+              if spec is not None else {})
+    live = ({int(b.segmentation_id): b for b in spec.bodies}
+            if spec is not None else {})
     out: List[Dict[str, object]] = []
     for b in spec_d.get("bodies", []):
         bid = int(b["segmentation_id"])
         seen = (seg == bid)
         frames = np.flatnonzero(seen.any(axis=(1, 2))) if seen.size else []
+        asset = assets.get(bid, {})
+        body = live.get(bid)
         out.append({
             "id": bid,
             "track_id": bid,          # ids are stable, so id == track
             "name": b["name"],
             "category": b.get("kind", "unknown"),
+            "asset_id": asset.get("asset_id", b.get("kind")),
+            "source": asset.get("source"),
+            "license": asset.get("license"),
+            "held_out": asset.get("held_out", False),
             "material": b.get("material"),
             "color": b.get("color"),
             "role": b.get("role", "unknown"),
+            "scale": (list(body.draw_scale) if body is not None
+                      else b.get("render_scale")),
             "static": bool(b.get("static", False)),
             "dormant": bool(b.get("dormant", False)),
-            "is_culprit": bid in culprits,
-            "mass_kg": b.get("mass"),
+            "collides": bool(getattr(body, "collides", True)),
+            "is_culprit": bid in causal,
+            "culprit_index": causal.index(bid) if bid in causal else None,
+            "mass": b.get("mass"),
             "friction": b.get("friction"),
             "restitution": b.get("restitution"),
+            "bbox_frames": [int(f) for f in frames],
             "first_frame": int(frames[0]) if len(frames) else None,
             "last_frame": int(frames[-1]) if len(frames) else None,
             "frames_visible": int(len(frames)),
@@ -829,44 +864,80 @@ def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
     return out
 
 
-def _camera_block(spec, spec_d: Dict, num_frames: int) -> Dict[str, Any]:
-    """Where the camera was on every frame, and whether it moved.
+def _files_block(cdir: str) -> Dict[str, object]:
+    """Every file beside the metadata: each array's key, dtype and shape.
 
-    Consumers need this the moment a fifth of clips move: `flow_fwd`,
-    `flow_bwd` and `depth` stop being pure object motion under a moving
+    Read from the `.npy` headers inside each archive rather than by loading the
+    arrays, so describing a release-tier depth pass costs nothing.
+    """
+    import zipfile
+
+    fmt = np.lib.format
+    out: Dict[str, object] = {}
+    for name in sorted(os.listdir(cdir)):
+        path = os.path.join(cdir, name)
+        if name == layout.METADATA or not os.path.isfile(path):
+            continue
+        if not name.endswith(".npz"):
+            out[name] = {"bytes": os.path.getsize(path)}
+            continue
+        arrays = {}
+        with zipfile.ZipFile(path) as zf:
+            for member in zf.namelist():
+                with zf.open(member) as fh:
+                    version = fmt.read_magic(fh)
+                    reader = (fmt.read_array_header_1_0 if version == (1, 0)
+                              else fmt.read_array_header_2_0)
+                    shape, _fortran, dtype = reader(fh)
+                arrays[member[:-4] if member.endswith(".npy") else member] = {
+                    "dtype": str(dtype), "shape": list(shape)}
+        out[name] = {"arrays": arrays}
+    return out
+
+
+def _camera_block(spec, spec_d: Dict, num_frames: int, track=None,
+                  K=None) -> Dict[str, Any]:
+    """MOVi's `camera`: lens, intrinsics, and the pose on every frame.
+
+    Consumers need this the moment a fifth of clips move: `forward_flow`,
+    `backward_flow` and `depth` stop being pure object motion under a moving
     camera, and without the track there is no way to tell the two apart.
 
-    Takes the reconstructed `SceneSpec` so the per-frame poses come from
-    `spec.camera_at` -- the same method the renderer keyframes from. Deriving
-    them here instead would be a second implementation of the track, and an
-    orbit interpolates its ANGLE rather than its endpoints, so the two would
-    disagree by a chord and the shipped extrinsics would describe a camera the
-    clip never had.
-
-    Falls back to the serialised spec when no object is available, which is the
-    case for an older workdir being re-annotated.
+    The poses come from `spec.camera_at` -- the same method the renderer
+    keyframes from -- via `movi.camera_track`. Deriving them any other way
+    would be a second implementation of the track, and an orbit interpolates
+    its ANGLE rather than its endpoints, so the two would disagree by a chord.
+    `positions` and `quaternions` follow Kubric's conventions exactly
+    (camera-to-world, looking down -Z); `K` is Kubric's normalised intrinsics.
+    PhysLoc adds `motion`, the one `look_at` every camera holds for the whole
+    clip, and the `end_position` a moving camera travels to.
     """
+    base = {"focal_length": movi_mod.FOCAL_LENGTH_MM,
+            "sensor_width": movi_mod.SENSOR_WIDTH_MM,
+            "field_of_view": movi_mod.field_of_view_deg()}
     if spec is None:
-        return {"motion": spec_d.get("camera_motion_kind", "static"),
-                "position": spec_d.get("camera_position"),
-                "look_at": spec_d.get("camera_look_at"),
-                "end_position": spec_d.get("camera_end_position"),
-                "intrinsics": [], "extrinsics_per_frame": []}
-    poses = [spec.camera_at(f, num_frames) for f in range(num_frames)]
-    return {
-        "motion": spec.camera_motion_kind,
-        "position": list(spec.camera_position),
-        "look_at": list(spec.camera_look_at),
-        "end_position": (list(spec.camera_end_position)
-                         if spec.camera_moves else None),
-        "intrinsics": [],
-        "extrinsics_per_frame": [{"position": list(p), "look_at": list(la)}
-                                 for p, la in poses],
-    }
+        return dict(base, motion=spec_d.get("camera_motion_kind", "static"),
+                    position=spec_d.get("camera_position"),
+                    look_at=spec_d.get("camera_look_at"),
+                    end_position=spec_d.get("camera_end_position"),
+                    K=None, positions=[], quaternions=[])
+    track = track or movi_mod.camera_track(spec, num_frames)
+    if K is None:
+        K = movi_mod.intrinsics(resolution=(spec.tier.resolution,) * 2)
+    return dict(
+        base,
+        K=np.asarray(K, np.float64).tolist(),
+        positions=np.round(track["positions"], 6).tolist(),
+        quaternions=np.round(track["quaternions"], 6).tolist(),
+        motion=spec.camera_motion_kind,
+        position=list(spec.camera_position),
+        look_at=list(spec.camera_look_at),
+        end_position=(list(spec.camera_end_position)
+                      if spec.camera_moves else None))
 
 
 def _params_block():
-    """The generation knobs in force, for `meta.json`."""
+    """The generation knobs in force, for `metadata.json`."""
     from .. import params
 
     return params.CURRENT
@@ -895,11 +966,21 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 energy_summary: Optional[Dict[str, float]] = None,
                 instances: Optional[List[Dict[str, object]]] = None,
                 r_strong: Optional[float] = None,
-                spec=None) -> Dict[str, object]:
+                spec=None, camera: Optional[Dict[str, object]] = None,
+                collisions: Optional[List[Dict[str, object]]] = None
+                ) -> Dict[str, object]:
+    """The clip's `metadata.json`, in MOVi's layout plus PhysLoc's blocks.
+
+    MOVi's four: `metadata` (who the clip is and its geometry), `camera`,
+    `instances` and `events`. PhysLoc's beside them: `segmentation`,
+    `violation`, `difficulty`, `energy`, `noise_floor`, `provenance`,
+    `real2sim`, and `files`. See docs/schema.md.
+    """
     instances = instances or []
     seg_names = [("0", "background")] + [
         (str(i["id"]), i["name"]) for i in instances]
     fam = FAMILIES[family]
+    notes = spec_d.get("notes") or {}
     # A VALID CLIP HAS NO FAMILY, and no single twin.
     #
     # It is shared by every family staged on this scene -- that is the whole
@@ -916,74 +997,76 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
     is_valid = label == "valid"
     twin = None if is_valid else "%s/valid" % pair_uid
     meta = {
-        "schema_version": SCHEMA_VERSION,
-        "clip_uid": uid, "pair_uid": pair_uid, "twin_uid": twin,
-        "label": label, "tier": tier.name, "release": release,
-        "domain": None if is_valid else domain_of(family),
-        "family": None if is_valid else family,
-        "scenario": scenario, "seed": seed,
-        # THE VARIANT INDEX IS DATA, not bookkeeping. Both orthogonal axes --
-        # camera motion and distractors -- are stratified by it, so it is the
-        # only field that says why this clip got clutter and its neighbour did
-        # not.
-        "variant": int(spec_d.get("variant") or 0),
-        # WHICH CONDITION THIS CLIP CARRIES -- standard, camera, distractors,
-        # multi or camera+multi. The label a benchmark reports accuracy
-        # against, and the one field that says why this clip is harder than a
-        # plain one. Derived from the variant index, so it cannot disagree with
-        # what the sampler actually built.
-        "condition": _condition_of(spec_d),
-        # What this clip ACTUALLY has, not what its level allows. The level's
-        # What LANDED, not what was asked for: placement can fall short, and
-        # only the crowded conditions ask for any at all.
-        "n_distractors": int((spec_d.get("notes") or {}).get(
-            "n_distractors_placed") or 0),
-        # How many actors are in shot, and how many of them the plan names as
-        # culprits. Under `multi` a lawful MAJORITY is the point -- the clip
-        # asks which objects are wrong, not whether something is.
-        "n_actors": int((spec_d.get("notes") or {}).get("n_actors")
-                        or len([b for b in (spec_d.get("bodies") or [])
-                                if b.get("role") == "actor"
-                                and not b.get("dormant")])),
-        "n_culprits": (0 if is_valid
-                       else len(plan_d.get("causal_body_ids") or [])),
-        "physics_medium": SCENARIOS[scenario].physics_medium,
-        "medium": SCENARIOS[scenario].physics_medium,
-        "complexity": spec_d.get("complexity", {}),
-        # THE KNOBS THIS CLIP WAS MADE UNDER. `configs/common.yaml` is
-        # editable, which is the point -- and a tunable nobody can reproduce is
-        # worse than a constant nobody can change, so the resolved values ride
-        # along. See `physloc/params.py`.
-        "params": _params_block(),
-        "hdri_id": spec_d.get("hdri_id"),
-        "intphys2_category": fam.intphys2, "likephys_domain": fam.likephys,
-        "fps": tier.fps, "num_frames": tier.num_frames,
-        "resolution": [tier.resolution, tier.resolution],
-        "prompt": compose_prompt(scenario, spec_d),
-        # `motion` was hardcoded "static" while `Complexity.camera_motion`
-        # separately claimed "linear" from L3 up -- one clip asserting two
-        # different things. It is now what the scene actually does, and the
-        # per-frame poses ship beside it so a consumer can undo the camera
-        # motion rather than having to infer it. A static clip still gets a
-        # full-length track, so the field never needs a special case.
-        "camera": _camera_block(spec, spec_d, tier.num_frames),
-        "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
-        # EVERY ASSET CARRIES ITS OWN LICENCE, which for two thirds of the
-        # dataset is Kubric's and for L3's actors is not. This block declared
-        # `kubric_primitive` / Apache-2.0 for every body in the scene, so a
-        # `barrier_pass` clip at L3 whose ball is a GSO scan
-        # (`BIA_Porcelain_Ramekin_With_Glazed_Rim...`, CC BY-SA 4.0) shipped
-        # claiming Apache-2.0 -- a share-alike asset attributed as permissive,
-        # which is the one way non-negotiable 7 can fail while the field is
-        # still populated and `validate` still passes.
-        #
-        # Read off the live `spec` rather than `spec_d`: `SceneSpec.to_dict`
-        # does not carry `asset_id`, and the spec is re-sampled above precisely
-        # so the scene's real geometry is available here.
-        "assets": _asset_block(spec, spec_d),
+        # ---- MOVi's `metadata`: identity, taxonomy, and clip geometry -------
+        "metadata": {
+            "schema_version": SCHEMA_VERSION,
+            "clip_uid": uid, "pair_uid": pair_uid, "twin_uid": twin,
+            "label": label, "tier": tier.name, "release": release,
+            "domain": None if is_valid else domain_of(family),
+            "family": None if is_valid else family,
+            "scenario": scenario, "seed": seed,
+            # THE VARIANT INDEX IS DATA, not bookkeeping. Both orthogonal axes
+            # -- camera motion and distractors -- are stratified by it, so it is
+            # the only field that says why this clip got clutter and its
+            # neighbour did not.
+            "variant": int(spec_d.get("variant") or 0),
+            # WHICH CONDITION THIS CLIP CARRIES -- standard, camera,
+            # distractors, multi or camera+multi. The label a benchmark reports
+            # accuracy against. Read off the spec, which resolved it once.
+            "condition": _condition_of(spec_d),
+            # What LANDED, not what was asked for: placement can fall short,
+            # and only the crowded conditions ask for any at all.
+            "n_distractors": int(notes.get("n_distractors_placed") or 0),
+            # How many actors are in shot, and how many of them the plan names
+            # as culprits. Under `multi` a lawful MAJORITY is the point -- the
+            # clip asks which objects are wrong, not whether something is.
+            "n_actors": int(notes.get("n_actors")
+                            or len([b for b in (spec_d.get("bodies") or [])
+                                    if b.get("role") == "actor"
+                                    and not b.get("dormant")])),
+            "n_culprits": (0 if is_valid
+                           else len(plan_d.get("causal_body_ids") or [])),
+            "physics_medium": SCENARIOS[scenario].physics_medium,
+            "complexity": spec_d.get("complexity", {}),
+            # THE KNOBS THIS CLIP WAS MADE UNDER. `configs/common.yaml` is
+            # editable, which is the point -- and a tunable nobody can
+            # reproduce is worse than a constant nobody can change, so the
+            # resolved values ride along. See `physloc/params.py`.
+            "params": _params_block(),
+            # The per-scene size multiplier and, when the first scene drawn let
+            # its actors leave the frame, which resampled scene this is.
+            "size_scale": notes.get("size_scale"),
+            "framing_attempt": int(notes.get("framing_attempt") or 0),
+            "background": {
+                "hdri_id": spec_d.get("hdri_id"),
+                "color": (list(spec.background_color) if spec is not None
+                          else None),
+            },
+            "intphys2_category": fam.intphys2, "likephys_domain": fam.likephys,
+            "frame_rate": tier.fps, "num_frames": tier.num_frames,
+            "resolution": [tier.resolution, tier.resolution],
+            # Kubric's physics substeps: `worker.build_scene` sets 20 per frame.
+            "step_rate": tier.fps * 20,
+            "gravity": spec_d.get("gravity"),
+            "prompt": compose_prompt(scenario, spec_d),
+            "controls": {"is_surprising_but_valid": False,
+                         "is_artifact_probe": False},
+        },
+        # ---- MOVi's `camera`, `instances` and `events` ----------------------
+        # `motion` is what the scene actually does, and the per-frame poses
+        # ship beside it so a consumer can undo the camera motion rather than
+        # infer it. A static clip still gets a full-length track.
+        "camera": camera if camera is not None else _camera_block(
+            spec, spec_d, tier.num_frames),
+        # EVERY BODY CARRIES ITS OWN LICENCE, which for two thirds of the
+        # dataset is Kubric's and for L3's actors is a GSO scan's CC BY-SA --
+        # a share-alike asset attributed as permissive is the one way
+        # non-negotiable 7 can fail while the field is still populated.
+        "instances": instances,
+        "events": {"collisions": collisions or []},
+        # ---- PhysLoc's blocks ----------------------------------------------
         # The label space, spelled out. A segmentation map is unusable without
-        # the id -> name table beside it, and burying that in `assets` (which
-        # exists to carry licences) made consumers reconstruct it.
+        # the id -> name table beside it.
         "segmentation": {
             "encoding": "instance",
             "dtype": "uint16",
@@ -991,7 +1074,6 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "ids_are_declared": True,
             "id_to_name": dict(seg_names),
         },
-        "instances": instances,
         "provenance": {
             "generator_commit": os.environ.get("PHYSLOC_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",

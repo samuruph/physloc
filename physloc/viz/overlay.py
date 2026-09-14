@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from ..annotate import layout
 from . import video as vid
 
 PANEL = 288                      # each panel is rendered at this size
@@ -47,9 +48,10 @@ def build(clip_dir: str, out_path: Optional[str] = None,
           panel: int = PANEL, **_ignored) -> Dict[str, object]:
     import cv2
 
-    meta = _json(os.path.join(clip_dir, "meta.json"))
+    meta = _json(os.path.join(clip_dir, layout.METADATA))
+    md = layout.identity(meta)
     v = meta.get("violation") or {}
-    T = int(meta["num_frames"])
+    T = int(md["num_frames"])
 
     rgb = _rgb(clip_dir, T)
     mask = _npz(clip_dir, "violation_mask.npz", "mask")
@@ -58,10 +60,10 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     ref = _npz(clip_dir, "reference_mask.npz", "mask")
     diverg = _npz(clip_dir, "divergence_map.npz", "divergence")
     energy = _npz(clip_dir, "energy_map.npz", "energy")
-    seg = _npz(clip_dir, "seg.npz", "seg")
+    seg = _npz(clip_dir, layout.SEGMENTATIONS, "segmentations")
     depth = _npz(clip_dir, "depth.npz", "depth")
-    flow = _npz(clip_dir, "flow_fwd.npz", "flow_fwd")
-    normals = _npz(clip_dir, "normals.npz", "normals")
+    flow = _npz(clip_dir, "forward_flow.npz", "forward_flow")
+    normals = _npz(clip_dir, "normal.npz", "normal")
     etrace = _energy_trace(clip_dir)
     etwin = _energy_trace(_twin_dir(clip_dir, meta))
     tl = np.load(os.path.join(clip_dir, "timelines.npz"))
@@ -156,7 +158,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         out[t] = f
 
     out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
-    vid.write(out, out_path, fps=int(meta.get("fps", 12)))
+    vid.write(out, out_path, fps=int(md.get("frame_rate", 12)))
     return {"path": out_path, "frames": T, "panels": [p[0] for p in panels],
             "t_event": t_event, "t_observable": t_obs, "t_end": t_end,
             "violation_windows": vwin, "observable_windows": owin}
@@ -322,6 +324,7 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     """Laid out right-to-left from measured widths so nothing ever collides."""
     import cv2
     v = meta.get("violation") or {}
+    md = layout.identity(meta)
 
     # --- right edge: frame counter, then the state pill ---
     frame_s = "f %d/%d" % (t, T - 1)
@@ -341,8 +344,8 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     right_limit = x - 14
 
     # --- left edge: identity, then metadata if it still fits ---
-    left = "%s / %s / %s" % (meta.get("domain"), meta.get("family"),
-                             meta.get("scenario"))
+    left = "%s / %s / %s" % (md.get("domain"), md.get("family"),
+                             md.get("scenario"))
     _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
     lx = PAD + 2 + _w(left, 0.52) + 22
     sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
@@ -352,11 +355,11 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     # so watching a run meant remembering which seed was which. It is written
     # here, in the video, and it degrades gracefully: the pieces are dropped
     # right to left as the width runs out, identity first.
-    cond = meta.get("condition")
+    cond = md.get("condition")
     cam = (meta.get("camera") or {}).get("motion")
     if cam and cam != "static":
         cond = "%s:%s" % (cond or "?", cam)
-    bits = [str(meta.get("complexity", {}).get("name") or ""), sev_bin]
+    bits = [str((md.get("complexity") or {}).get("name") or ""), sev_bin]
     if cond:
         bits.append(cond)
     # HOW MANY BODIES ARE WRONG, when it is more than one. `multi` is the
@@ -367,10 +370,13 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     # halves. So a `standard` clip can carry two culprits, and nothing on the
     # frame said so -- you found it on L3 `stack_topple x superelastic`, where
     # the severity landed on two blocks under a label that did not mention it.
-    nc = meta.get("n_culprits")
+    nc = md.get("n_culprits")
     if isinstance(nc, int) and nc > 1:
-        bits.append("%d culprits" % nc)
-    bits += ["seed %s" % meta.get("seed"), "tier %s" % meta.get("tier")]
+        timing = v.get("culprit_timing")
+        bits.append("%d culprits%s" % (nc, " (%s)" % timing
+                                       if timing in ("independent", "sync")
+                                       else ""))
+    bits += ["seed %s" % md.get("seed"), "tier %s" % md.get("tier")]
     for k in range(len(bits), 0, -1):
         mid = "   ".join(x for x in bits[:k] if x)
         if lx + _w(mid, 0.46) < right_limit:
@@ -558,9 +564,9 @@ def _npz(clip_dir, fname, key):
 
 def _rgb(clip_dir, T):
     import imageio.v2 as imageio
-    p = os.path.join(clip_dir, "rgb.mp4")
+    p = os.path.join(clip_dir, layout.VIDEO)
     if not os.path.exists(p):
-        raise FileNotFoundError("no rgb.mp4 in %s" % clip_dir)
+        raise FileNotFoundError("no %s in %s" % (layout.VIDEO, clip_dir))
     r = imageio.get_reader(p)
     frames = [np.asarray(x)[..., :3] for x in r]
     r.close()
@@ -577,7 +583,7 @@ def _erode(m):
 # ------------------------------------------------------------------ energy
 def _twin_dir(clip_dir, meta):
     """Sibling clip directory named by `twin_uid`, or None."""
-    twin = (meta or {}).get("twin_uid")
+    twin = layout.identity(meta).get("twin_uid")
     if not twin:
         return None
     root = os.path.dirname(os.path.dirname(os.path.abspath(clip_dir)))

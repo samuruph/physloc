@@ -32,8 +32,9 @@ from physloc.annotate import difficulty as D  # noqa: E402
 
 def load(root):
     """Every invalid clip under `root`, as (meta, vmask, seg)."""
-    for meta_path in sorted(glob.glob(
-            os.path.join(root, "clips", "**", "meta.json"), recursive=True)):
+    from physloc.annotate import layout
+
+    for meta_path in layout.find(root):
         with open(meta_path) as fh:
             meta = json.load(fh)
         if not meta.get("violation"):
@@ -44,7 +45,7 @@ def load(root):
         if os.path.exists(p):
             with np.load(p) as z:
                 vmask = z[list(z.keys())[0]]
-        p = os.path.join(cdir, "seg.npz")
+        p = os.path.join(cdir, layout.SEGMENTATIONS)
         if os.path.exists(p):
             with np.load(p) as z:
                 seg = z[list(z.keys())[0]]

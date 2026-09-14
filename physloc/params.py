@@ -13,7 +13,7 @@ container, whose Python is 3.9 with Kubric's pinned packages and no PyYAML --
         -> params.json    (written into the workdir, which is mounted)
         -> params.apply() (container reads it, with json)
 
-which also means the resolved values land in `meta.json`, so a clip records
+which also means the resolved values land in `metadata.json`, so a clip records
 what it was generated under. A tunable nobody can reproduce is worse than a
 constant nobody can change.
 
@@ -101,7 +101,7 @@ DEFAULTS: Dict[str, Any] = {
         # difficulty labels move between releases cannot be compared with
         # itself. They are editable because a future dataset with a different
         # geometry or a different window policy will want different cuts --
-        # and because the resolved values ride in every `meta.json`, so a clip
+        # and because the resolved values ride in every `metadata.json`, so a clip
         # always says what it was labelled under. Changing them is a new
         # release, not a bug fix.
         #
@@ -173,7 +173,7 @@ def read(path: str) -> Dict[str, Any]:
         return resolved(json.load(fh))
 
 
-#: The values in force, for `meta.json` and for anything that wants to report
+#: The values in force, for `metadata.json` and for anything that wants to report
 #: them. Replaced wholesale by `apply`.
 CURRENT: Dict[str, Any] = resolved()
 

@@ -45,7 +45,7 @@ def _is_stale(root) -> bool:
                 glob.glob(os.path.join(repo, "physloc", "**", "*.py"),
                           recursive=True)), default=0.0)
     clips = [os.path.getmtime(f) for f in
-             glob.glob(os.path.join(root, "clips", "**", "meta.json"),
+             glob.glob(os.path.join(root, "clips", "**", "metadata.json"),
                        recursive=True)]
     return bool(clips) and code > min(clips)
 

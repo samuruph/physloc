@@ -11,17 +11,24 @@ import pytest
 from physloc.annotate import difficulty as D
 
 
+#: Top-level blocks of `metadata.json`; any other keyword to `_meta` is an
+#: identity field and lands in the `metadata` block.
+_BLOCKS = ("camera", "violation", "difficulty", "instances")
+
+
 def _meta(**over):
     """A clip that is easy on every factor, so a test can spoil exactly one."""
     meta = {
-        "num_frames": 100,
-        "resolution": [512, 512],
-        "n_actors": 1,
-        "n_distractors": 0,
-        "n_culprits": 1,
-        "physics_medium": "rigid",
-        "camera": {"extrinsics_per_frame": [
-            {"position": [0.0, -6.0, 2.0], "look_at": [0.0, 0.0, 0.0]}] * 100},
+        "metadata": {
+            "num_frames": 100,
+            "resolution": [512, 512],
+            "n_actors": 1,
+            "n_distractors": 0,
+            "n_culprits": 1,
+            "physics_medium": "rigid",
+        },
+        "camera": {"positions": [[0.0, -6.0, 2.0]] * 100,
+                   "look_at": [0.0, 0.0, 0.0]},
         "violation": {
             "causal_body_ids": [2],
             "violation_windows": [[10, 89]],
@@ -30,7 +37,11 @@ def _meta(**over):
             "difficulty_inputs": {"footprint": 0.2, "occlusion": 0.0},
         },
     }
-    meta.update(over)
+    for key, value in over.items():
+        if key in _BLOCKS:
+            meta[key] = value
+        else:
+            meta["metadata"][key] = value
     return meta
 
 
@@ -64,13 +75,13 @@ def test_any_single_factor_can_make_a_clip_hard(name):
     elif name == "severity":
         meta["violation"]["peak_residual"] = {"score": bad}
     elif name == "clutter":
-        meta["n_actors"] = int(bad)
+        meta["metadata"]["n_actors"] = int(bad)
     elif name == "culprits":
-        meta["n_actors"] = meta["n_culprits"] = int(bad)
+        meta["metadata"]["n_actors"] = meta["metadata"]["n_culprits"] = int(bad)
     elif name == "camera":
-        ext = [{"position": [0.0, -6.0 + 0.1 * i, 2.0],
-                "look_at": [0.0, 0.0, 0.0]} for i in range(100)]
-        meta["camera"] = {"extrinsics_per_frame": ext}
+        meta["camera"] = {"positions": [[0.0, -6.0 + 0.1 * i, 2.0]
+                                        for i in range(100)],
+                          "look_at": [0.0, 0.0, 0.0]}
 
     got = D.assess(meta)
     assert got["level"] == "hard", (name, got["factors"][name])
@@ -167,11 +178,13 @@ def test_camera_travel_is_path_length_over_standoff():
     `toss` several metres across. Path length, not displacement: an orbit that
     returns near its start still moved the whole way."""
     assert D.camera_travel(None) == 0.0
-    assert D.camera_travel({"extrinsics_per_frame": []}) == 0.0
-    # Ten metres of travel at a ten-metre standoff.
-    ext = [{"position": [0.0, -10.0, 0.0], "look_at": [0.0, 0.0, 0.0]},
-           {"position": [10.0, -10.0, 0.0], "look_at": [10.0, 0.0, 0.0]}]
-    assert D.camera_travel({"extrinsics_per_frame": ext}) == pytest.approx(1.0)
+    assert D.camera_travel({"positions": []}) == 0.0
+    # Ten metres of travel at a ten-metre standoff: a chord of a circle of
+    # radius ten around the fixed aim point.
+    half = 5.0, -np.sqrt(75.0)
+    cam = {"positions": [[-half[0], half[1], 0.0], [half[0], half[1], 0.0]],
+           "look_at": [0.0, 0.0, 0.0]}
+    assert D.camera_travel(cam) == pytest.approx(1.0)
 
 
 def test_footprint_and_occlusion_come_from_the_arrays_when_given():

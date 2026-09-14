@@ -14,6 +14,7 @@ import numpy as np
 
 from ..annotate.windows import rasterise as win_rasterise
 
+from ..annotate import layout
 from ..annotate import windows as win
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of, is_compatible
 
@@ -32,46 +33,52 @@ def validate_clip(cdir: str) -> List[str]:
     def bad(msg):
         errs.append("%s: %s" % (os.path.basename(cdir), msg))
 
-    mp = os.path.join(cdir, "meta.json")
+    mp = os.path.join(cdir, layout.METADATA)
     if not os.path.exists(mp):
-        return ["%s: no meta.json" % cdir]
+        return ["%s: no %s" % (cdir, layout.METADATA)]
     with open(mp) as fh:
         m = json.load(fh)
+    md = layout.identity(m)
 
-    fam = m.get("family")
+    # 0. the layout this validator knows
+    if md.get("schema_version") != layout.SCHEMA_VERSION:
+        bad("schema_version %r, expected %d"
+            % (md.get("schema_version"), layout.SCHEMA_VERSION))
+    # 10. every body carries a licence -- on BOTH twins, valid ones included
+    for inst in m.get("instances", []):
+        if not inst.get("license"):
+            bad("instance %r has no license" % inst.get("name"))
+
+    fam = md.get("family")
     # A valid clip carries no family: it is shared by every family staged on
     # its scene, so naming one would name whichever was annotated last. The
     # checks below are all about the violation, and a valid clip has none.
-    if m.get("label") == "valid":
+    if md.get("label") == "valid":
         if fam is not None:
             bad("a valid clip claims family %r; it is shared by every family "
                 "on its scene and must claim none" % fam)
-        if m.get("scenario") not in SCENARIOS:
-            bad("unknown scenario %r" % m.get("scenario"))
+        if md.get("scenario") not in SCENARIOS:
+            bad("unknown scenario %r" % md.get("scenario"))
         return errs
     if fam not in FAMILIES:
         bad("unknown family %r" % fam)
         return errs
-    if m.get("scenario") not in SCENARIOS:
-        bad("unknown scenario %r" % m.get("scenario"))
+    if md.get("scenario") not in SCENARIOS:
+        bad("unknown scenario %r" % md.get("scenario"))
     # 9. domain matches family; (scenario, family) is in the matrix
-    if m.get("domain") != domain_of(fam):
-        bad("domain %r != %r for family %s" % (m.get("domain"),
+    if md.get("domain") != domain_of(fam):
+        bad("domain %r != %r for family %s" % (md.get("domain"),
                                                domain_of(fam), fam))
-    if not is_compatible(m.get("scenario"), fam):
+    if not is_compatible(md.get("scenario"), fam):
         bad("(%s, %s) not in the compatibility matrix"
-            % (m.get("scenario"), fam))
+            % (md.get("scenario"), fam))
     # 9b. physics_medium
-    pm = m.get("physics_medium")
+    pm = md.get("physics_medium")
     if pm == "fluid":
-        bad("physics_medium 'fluid' is not permitted at schema v0")
-    if (pm == "granular") != (m.get("scenario") == "pour"):
+        bad("physics_medium 'fluid' is not permitted")
+    if (pm == "granular") != (md.get("scenario") == "pour"):
         bad("physics_medium %r inconsistent with scenario %r"
-            % (pm, m.get("scenario")))
-    # 10. every asset carries a licence
-    for asset in m.get("assets", []):
-        if not asset.get("license"):
-            bad("asset %r has no license" % asset.get("name"))
+            % (pm, md.get("scenario")))
     # 11. prefix identity verified
     if not m.get("provenance", {}).get("prefix_identical_verified"):
         bad("prefix_identical_verified is not true")
@@ -93,7 +100,7 @@ def validate_clip(cdir: str) -> List[str]:
             scale = max(abs(float(total[0])), 1e-9)
             if drift > 1e-3 * scale:
                 bad("energy by_body does not sum to total (off by %.3g J)" % drift)
-            if m.get("label") == "valid":
+            if md.get("label") == "valid":
                 for key, limit in (("contact_anomaly", VALID_ENERGY_TOL),
                                    ("free_anomaly", VALID_ENERGY_TOL),
                                    ("excess_loss", VALID_ENERGY_TOL)):
@@ -106,13 +113,13 @@ def validate_clip(cdir: str) -> List[str]:
 
     v = m.get("violation")
     # 12. violation is null iff label == valid
-    if (v is None) != (m.get("label") == "valid"):
-        bad("violation/label mismatch (label=%r)" % m.get("label"))
+    if (v is None) != (md.get("label") == "valid"):
+        bad("violation/label mismatch (label=%r)" % md.get("label"))
 
     if v is None:
         return errs
 
-    T = int(m["num_frames"])
+    T = int(md["num_frames"])
 
     # 10b. the three window families are consistent with each other.
     #
@@ -232,32 +239,67 @@ def validate_clip(cdir: str) -> List[str]:
     # 7. every causal id is a body that exists in the scene.
     #
     # Deliberately checked against the *declared* assets rather than against
-    # the pixels in seg.npz. A causal body can be invisible for the whole clip
-    # and still be a genuine participant: seven of `pour`'s forty
+    # the pixels in the segmentation. A causal body can be invisible for the
+    # whole clip and still be a genuine participant: seven of `pour`'s forty
     # grains never show a pixel from that camera, and a vanished body has no
     # pixels precisely because it vanished. Requiring each one to be rendered
     # would fail exactly the cases the union rule and the observability lag
     # exist to handle. Whether the violation is *visible* is check 5's job.
-    declared = {int(a["segmentation_id"]) for a in m.get("assets", [])
-                if "segmentation_id" in a}
+    declared = {int(i["id"]) for i in m.get("instances", []) if "id" in i}
     if declared:
         for cid in v.get("causal_body_ids", []):
             if int(cid) not in declared:
                 bad("causal_body_id %d is not a body in this scene" % cid)
+
+    # 14. each culprit's own clock is consistent, and its union is the clip's.
+    causal = {int(i) for i in v.get("causal_body_ids", [])}
+    culprits = v.get("culprits") or []
+    for c in culprits:
+        cid = int(c.get("instance_id", -1))
+        if cid not in causal:
+            bad("culprit %d is not in causal_body_ids" % cid)
+        if int(c["t_observable_frame"]) < int(c["t_event_frame"]):
+            bad("culprit %d: t_observable precedes t_event" % cid)
+        for s, e in c.get("violation_windows", []):
+            if not (0 <= s <= e < T):
+                bad("culprit %d: window (%d,%d) out of range T=%d" % (cid, s, e, T))
+    if culprits and min(int(c["t_event_frame"]) for c in culprits) != te:
+        bad("t_event_frame is not the earliest culprit's moment")
+
+    # 15. per-pixel attribution names only culprits, exactly where the mask is.
+    vid_p = os.path.join(cdir, "violation_ids.npz")
+    if os.path.exists(vid_p):
+        vids = np.load(vid_p)["ids"]
+        if vids.shape != mask.shape or not np.array_equal(vids > 0, mask):
+            bad("violation_ids.npz does not cover exactly violation_mask")
+        stray = set(np.unique(vids[vids > 0]).tolist()) - causal
+        if stray:
+            bad("violation_ids.npz names non-culprits %s" % sorted(stray))
+
+    # 16. MOVi's instance tensors line up with the instance list.
+    inst_p = os.path.join(cdir, layout.INSTANCES)
+    if os.path.exists(inst_p):
+        with np.load(inst_p) as z:
+            k = len(m.get("instances", []))
+            if z["positions"].shape[:2] != (k, T):
+                bad("instances.npz positions %s, expected (%d, %d, 3)"
+                    % (list(z["positions"].shape), k, T))
+            if [int(i) for i in z["ids"]] != [int(i["id"]) for i in
+                                              m.get("instances", [])]:
+                bad("instances.npz ids are not in instance order")
     return errs
 
 
 def validate_release(root: str) -> Dict[str, object]:
-    metas = sorted(glob.glob(os.path.join(root, "clips", "**", "meta.json"),
-                             recursive=True))
+    metas = layout.find(root)
     errs: List[str] = []
     pairs: Dict[str, List[str]] = {}
     for mp in metas:
         cdir = os.path.dirname(mp)
         errs.extend(validate_clip(cdir))
         with open(mp) as fh:
-            m = json.load(fh)
-        pairs.setdefault(m.get("pair_uid", "?"), []).append(m.get("label"))
+            md = layout.identity(json.load(fh))
+        pairs.setdefault(md.get("pair_uid", "?"), []).append(md.get("label"))
     # 13. every pair has exactly one valid twin and at least one invalid.
     # Several invalid variants legitimately share a single valid clip: they come
     # from the same scenario+seed, so the valid render is bit-identical and

@@ -46,9 +46,9 @@ and is the one that belongs here.
 
 ## The factors
 
-Five of the seven read straight off `meta.json`; `footprint` and `occlusion`
+Five of the seven read straight off `metadata.json`; `footprint` and `occlusion`
 need the rendered masks, so `annotate` measures them where the arrays are in
-hand and writes the raw values into `meta.json` beside the label. A consumer
+hand and writes the raw values into `metadata.json` beside the label. A consumer
 re-deriving a difficulty never has to open an `.npz`.
 """
 from __future__ import annotations
@@ -188,12 +188,14 @@ def camera_travel(camera: Optional[Dict[str, object]]) -> float:
     started still moved the whole way, and every frame of that is apparent
     motion a model has to explain away.
     """
-    ext = (camera or {}).get("extrinsics_per_frame") or []
-    if len(ext) < 2:
+    # MOVi's per-frame `positions`, and the one aim point every PhysLoc camera
+    # holds for the whole clip -- see `SceneSpec.camera_end_position`.
+    cam = camera or {}
+    pos = np.asarray(cam.get("positions") or [], np.float64)
+    if len(pos) < 2:
         return 0.0
-    pos = np.asarray([e["position"] for e in ext], np.float64)
-    aim = np.asarray([e["look_at"] for e in ext], np.float64)
-    standoff = float(np.linalg.norm(pos - aim, axis=1).mean())
+    aim = np.asarray(cam.get("look_at") or [0.0, 0.0, 0.0], np.float64)
+    standoff = float(np.linalg.norm(pos - aim[None, :], axis=1).mean())
     if standoff < 1e-9:
         return 0.0
     return float(np.linalg.norm(np.diff(pos, axis=0), axis=1).sum() / standoff)
@@ -206,11 +208,12 @@ def measure(meta: Dict[str, object],
 
     `vmask` and `seg_invalid` are optional: pass them from `annotate`, where
     they are already in memory, and omit them when re-deriving from a shipped
-    `meta.json`, which carries the two values they produce.
+    `metadata.json`, which carries the two values they produce.
     """
     violation = meta.get("violation") or {}
-    T = int(meta.get("num_frames") or 0)
-    res = meta.get("resolution") or [0, 0]
+    md = meta.get("metadata") or {}
+    T = int(md.get("num_frames") or 0)
+    res = md.get("resolution") or [0, 0]
     pixels = float(int(res[0]) * int(res[1])) or 1.0
     stored = (violation.get("difficulty_inputs") or {})
 
@@ -263,15 +266,15 @@ def measure(meta: Dict[str, object],
     # grains are one thing to attend to, not eighty candidates: nobody is asked
     # which grain is wrong. A family that picks a genuine SUBSET of the medium
     # keeps its count, because then the question really is "which ones".
-    n_actors = int(meta.get("n_actors") or 0)
-    n_culprits = int(meta.get("n_culprits") or 0)
-    if str(meta.get("physics_medium") or "") == "granular":
+    n_actors = int(md.get("n_actors") or 0)
+    n_culprits = int(md.get("n_culprits") or 0)
+    if str(md.get("physics_medium") or "") == "granular":
         bodies = 1
         if n_culprits >= max(1, n_actors):
             n_culprits = 1
     else:
         bodies = n_actors
-    clutter = float(bodies + int(meta.get("n_distractors") or 0))
+    clutter = float(bodies + int(md.get("n_distractors") or 0))
     culprits = float(n_culprits)
 
     # 7. CAMERA.
@@ -286,7 +289,7 @@ def assess(meta: Dict[str, object],
            vmask: Optional[np.ndarray] = None,
            seg_invalid: Optional[np.ndarray] = None
            ) -> Optional[Dict[str, object]]:
-    """The block that ships in `meta.json`, or `None` for a valid clip.
+    """The block that ships in `metadata.json`, or `None` for a valid clip.
 
     A valid twin has no violation to detect. Giving it a difficulty would put
     it in an evaluation set it does not belong to, exactly as giving it a

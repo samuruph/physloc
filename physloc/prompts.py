@@ -6,7 +6,7 @@ colliding with each other"), with `{color}`/`{shape}` slots that
 `compose_prompt` fills from whatever a given clip actually sampled -- see
 `physloc/scenarios/base.py::SceneSpec.to_dict` for where `color` and `kind`
 reach `spec_d`. `physloc/annotate/pipeline.py::_build_meta` calls
-`compose_prompt` once per clip and writes the result to `meta.json["prompt"]`,
+`compose_prompt` once per clip and writes the result to `metadata.json["prompt"]`,
 so two clips of the same scenario read differently when they sampled
 differently ("a red cube dropping..." vs "a blue ball dropping...").
 
@@ -23,7 +23,7 @@ generic violation clause per family does not know which body in a
 multi-body scenario the violation acts on, so it reads as vague at best and
 wrong at worst -- e.g. `solidity` on `collision` cannot say which of the two
 balls passes through the other. That precision already lives in
-`meta.json`'s `violation` block. The plan is to caption invalid clips with a
+`metadata.json`'s `violation` block. The plan is to caption invalid clips with a
 VLM against the rendered frames instead, later; see docs/PLAN.md.
 
 Run as a script to (re)write `docs/prompts_v0.json` -- the templates

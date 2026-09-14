@@ -117,7 +117,7 @@ scored against its own twin rather than against a global constant.
 | `energy.npz` | `total[T]`, `kinetic_translational[T]`, `kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`, `free_anomaly[T]`, `contact_anomaly[T]`, `excess_loss[T]` |
 | `energy_map.npz` | `energy[T,H,W]` -- each body's energy painted onto its pixels through the segmentation pass, the same mechanism `severity_map` already uses |
 | `bodies.npz` | the physical quantities the energy was computed from — `mass[T,B]`, `velocity[T,B,3]`, `speed`, `momentum`, `angular_momentum`, `inertia`, `height`, `kinetic`, `potential`, plus `gravity` and `dt`. See [schema.md](schema.md) |
-| `meta.json` | an `energy` block: `E0`, `E_end`, `peak_free_anomaly`, `peak_contact_anomaly`, `total_dissipated`, all normalised by `E₀` as well as in joules |
+| `metadata.json` | an `energy` block: `E0`, `E_end`, `peak_free_anomaly`, `peak_contact_anomaly`, `total_dissipated`, all normalised by `E₀` as well as in joules |
 
 `energy_map` is per-body constant within a body's silhouette. For a rigid body that is the
 honest spatial resolution -- energy is not a field inside a rigid body, and pretending
@@ -219,7 +219,7 @@ a single body — a body's energy may legitimately jump at a contact because a p
 it, and untangling that needs pairwise bookkeeping the seam does not carry.
 
 So the law claims less than `energy.npz` shows, on purpose. `permanence` and `dissolve` are a
-scene-level excess loss and the law does not claim them; `energy.npz` and the `meta.json`
+scene-level excess loss and the law does not claim them; `energy.npz` and the `metadata.json`
 block do.
 
 

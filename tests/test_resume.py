@@ -45,7 +45,7 @@ def make_ledger(root, request_of):
         if entry.get("request") != request_of(job):
             return None
         for clip in entry.get("clips", []):
-            if not os.path.exists(os.path.join(clip, "meta.json")):
+            if not os.path.exists(os.path.join(clip, "metadata.json")):
                 return None
         return entry.get("outcome")
 
@@ -58,7 +58,7 @@ JOB = {"level": "L0", "scenario": "drop", "seed": 777, "variant": 0}
 def _clip(tmp_path, name="invalid_solidity_strong"):
     d = tmp_path / "clips" / name
     d.mkdir(parents=True)
-    (d / "meta.json").write_text("{}")
+    (d / "metadata.json").write_text("{}")
     return str(d)
 
 
@@ -95,7 +95,7 @@ def test_a_ledger_whose_clips_are_gone_is_not_resumed(tmp_path):
     save(JOB, {"rc": 0}, [clip])
     assert load(JOB) is not None
 
-    os.remove(os.path.join(clip, "meta.json"))
+    os.remove(os.path.join(clip, "metadata.json"))
     assert load(JOB) is None
 
 

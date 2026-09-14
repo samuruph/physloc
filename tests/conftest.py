@@ -20,7 +20,8 @@ def find_release():
     import glob
     for c in RELEASE_CANDIDATES:
         p = os.path.join(REPO, c)
-        if glob.glob(os.path.join(p, "clips", "**", "meta.json"), recursive=True):
+        if glob.glob(os.path.join(p, "clips", "**", "metadata.json"),
+                     recursive=True):
             return p
     return None
 

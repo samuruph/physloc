@@ -17,23 +17,26 @@ def _clip(root, pair, name, label, family=None, seed=7):
     cdir = os.path.join(root, "clips", pair, name)
     os.makedirs(cdir, exist_ok=True)
     meta = {
-        "clip_uid": "%s/%s" % (pair, name),
-        "pair_uid": pair,
-        "twin_uid": "%s/valid" % pair,
-        "label": label,
-        "scenario": pair.split("/")[1],
-        "family": family,
-        "domain": "identity",
-        "physics_medium": "rigid",
-        "seed": seed,
-        "tier": "debug",
-        "num_frames": 25,
-        "fps": 12,
+        "metadata": {
+            "schema_version": 1,
+            "clip_uid": "%s/%s" % (pair, name),
+            "pair_uid": pair,
+            "twin_uid": "%s/valid" % pair,
+            "label": label,
+            "scenario": pair.split("/")[1],
+            "family": family,
+            "domain": "identity",
+            "physics_medium": "rigid",
+            "seed": seed,
+            "tier": "debug",
+            "num_frames": 25,
+            "frame_rate": 12,
+        },
         "camera": {"motion": "orbit"},
         "instances": [
             {"role": "floor", "category": "cube", "dormant": False},
             {"role": "actor", "category": "cone", "material": "steel",
-             "mass_kg": 3.5, "dormant": False},
+             "mass": 3.5, "dormant": False},
             {"role": "actor", "category": "cone", "dormant": True},
         ],
         "violation": ({"t_event_frame": 8, "violation_windows": [[8, 12]],
@@ -42,9 +45,9 @@ def _clip(root, pair, name, label, family=None, seed=7):
                        "peak_residual": {"score": 0.9}}
                       if label == "invalid" else None),
     }
-    with open(os.path.join(cdir, "meta.json"), "w") as fh:
+    with open(os.path.join(cdir, "metadata.json"), "w") as fh:
         json.dump(meta, fh)
-    with open(os.path.join(cdir, "rgb.mp4"), "wb") as fh:
+    with open(os.path.join(cdir, "video.mp4"), "wb") as fh:
         fh.write(b"\0" * 64)
     np.savez_compressed(os.path.join(cdir, "violation_mask.npz"),
                         mask=np.zeros((2, 4, 4), bool))
@@ -180,7 +183,7 @@ def test_every_split_ships_the_same_files(release, tmp_path):
         "splits ship different files: %s"
         % {k: sorted(v) for k, v in per_split.items()})
     assert "violation_mask.npz" in kinds[0]
-    assert "meta.json" in kinds[0]
+    assert "metadata.json" in kinds[0]
 
 
 def test_every_split_sees_every_scenario(tmp_path):

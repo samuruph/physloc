@@ -119,9 +119,10 @@ def load(root: str) -> List[Dict[str, object]]:
     only in that case, and only when they are sitting beside the `meta.json`;
     a current release carries the label already and this touches no arrays.
     """
+    from ..annotate import layout
+
     out = []
-    for path in sorted(glob.glob(os.path.join(root, "clips", "**", "meta.json"),
-                                 recursive=True)):
+    for path in layout.find(root):
         with open(path) as fh:
             meta = json.load(fh)
         if meta.get("violation") and not meta.get("difficulty"):
@@ -129,9 +130,13 @@ def load(root: str) -> List[Dict[str, object]]:
             meta["difficulty"] = D.assess(
                 meta,
                 _array(os.path.join(cdir, "violation_mask.npz")),
-                _array(os.path.join(cdir, "seg.npz")))
+                _array(os.path.join(cdir, layout.SEGMENTATIONS)))
         out.append(meta)
     return out
+
+
+def _md(meta) -> Dict[str, object]:
+    return meta.get("metadata") or {}
 
 
 def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
@@ -139,9 +144,9 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
     invalid = [m for m in metas if m.get("violation")]
     valid = [m for m in metas if not m.get("violation")]
 
-    levels = Counter(str((m.get("complexity") or {}).get("name") or "?")
+    levels = Counter(str((_md(m).get("complexity") or {}).get("name") or "?")
                      for m in metas)
-    conditions = Counter(str(m.get("condition") or "?") for m in metas)
+    conditions = Counter(str(_md(m).get("condition") or "?") for m in metas)
     bins = Counter(
         str(((m["violation"].get("intervention") or {}).get("severity_bin")))
         for m in invalid)
@@ -155,7 +160,7 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
     # exists to keep measurable, and the reason the level is not a factor in it.
     grid: Dict[str, Counter] = defaultdict(Counter)
     for m in invalid:
-        lv = str((m.get("complexity") or {}).get("name") or "?")
+        lv = str((_md(m).get("complexity") or {}).get("name") or "?")
         grid[lv][str((m.get("difficulty") or {}).get("level") or "unlabelled")] += 1
 
     factors: Dict[str, List[float]] = {f.name: [] for f in D.FACTORS}
@@ -181,8 +186,8 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         "difficulty_by_level": {k: dict(v) for k, v in grid.items()},
         "factor_values": factors,
         "peak_score_by_bin": {k: v for k, v in severity.items()},
-        "families": dict(Counter(str(m.get("family")) for m in invalid)),
-        "scenarios": dict(Counter(str(m.get("scenario")) for m in metas)),
+        "families": dict(Counter(str(_md(m).get("family")) for m in invalid)),
+        "scenarios": dict(Counter(str(_md(m).get("scenario")) for m in metas)),
         "thresholds": {f.name: {"easier": f.easier, "easy": f.easy,
                                 "moderate": f.moderate} for f in D.FACTORS},
     }

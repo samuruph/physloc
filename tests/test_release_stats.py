@@ -17,7 +17,7 @@ def _release(tmp_path, metas):
     for i, m in enumerate(metas):
         cdir = tmp_path / "clips" / "rel" / "L0" / "drop" / ("%04d" % i) / "x"
         os.makedirs(cdir, exist_ok=True)
-        with open(cdir / "meta.json", "w") as fh:
+        with open(cdir / "metadata.json", "w") as fh:
             json.dump(m, fh)
     return str(tmp_path)
 

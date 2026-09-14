@@ -12,7 +12,7 @@
 # Every run reads this file, and any config may override part of it in its own
 # `params:` block -- so this holds the defaults and a run states its
 # differences. The resolved values are written to `params.json` in the workdir
-# and recorded in every `meta.json`, so a clip says what it was generated
+# and recorded in every `metadata.json`, so a clip says what it was generated
 # under: a tunable nobody can reproduce is worse than a constant nobody can
 # change.
 #
@@ -120,7 +120,7 @@ difficulty:
   # between releases cannot be compared with itself. They are editable because
   # a dataset with a different geometry or a different window policy will want
   # different cuts -- and because the resolved values ride in every
-  # `meta.json`, so a clip always says what it was labelled under. Changing
+  # `metadata.json`, so a clip always says what it was labelled under. Changing
   # them is a new release, not a bug fix.
   #
   # Four of the seven were FITTED, at the tertiles of the 431 invalid clips in

@@ -154,7 +154,7 @@ def build(pair_dir: str, family: Optional[str] = None,
         out[t] = f
 
     out_path = out_path or os.path.join(pair_dir, "grid_%s.mp4" % (fam or "all"))
-    vid.write(out, out_path, fps=int(meta0.get("fps", 12)))
+    vid.write(out, out_path, fps=int(meta0.get("frame_rate", 12)))
     return {"path": out_path, "rows": [c["label"] for c in cols],
             "columns": [v[0] for v in views_avail], "frames": T}
 
@@ -234,7 +234,7 @@ def sheet(pair_dir: str, out_path: Optional[str] = None,
         out[t] = f
 
     out_path = out_path or os.path.join(pair_dir, "sheet_%s.mp4" % severity)
-    vid.write(out, out_path, fps=int(meta0.get("fps", 12)))
+    vid.write(out, out_path, fps=int(meta0.get("frame_rate", 12)))
     return {"path": out_path, "columns": [
         "valid" if c["is_valid"] else c["meta"].get("family") for c in entries],
         "rows": [r[0] for r in rows], "severity": severity, "frames": T}
@@ -384,7 +384,10 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
         sev = (v.get("intervention") or {}).get("severity_bin", "valid")
         tlp = os.path.join(cdir, "timelines.npz")
         cols.append({
-            "dir": cdir, "meta": meta, "is_valid": is_valid,
+            # The identity block: every reader below wants scenario, family,
+            # seed, tier, complexity, num_frames or frame_rate, and the
+            # violation it needs is unpacked into the fields that follow.
+            "dir": cdir, "meta": md, "is_valid": is_valid,
             "label": "VALID" if is_valid else sev,
             "sort": ORDER.get("valid" if is_valid else sev, 9),
             "rgb": ov._rgb(cdir, int(md["num_frames"])),
@@ -445,7 +448,7 @@ def coverage(release_root: str, out_path: Optional[str] = None,
         tlp = os.path.join(cdir, "timelines.npz")
         clips.setdefault(md.get("scenario", "?"), {})[
             md.get("family", "?")] = {
-                "meta": meta,
+                "meta": md,
                 "rgb": ov._rgb(cdir, int(md["num_frames"])),
                 "mask": ov._npz(cdir, "violation_mask.npz", "mask"),
                 "ref": ov._npz(cdir, "reference_mask.npz", "mask"),
@@ -508,7 +511,8 @@ def coverage(release_root: str, out_path: Optional[str] = None,
         out[t] = f
 
     out_path = out_path or os.path.join(release_root, "coverage.mp4")
-    fps = next(iter(next(iter(clips.values())).values()))["meta"].get("fps", 12)
+    fps = next(iter(next(iter(clips.values())).values()))["meta"].get(
+        "frame_rate", 12)
     vid.write(out, out_path, fps=int(fps))
     return {"path": out_path, "cells": built, "scenarios": nrow,
             "families": ncol, "severity": severity, "frames": T}

@@ -221,117 +221,149 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         return (ok & ~near).astype(np.float64)
 
     # ---- 3.4 steps 1-3: residual, noise floor, bounded score -------------
-    bi_v = traj_v.index_of(primary_id)
-    bi_i = traj_i.index_of(primary_id)
     law = laws.get(law_name)
-    r_valid = law(traj_v, bi_v, dict(ctx, unsupported=_unsupported(traj_v, bi_v)))
-    r_invalid = law(traj_i, bi_i, dict(ctx, unsupported=_unsupported(traj_i, bi_i)))
 
-    floor = sev_mod.NoiseFloor.calibrate([r_valid])
-    # Families whose effect depends on the rollout measure their own strong-bin
-    # reference at plan time and record it; the rest can answer from the spec.
-    # Either way it is the *strong* bin's value even on a weak clip, or the
-    # three bins would not be comparable.
-    r_strong = ctx.get("r_strong")
-    if not r_strong:
-        r_strong = inj.strong_residual_reference(spec)
-    # Scored against the twin frame by frame, not against a pooled floor -- see
-    # the note in `bounded_score`. The valid arm is the control; using it at
-    # each frame rather than averaging it into one number is what makes the
-    # score survive a scene whose lawful residual is not stationary.
-    s_invalid = sev_mod.bounded_score(r_invalid, floor, r_strong,
-                                      baseline=r_valid)
-    s_valid = sev_mod.bounded_score(r_valid, floor, r_strong,
-                                    baseline=r_valid)
+    def _score(body_id: int, notes: Dict) -> Dict[str, object]:
+        """Residual, noise floor and bounded score for one culprit body.
+
+        Scored against the twin frame by frame, not against a pooled floor --
+        see the note in `bounded_score`. The valid arm is the control; using it
+        at each frame rather than averaging it into one number is what makes
+        the score survive a scene whose lawful residual is not stationary.
+
+        Families whose effect depends on the rollout measure their own
+        strong-bin reference at plan time and record it in the notes; the rest
+        answer from the spec. Either way it is the *strong* bin's value even on
+        a weak clip, or the three bins would not be comparable. A culprit
+        planned on its own clock brings its own notes, which is where its own
+        reference lives.
+        """
+        here = dict(ctx, **(notes or {}))
+        bi_v, bi_i = traj_v.index_of(int(body_id)), traj_i.index_of(int(body_id))
+        r_v = law(traj_v, bi_v, dict(here, unsupported=_unsupported(traj_v, bi_v)))
+        r_i = law(traj_i, bi_i, dict(here, unsupported=_unsupported(traj_i, bi_i)))
+        fl = sev_mod.NoiseFloor.calibrate([r_v])
+        strong = here.get("r_strong") or inj.strong_residual_reference(spec)
+        return {"r_valid": r_v, "r_invalid": r_i, "floor": fl, "r_strong": strong,
+                "s_invalid": sev_mod.bounded_score(r_i, fl, strong, baseline=r_v),
+                "s_valid": sev_mod.bounded_score(r_v, fl, strong, baseline=r_v)}
+
+    primary = _score(primary_id, {})
+    r_valid, r_invalid = primary["r_valid"], primary["r_invalid"]
+    floor, r_strong = primary["floor"], primary["r_strong"]
+    s_invalid, s_valid = primary["s_invalid"], primary["s_valid"]
 
     # ---- 3.2 windows and timelines ---------------------------------------
     plan_windows = [tuple(w) for w in plan_d["violation_windows"]]
     active = win_mod.rasterise(plan_windows, T)
     # The two halves of `active`, shipped beside it rather than instead of it.
     # `intervening` is when we are changing something -- the colour ramping, the
-    # body shrinking; `consequence` is when the scene differs as a result. They
-    # were the same array, so a colour that finished turning green at frame 14
-    # was still reported as "being changed" at frame 24.
+    # body shrinking; `consequence` is when the scene differs as a result.
     intervening = win_mod.rasterise(
         [tuple(w) for w in plan_d.get("intervention_windows", plan_windows)], T)
     consequence = win_mod.rasterise(
         [tuple(w) for w in plan_d.get("consequence_windows", plan_windows)], T)
+    # WHICH window severity is gated on depends on where the violation can be
+    # seen. An `event` family is detectable only across the change -- a
+    # recoloured cube is a perfectly normal cube -- so its severity lives in
+    # the intervention window. A `state` family is wrong in any frame while it
+    # lasts, so its severity lives in the consequence window.
+    detectable = FAMILIES[family].detectable
+    t_ev = int((plan_d or {}).get("t_event_frame", 0))
+    frames = np.arange(T)
+
+    # EACH CULPRIT ON ITS OWN CLOCK. A `multi` clip whose culprits were planned
+    # separately carries `culprits` in its plan -- each body's own moment,
+    # windows and plan notes -- and everything per body below is gated on that
+    # body's timeline and scored on that body's residual. Any other plan has
+    # one clock: every dynamic culprit shares the plan's windows and, as it
+    # always has, the primary culprit's score. `global_gravity` acts on the
+    # whole scene and `fission` on both halves, and scoring each half alone
+    # would describe a fraction of one violation.
+    independent = bool(plan_d.get("culprits"))
 
     # Observability is measured on the dynamic causal bodies only -- see the
     # note in windows.observable_frames -- and it gates the *spatial*
     # annotations, which answer "where can this be seen" rather than "when is
     # it happening". `active` remains the ground-truth timeline.
-    observable = win_mod.observable_frames(
+    observable_all = win_mod.observable_frames(
         seg_v, seg_i, dynamic_ids or causal_ids,
         rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"])
-    # WHICH window severity is gated on depends on where the violation can be
-    # seen. An `event` family is detectable only across the change -- a
-    # recoloured cube is a perfectly normal cube, and no frame after the ramp
-    # contains the violation -- so its severity lives in the intervention
-    # window. A `state` family is wrong in any frame while it lasts: a hovering
-    # body is wrong whether or not you saw it rise.
-    #
-    # Gating everything on the union marked `colour_shift` as violating to the
-    # end of the clip, which asks a model to report a violation from a frame
-    # that does not contain one.
-    scored = (intervening if FAMILIES[family].detectable == "event"
-              else consequence)
-    visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, scored,
-                                                       observable)
-
     # A SECOND gate, for the annotations that are invalid-side only.
-    #
-    # `observable` is a *disagreement between the twins*, so it is true on
-    # frames where the culprit can be seen in the VALID render and not in the
-    # invalid one -- which is exactly the case whenever an intervention leaves
-    # the body somewhere the camera cannot see it. `mask_invalid` and
-    # `severity_map` have no pixels to put anywhere on such a frame, so
-    # `attribute_to_evidence` spends the severity on a frame that shows nothing
-    # and there is none left for the frame the body re-emerges on.
-    #
-    # Two cells in the review sweep shipped that way: `occluder_pass` x
-    # `friction` and x `phantom_impulse`, both with a healthy residual (peaking
-    # at 1.00 and 0.18) and 8 to 14 observable frames, both with `mask_invalid`
-    # empty on all 25 frames while the segmentation carried 89 px of culprit at
-    # frames 13-16. A picture with a severity of zero is the more dangerous of
-    # the two audit failures: it teaches a model that a clearly wrong clip is
-    # fine.
-    #
-    # `observable` still gates the union mask, the clocks and the absent-body
-    # fallback, because those are claims about both twins.
-    seen_invalid = masks_mod.footprint(
-        seg_i, dynamic_ids or causal_ids).any(axis=(1, 2))
-    visible_inv, s_inv_visible = sev_mod.attribute_to_evidence(
-        s_invalid, scored, observable & seen_invalid)
+    # `observable` is a disagreement between the twins, so it is true on frames
+    # where the culprit is seen in the VALID render and not in the invalid one
+    # -- whenever an intervention leaves the body where the camera cannot see
+    # it. `mask_invalid` and `severity_map` have no pixels to put anywhere on
+    # such a frame, so their severity waits for a frame the body is seen on.
+    seen_all = masks_mod.footprint(seg_i, dynamic_ids or causal_ids).any(axis=(1, 2))
+
+    clocks = ([(int(c["body_id"]), c) for c in plan_d["culprits"]] if independent
+              else [(int(b), plan_d) for b in (dynamic_ids or [primary_id])])
+    culprits: List[Dict[str, object]] = []
+    for bid, clock in clocks:
+        wins = [tuple(w) for w in clock["violation_windows"]]
+        c_active = win_mod.rasterise(wins, T)
+        c_iv = win_mod.rasterise(
+            [tuple(w) for w in clock.get("intervention_windows", wins)], T)
+        c_cq = win_mod.rasterise(
+            [tuple(w) for w in clock.get("consequence_windows", wins)], T)
+        own_obs = win_mod.observable_frames(seg_v, seg_i, [bid],
+                                            rgb_valid=pv["rgba"],
+                                            rgb_invalid=pi["rgba"])
+        if independent:
+            scored_on = _score(bid, clock.get("notes") or {})
+            obs = own_obs
+            seen = masks_mod.footprint(seg_i, [bid]).any(axis=(1, 2))
+        else:
+            scored_on, obs, seen = primary, observable_all, seen_all
+        scored = c_iv if detectable == "event" else c_cq
+        visible, s_visible = sev_mod.attribute_to_evidence(
+            scored_on["s_invalid"], scored, obs)
+        visible_inv, s_inv_visible = sev_mod.attribute_to_evidence(
+            scored_on["s_invalid"], scored, obs & seen)
+        culprits.append({
+            "id": int(bid), "t_event": int(clock.get("t_event_frame", t_ev)),
+            "windows": wins,
+            "intervention_windows": [tuple(w) for w in
+                                     clock.get("intervention_windows", wins)],
+            "consequence_windows": [tuple(w) for w in
+                                    clock.get("consequence_windows", wins)],
+            "magnitude": float(clock.get("magnitude",
+                                         plan_d["intervention"]["magnitude"])),
+            "active": c_active, "intervening": c_iv, "consequence": c_cq,
+            "own_obs": own_obs, "obs": obs, "score": scored_on,
+            "visible": visible, "s_visible": s_visible,
+            "visible_inv": visible_inv, "s_inv_visible": s_inv_visible,
+        })
 
     # ---- 3.3 masks (the union rule) --------------------------------------
     #
-    # The union mask is gated on BOTH gates, not just the two-twin one. The
-    # invalid-side gate can spill the severity to a later frame than the
-    # two-twin gate does -- that is the whole point of `seen_invalid`, which
-    # skips frames the culprit is missing from the invalid render -- and when
-    # it did, `mask_invalid` ended up with pixels on a frame `violation_mask`
-    # had none on. `phantom_impulse` shipped exactly that, and it breaks the
-    # subset invariant the union rule exists to guarantee.
-    seen = visible | visible_inv
-    vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, seen)
-    imask = masks_mod.invalid_mask(seg_i, dynamic_ids, visible_inv)
+    # Per culprit, then combined. The union mask is gated on BOTH gates, not
+    # just the two-twin one: the invalid-side gate can spill severity to a
+    # later frame than the two-twin gate does, and `mask_invalid` must stay a
+    # subset of the union it is carved from.
+    vmask = np.zeros(seg_i.shape, bool)
+    imask = np.zeros(seg_i.shape, bool)
+    vids = np.zeros(seg_i.shape, np.uint16)
+    for c in culprits:
+        c["vmask"] = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
+                                              c["visible"] | c["visible_inv"])
+        c["imask"] = masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
+        vmask |= c["vmask"]
+        imask |= c["imask"]
+        vids[c["vmask"]] = c["id"]
+    # Where two culprits' footprints overlap, the body actually rendered there
+    # in the invalid clip owns the pixel.
+    for c in culprits:
+        vids[c["imask"]] = c["id"]
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
+
     # Level 2 is MEASURED, not declared. `static_ids` are the participants the
     # plan named -- the floor a ball sinks through -- and to those we add every
-    # body whose trajectory provably departs from the valid twin without being
-    # a culprit itself. That turns "affected" from a hand-maintained list into a
-    # comparison, and it is the same comparison the bystander guard runs.
-    #
-    # DISTURBED **AND** REACHED. Moving differently is necessary and not
-    # sufficient: in a `multi` or `distractors` scene the solver's own
-    # divergence nudges bodies the violation never touched, and every one of
-    # them was painted blue. `_causal_touch_frames` is the second half -- did
-    # something carrying the violation actually reach this body, at or after
-    # `t_event`.
-    t_ev = int((plan_d or {}).get("t_event_frame", 0))
-    # EVERY static body in the scene, not just the ones the plan named: the
-    # floor must not relay causality even when no family declared it.
+    # body whose trajectory provably departs from the valid twin AND that
+    # something carrying the violation actually reached, at or after the moment
+    # it began (`_causal_touch_frames`). EVERY static body in the scene is
+    # passed as a non-relay, so the floor cannot pass causality on.
     scene_static = [int(b.segmentation_id) for b in spec.bodies if b.static]
     driven = [int(b.segmentation_id) for b in spec.bodies
               if getattr(b, "scripted", False)]
@@ -341,104 +373,88 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     affected = list(static_ids) + [
         b for b in _disturbed_bodies(traj_v, traj_i, causal_ids)
         if int(b) in touched]
+    moving_affected = [int(b) for b in affected if int(b) not in static_ids]
+    # A disturbed body belongs to the culprit that reached it FIRST, from the
+    # frame it was reached and began to behave differently.
+    reach: Dict[int, tuple] = {}
+    for k, c in enumerate(culprits):
+        own = (_causal_touch_frames((traj_i, traj_v), [c["id"]], c["t_event"],
+                                    scene_static, driven)
+               if independent else touched)
+        for b in moving_affected:
+            if b in own:
+                start = max(int(own[b]), int(onset.get(b, c["t_event"])))
+                if b not in reach or start < reach[b][0]:
+                    reach[b] = (start, k)
     # CONSEQUENCES, so gated on the consequence window rather than the scored
-    # one. For an event family the scored window is the handful of frames the
-    # change takes, and the causal mask was disappearing with it -- but "what
-    # did this violation affect" outlives the moment of intervention. A
-    # phantom impulse is delivered in two frames and the ball it launched is a
-    # consequence for the rest of the clip.
-    #
-    # And MEASURED, not just declared. Your rule, and it is the right one: if
-    # something is still behaving differently because of the violation, the
-    # causal mask should still be saying so. A declared window cannot know
-    # that -- `newton2_mass` declares two frames because the collision resolves
-    # in two frames, and both balls then travel wrong for the rest of the clip;
-    # `solidity`'s window closes when the bodies stop overlapping, and the ball
-    # is out the far side of a wall for every frame after it. So the gate is the
-    # union of what the plan declared and what the two trajectories actually
-    # do, which is the same comparison level 2 already uses to decide *who* was
-    # affected, now deciding *when* as well.
-    diverged = _diverged_frames(traj_v, traj_i, causal_ids + affected,
-                                t_ev, T)
-    causal_gate = (consequence | diverged) & observable
-    # PER BODY, from the frame it was reached AND began to behave differently.
-    # The shared gate painted a body blue over the whole window including the
-    # frames before anything got to it -- a struck ball marked as a consequence
-    # while it was still sitting untouched.
-    frames = np.arange(T)
-    secondary_active = {}
-    for b in affected:
-        if int(b) in static_ids:
-            continue
-        start = max(int(touched.get(int(b), t_ev)),
-                    int(onset.get(int(b), t_ev)))
-        secondary_active[int(b)] = (frames >= start) & causal_gate
-    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected,
-                                  causal_gate, static_ids=static_ids,
-                                  secondary_active=secondary_active)
+    # one -- and MEASURED as well as declared: if something is still behaving
+    # differently because of the violation, the causal mask still says so.
+    cmask = np.zeros(seg_i.shape, np.uint8)
+    cids = np.zeros(seg_i.shape, np.uint16)
+    for k, c in enumerate(culprits):
+        owned = [b for b in moving_affected if b in reach and reach[b][1] == k]
+        c["disturbed"] = owned
+        diverged = _diverged_frames(
+            traj_v, traj_i, ([c["id"]] if independent else list(causal_ids))
+            + affected, c["t_event"], T)
+        gate = (c["consequence"] | diverged) & c["obs"]
+        part = masks_mod.causal_mask(
+            seg_v, seg_i, [c["id"]], list(static_ids) + owned, gate,
+            static_ids=static_ids,
+            secondary_active={b: (frames >= reach[b][0]) & gate for b in owned})
+        second = (part == 2) & (cmask != 1)
+        cmask[second], cids[second] = 2, c["id"]
+        first = part == 1
+        cmask[first], cids[first] = 1, c["id"]
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
-    # Every dynamic culprit is painted, not just the primary. `global_gravity`
-    # acts on the whole scene and `fission` on both halves; painting one body
-    # would leave the severity field describing a fraction of the violation.
-    # INVALID SIDE ONLY. `paint` reads `seg_i`, and the union's extra pixels --
-    # where the culprit sits in the valid twin but not in the invalid render --
-    # used to be filled in with the same score here. That put severity on the
-    # object's *lawful* footprint, which at inference is a place the model
-    # cannot see anything wrong: it only ever has the invalid video, and there
-    # is nothing there.
-    #
-    # The cost, accepted deliberately: `permanence` and `dissolve` get an
-    # all-zero severity map once the body is gone. That is honest -- there is no
-    # pixel evidence of severity where nothing is rendered -- and
-    # `reference_mask` still says where it should have been.
-    smap = sev_mod.paint(seg_i,
-                         {int(b): s_inv_visible
-                          for b in dynamic_ids or [primary_id]},
-                         active=visible_inv)
+    # Every dynamic culprit is painted, each with its own gated score. INVALID
+    # SIDE ONLY: `paint` reads `seg_i`, because at inference a model only has
+    # the invalid video and there is nothing wrong to see at a body's lawful
+    # footprint. The cost, accepted deliberately: `permanence` and `dissolve`
+    # get an all-zero map once the body is gone -- except below.
+    smap = sev_mod.paint(seg_i, {c["id"]: c["s_inv_visible"] for c in culprits})
 
-    # ONE exception, and only where the invalid side has nothing at all. A body
-    # that MOVED has pixels in the invalid render, so its lawful footprint stays
-    # unpainted -- that is the case you asked about and it behaves as you asked.
-    # A body that VANISHED has no invalid footprint anywhere, so invalid-only
-    # leaves the whole family unscoreable: `severity_t[t] == severity_map[t].max()`
-    # is a schema guarantee, so an empty map is a zero timeline, and `permanence`
-    # came out at severity 0.00 on all fourteen of its cells.
-    #
-    # Where there is no wrong place to confuse it with, "where it should have
-    # been" is the only honest localisation available, and it is exactly what
-    # reference_mask carries.
-    #
-    # ABSENT, not merely hidden. "No pixels in the invalid render" is true of a
-    # body that was removed AND of one that is behind a screen, and the two
-    # deserve opposite answers: for the removed body the lawful footprint is the
-    # only localisation there is, while for the hidden one it is a lie -- it
-    # paints severity where the object would have been in the *valid* clip,
-    # which is not where the object is. You caught this on
-    # `occluder_pass x friction`: the ball had fallen behind the screen and the
-    # severity field was sitting out in the open where its twin had gone.
-    #
-    # The trajectory knows which case it is, so ask it rather than the pixels.
-    absent = np.zeros((T,), bool)
-    for bid in (dynamic_ids or [primary_id]):
+    # ONE exception, and only where the invalid side has nothing at all for
+    # that culprit. A body that VANISHED has no invalid footprint anywhere, so
+    # its lawful footprint is the only localisation there is. ABSENT, not
+    # merely hidden -- a body behind a screen also has no pixels, and painting
+    # its lawful footprint would put severity where the object is not. The
+    # trajectory knows which case it is, so ask it rather than the pixels.
+    smap = smap.astype(np.float32)
+    for c in culprits:
+        c["fallback"] = np.zeros(seg_i.shape, bool)
         try:
-            j = traj_i.index_of(int(bid))
+            j = traj_i.index_of(c["id"])
         except Exception:                                     # noqa: BLE001
             continue
         present = np.asarray(traj_i.present[:, j], bool)
+        absent = np.zeros((T,), bool)
         n = min(T, present.shape[0])
-        absent[:n] |= ~present[:n]
-    gone = visible & absent & ~imask.any(axis=(1, 2))
-    if gone.any():
-        fallback = rmask & gone[:, None, None]
-        if fallback.any():
-            smap = smap.astype(np.float32)
-            broadcast = np.broadcast_to(
-                s_visible.astype(np.float32)[:, None, None], smap.shape)
-            smap = np.where(fallback & (smap == 0), broadcast, smap)
-        smap = smap.astype(np.float16)
+        absent[:n] = ~present[:n]
+        gone = c["visible"] & absent & ~c["imask"].any(axis=(1, 2))
+        if gone.any():
+            c["fallback"] = masks_mod.footprint(seg_v, [c["id"]]) & gone[:, None, None]
+            smap = np.where(c["fallback"] & (smap == 0),
+                            np.asarray(c["s_visible"], np.float32)[:, None, None],
+                            smap)
+    smap = smap.astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)
+
+    # The clip's observable timeline. With one clock it is the twins'
+    # disagreement about the culprits, as it always was. With several, a frame
+    # where culprit A is active but hidden and culprit B -- not active -- is
+    # merely moving is NOT evidence of anything, so on active frames only a
+    # culprit's own active, observable frames count, plus wherever a culprit's
+    # severity was carried to.
+    if independent:
+        observable = np.zeros((T,), bool)
+        for c in culprits:
+            observable |= c["own_obs"] & (c["active"] | ~active)
+            observable |= c["visible"] | c["visible_inv"]
+    else:
+        observable = observable_all
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
                           primary_id, severity_t=sev_t, observable=observable)
@@ -456,6 +472,56 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         max(e for _, e in tinfo["intervention_windows"]))
     tinfo["t_consequence_end_frame"] = int(
         max(e for _, e in tinfo["consequence_windows"]))
+
+    # ---- per-culprit records: meta.json, timelines.npz, residuals.npz -----
+    smap32 = smap.astype(np.float32)
+    culprit_meta = []
+    for c in culprits:
+        t = int(np.clip(c["t_event"], 0, T - 1))
+        after = np.flatnonzero(c["own_obs"] & (frames >= t))
+        t_obs = int(after[0]) if after.size else t
+        rendered = masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2))
+        where = masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"]
+        c["severity_t"] = np.where(where, smap32, 0.0).reshape(T, -1).max(axis=1)
+        culprit_meta.append({
+            "instance_id": c["id"],
+            "t_event_frame": t,
+            "t_observable_frame": t_obs,
+            "observability_lag_frames": int(t_obs - t),
+            "violation_windows": [[int(s), int(e)] for s, e in c["windows"]],
+            "intervention_windows": [[int(s), int(e)]
+                                     for s, e in c["intervention_windows"]],
+            "consequence_windows": [[int(s), int(e)]
+                                    for s, e in c["consequence_windows"]],
+            "observable_windows": [[int(s), int(e)]
+                                   for s, e in win_mod.to_windows(c["own_obs"])],
+            "occluded_at_event": bool(~rendered[t]),
+            "frames_visible_after_event": int(rendered[t:].sum()),
+            "magnitude": c["magnitude"],
+            "peak_residual": sev_mod.peak(c["score"]["r_invalid"],
+                                          c["score"]["s_invalid"],
+                                          c["score"]["floor"], law_name),
+            "peak_severity": float(c["severity_t"].max()) if T else 0.0,
+            "disturbed_instance_ids": sorted(int(b) for b in c["disturbed"]),
+        })
+    tinfo["culprits"] = culprit_meta
+    tinfo["culprit_timing"] = (plan_d.get("culprit_timing")
+                               or ("independent" if independent else "shared"))
+    arrays["culprit_ids"] = np.asarray([c["id"] for c in culprits], np.int32)
+    for key in ("active", "intervening", "consequence"):
+        arrays["culprit_" + key] = np.stack([c[key] for c in culprits])
+    arrays["culprit_observable"] = np.stack([c["own_obs"] for c in culprits])
+    arrays["culprit_occluded"] = np.stack(
+        [win_mod.occluded_frames(seg_i, c["id"]) for c in culprits])
+    arrays["culprit_severity_t"] = np.stack(
+        [c["severity_t"] for c in culprits]).astype(np.float32)
+    culprit_residuals = {
+        "culprit_ids": arrays["culprit_ids"],
+        "culprit_r": np.stack([c["score"]["r_invalid"] for c in culprits]
+                              ).astype(np.float32),
+        "culprit_s": np.stack([c["score"]["s_invalid"] for c in culprits]
+                              ).astype(np.float32),
+    }
 
     # ---- 3.6 token grids --------------------------------------------------
     g = grids_mod.reduce_all(vmask, smap.astype(np.float32),
@@ -522,6 +588,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             np.savez_compressed(os.path.join(cdir, "violation_mask.npz"), mask=vmask)
             np.savez_compressed(os.path.join(cdir, "mask_invalid.npz"), mask=imask)
             np.savez_compressed(os.path.join(cdir, "causal_mask.npz"), mask=cmask)
+            # WHICH culprit, per pixel. The masks above say where; with several
+            # culprits on their own clocks a consumer also needs to know whose
+            # violation, and whose consequence, each pixel belongs to.
+            np.savez_compressed(os.path.join(cdir, "violation_ids.npz"), ids=vids)
+            np.savez_compressed(os.path.join(cdir, "causal_ids.npz"), ids=cids)
             np.savez_compressed(os.path.join(cdir, "severity_map.npz"), severity=smap)
             np.savez_compressed(os.path.join(cdir, "divergence_map.npz"),
                                 divergence=dmap)
@@ -531,7 +602,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                                 r=r_invalid.astype(np.float32),
                                 z=floor.z(r_invalid).astype(np.float32),
                                 s=s_invalid.astype(np.float32),
-                                law=np.array(law_name))
+                                law=np.array(law_name),
+                                **culprit_residuals)
         else:
             zeros_t = np.zeros((T,), np.float32)
             np.savez_compressed(
@@ -955,6 +1027,14 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "spatial_extent": plan_d["spatial_extent"],
             "intervention": plan_d["intervention"],
             "consequences": [],
+            # EACH CULPRIT'S OWN CLOCK. `independent` when a `multi` clip's
+            # culprits were planned on moments of their own, `sync` when such a
+            # clip drew one moment for all on purpose, `shared` for every plan
+            # whose culprits act together. The clip-level fields above are the
+            # union; these are per body, in `causal_body_ids` order, and the
+            # per-pixel attribution is `violation_ids.npz` / `causal_ids.npz`.
+            "culprit_timing": tinfo.get("culprit_timing"),
+            "culprits": tinfo.get("culprits", []),
             "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),
         }
     else:

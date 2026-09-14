@@ -660,6 +660,27 @@ class SceneSpec:
         }
 
 
+#: The lowest the camera's eye may sit above the floor, in metres, on any
+#: frame. Low enough to keep the eye-level shots scenarios are framed for, high
+#: enough that the ground slab can never be between the camera and the scene.
+CAMERA_MIN_HEIGHT = 0.6
+
+
+def _min_elevation(target, radius: float, floor_level: float) -> float:
+    """The smallest elevation, about `target`, that keeps an eye `radius` away
+    at least `CAMERA_MIN_HEIGHT` above `floor_level`."""
+    need = (float(floor_level) + CAMERA_MIN_HEIGHT - float(target[2])) / radius
+    return math.asin(float(np.clip(need, -1.0, 1.0)))
+
+
+def camera_clear_of_ground(spec: SceneSpec, num_frames: int) -> bool:
+    """Is the eye at least half of `CAMERA_MIN_HEIGHT` above the floor on every
+    frame of the clip? The backstop `Scenario.framing_ok` asks."""
+    frames = sorted({0, num_frames - 1, *range(0, num_frames, max(1, num_frames // 8))})
+    low = min(float(spec.camera_at(f, num_frames)[0][2]) for f in frames)
+    return low >= float(spec.floor_level) + 0.5 * CAMERA_MIN_HEIGHT
+
+
 def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     """Per-instance appearance variation: viewpoint, and light direction at L0.
 
@@ -689,6 +710,13 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
         az = az0 + math.radians(float(rng.uniform(-az_max, az_max)))
         el = el0 + math.radians(float(rng.uniform(-el_max, el_max)))
         el = float(np.clip(el, math.radians(-85.0), math.radians(85.0)))
+        # NEVER BELOW THE GROUND. The swing is around the aim point, and on a
+        # scenario framed low and close the negative half of it puts the eye
+        # under the floor: measured over 1040 sampled release scenes, 42 put the
+        # eye below 0.4 m and `occluder_pass` seed 22260826 was rendered from
+        # 0.32 m UNDER the slab -- a clip of the ground's underside and the
+        # dome, in which no actor has a single pixel on any frame.
+        el = max(el, _min_elevation(target, radius, spec.floor_level))
         v = radius * np.array([math.cos(el) * math.cos(az),
                                math.cos(el) * math.sin(az),
                                math.sin(el)])
@@ -1580,6 +1608,12 @@ def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
     else:                                                        # "track"
         travel = standoff * float(rng.uniform(*CAMERA_TRAVEL))
         end = eye + travel * (math.cos(theta) * right + math.sin(theta) * up)
+
+    # A move that starts above the ground may still end below it: a track
+    # drawn downward, or a dolly pulling back from an eye below the aim point.
+    # Lifting the END is enough -- `track` and `dolly` are straight lines, and
+    # an orbit's short arc cannot dip meaningfully below both its endpoints.
+    end[2] = max(float(end[2]), float(spec.floor_level) + CAMERA_MIN_HEIGHT)
 
     spec.camera_motion_kind = kind
     spec.camera_end_position = tuple(float(v) for v in end)

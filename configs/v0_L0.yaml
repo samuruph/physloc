@@ -44,7 +44,13 @@
 
 defaults:
   seed: 20260824
-  tier: release        # 512x512, 30 fps, 89 frames = 2.97 s
+  tier: release
+  # Render geometry. These restate the release tier; change one and every clip
+  # records it in its tier name (e.g. `release+f49`). frames must be 4k+1.
+  resolution: 512      # square render size, pixels
+  fps: 30              # frames per second
+  frames: 49           # clip length: 49 frames = 1.63 s (the tier's own is 89)
+  spp: 64              # Cycles samples per pixel
   complexity: L0
   severity: all        # the full weak/medium/strong ladder
   # THE SHARE THIS LEVEL WOULD GET IN A FULL RUN, so the four configs PARTITION

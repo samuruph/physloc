@@ -38,7 +38,13 @@
 
 defaults:
   seed: 20260824
-  tier: debug          # 128x128, 12 fps, 25 frames -- never published
+  tier: debug          # never published
+  # Render geometry. These restate the debug tier; change one and every clip
+  # records it in its tier name (e.g. `debug+f49`). frames must be 4k+1.
+  resolution: 128      # square render size, pixels
+  fps: 12              # frames per second
+  frames: 25           # clip length: 25 frames = 2.08 s
+  spp: 16              # Cycles samples per pixel
   complexity: all      # the whole built ladder, at its declared shares
   severity: all        # the full weak/medium/strong ladder
   variants: 10         # a full turn of the condition cycle; see above

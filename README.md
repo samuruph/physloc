@@ -543,6 +543,23 @@ A tier is a geometry — how big and how long — and nothing else:
 video VAE's temporal stride. `v0` / `v1` are what a published dataset is *called*, set by
 `--outdir`, not tiers.
 
+**Every config spells out its tier's geometry** in its `defaults:` block, so a run is resized
+there rather than by inventing a tier:
+
+```yaml
+defaults:
+  tier: release
+  resolution: 512      # square render size, pixels
+  fps: 30              # frames per second
+  frames: 89           # clip length; must be 4k+1
+  spp: 64              # Cycles samples per pixel
+```
+
+As shipped these restate the tier and change nothing. Change one and only that field moves:
+every clip records it in its tier name (e.g. `release+f49`), and `taxonomy` scales its price
+with `frames`. Resolution and spp change the per-frame cost itself, so re-measure it with
+`physloc/render/probe_cost.py` before trusting a price at a new size.
+
 ### Generation knobs
 
 Shares, counts and bands live in **`configs/common.yaml`**, and any config may override part of
@@ -661,24 +678,24 @@ rendering; a real run finishes roughly 10% over it.
 | `review_L3` | L3 | 166 | 179 | 8 | **1.3 h** |
 | `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | 8 | **9.4 h** |
 | `review` | L0 | 166 | 511 | 8 | **36 min** |
-| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 96 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 96 | 145 h (**6.0 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 96 | 72 h (**3.0 days**) |
-| `v0_L2` | L2 | 166 | 1533 | 96 | 123 h (**5.1 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 96 | 82 h (**3.4 days**) |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 96 | 422 h (**17.6 days**) |
+| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
+| `v0_L0` | L0 | 166 | 5110 | 32 | 80 h (**3.3 days**) |
+| `v0_L1` | L1 | 166 | 2555 | 32 | **39.9 h** |
+| `v0_L2` | L2 | 166 | 1533 | 32 | 68 h (**2.8 days**) |
+| `v0_L3` | L3 | 166 | 1022 | 32 | **45.0 h** |
+| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 232 h (**9.7 days**) |
 <!-- /physloc:costs -->
 
 ### Where a release's time goes
 
 <!-- physloc:costs_ladder -->
-| level | variants | renders | per render | at 96 workers | share of the run |
+| level | variants | renders | per render | at 32 workers | share of the run |
 |---|---|---|---|---|---|
-| **L0** | 10 | 5110 | 298 s | 145 h (**6.0 days**) | 34% |
-| **L1** | 5 | 2555 | 298 s | 72 h (**3.0 days**) | 17% |
-| **L2** | 3 | 1533 | 677 s | 123 h (**5.1 days**) | 29% |
-| **L3** | 2 | 1022 | 677 s | 82 h (**3.4 days**) | 19% |
-| **all four** | -- | 10220 | -- | 421 h (**17.6 days**) | 100% |
+| **L0** | 10 | 5110 | 164 s | 80 h (**3.3 days**) | 34% |
+| **L1** | 5 | 2555 | 164 s | **39.9 h** | 17% |
+| **L2** | 3 | 1533 | 372 s | 67 h (**2.8 days**) | 29% |
+| **L3** | 2 | 1022 | 372 s | **45.0 h** | 19% |
+| **all four** | -- | 10220 | -- | 232 h (**9.7 days**) | 100% |
 <!-- /physloc:costs_ladder -->
 
 L0 and L1 are three quarters of the renders and about half the time; L2 and L3 cost more per

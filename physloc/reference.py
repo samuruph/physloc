@@ -151,10 +151,28 @@ _LEVEL_ROW = re.compile(
 def _price(name: str) -> str:
     """`taxonomy --config <name>`, as text. One subprocess, because the CLI is
     the thing that owns the arithmetic and a second copy of it here is a second
-    thing to keep in step."""
-    return subprocess.run(
-        [sys.executable, "-m", "physloc.cli", "taxonomy", "--config", name],
-        capture_output=True, text=True).stdout
+    thing to keep in step.
+
+    `workers: auto` is one worker per core of WHATEVER MACHINE RUNS THIS, which
+    made the README depend on the box that regenerated it -- a 96-vCPU host
+    wrote "96 workers" and a 32-vCPU one "32", so `test_reference` passed on one
+    and failed on the other. `SPEEDUP` is measured only up to its largest worker
+    count, so `auto` is priced at exactly that: the figure the tables can stand
+    behind, identical everywhere.
+    """
+    from . import config
+    from .cli import SPEEDUP, _build
+
+    argv = [sys.executable, "-m", "physloc.cli", "taxonomy", "--config", name]
+    _, subs = _build()
+    valid = {ac.dest for ac in subs["generate"]._actions} - {"help", "config"}
+    try:
+        workers = config.load(name, "generate", valid).get("workers")
+    except config.ConfigError:
+        workers = None
+    if str(workers).strip().lower() == "auto":
+        argv += ["--workers", str(max(SPEEDUP["solid"]))]
+    return subprocess.run(argv, capture_output=True, text=True).stdout
 
 
 def _hours(h: float) -> str:

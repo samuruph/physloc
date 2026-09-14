@@ -68,6 +68,12 @@
 defaults:
   seed: 777
   tier: debug
+  # Render geometry. These restate the debug tier; change one and every clip
+  # records it in its tier name (e.g. `debug+f49`). frames must be 4k+1.
+  resolution: 128      # square render size, pixels
+  fps: 12              # frames per second
+  frames: 25           # clip length: 25 frames = 2.08 s
+  spp: 16              # Cycles samples per pixel
   complexity: L0
   # One bin. The conditions are orthogonal to magnitude, and three bins would
   # triple the render for a question review_severity already answers.

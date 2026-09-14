@@ -73,7 +73,9 @@ class Pour(Scenario):
         # therefore the pile depth -- exactly where those ladders were
         # calibrated, so the only thing that changes is how fine the medium
         # looks.
-        n_grains = 96 if tier.name == "debug" else 212
+        # Keyed on the BASE tier: a dial override renames the tier (`debug+f49`)
+        # and must not quietly swap the debug medium for the release one.
+        n_grains = 96 if tier.name.split("+")[0] == "debug" else 212
         r = float(rng.uniform(0.058, 0.068))
         hue = float(rng.uniform(0, 1))
 

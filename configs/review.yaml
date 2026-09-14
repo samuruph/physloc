@@ -62,12 +62,29 @@ defaults:
   #   uncluttered, and only a longer run starts spending clips on them.
   complexity: L0
 
-  # tier: the resolution/length ladder, and the ONLY thing a tier says.
+  # tier: the render geometry, and the ONLY thing a tier says.
   #     debug    128x128, 12 fps, 25 frames, 16 spp -- ~8 s a render, never published
-  #     release  512x512, 30 fps, 89 frames, 64 spp -- ~695 s a render
-  #   Individual dials under `generate` override one field of a tier without
-  #   inventing a new one.
+  #     release  512x512, 30 fps, 89 frames, 64 spp -- ~228 s a render
   tier: debug
+
+  # resolution / fps / frames / spp: the tier's geometry, spelled out so a run
+  #   is resized here. As written they restate the tier and change nothing.
+  #   Change one and only that field moves; every clip records it in its tier
+  #   name (e.g. `debug+f49`), and `taxonomy` prices a changed frame count.
+  #
+  #   resolution  square render size. Render time is roughly linear in pixel
+  #               count, so 256 -> 512 is about 4x.
+  #   fps         playback and simulation rate. Violation windows are a
+  #               FRACTION of the clip, so they scale with the clip.
+  #   frames      clip length. MUST be 4k+1 -- 13, 17, 21, 25, 29, ... -- so it
+  #               maps onto a video VAE's temporal stride; a bad value is
+  #               refused with the nearest two legal ones.
+  #   spp         Cycles samples per pixel -- noise against time. Most of a
+  #               frame is not sampling, so halving spp does not halve the cost.
+  resolution: 128
+  fps: 12
+  frames: 25
+  spp: 16
 
   # variants: independent randomisations per cell. Each is a fresh seed, so six
   #   variants of `drop x solidity` are six visibly different clips of the same
@@ -110,28 +127,7 @@ generate:
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)
   outdir: out/review         # clips, masks, meta.json, overlays
 
-  # ---- optional dials. Each overrides ONE field of the chosen tier; the rest
-  #      is unchanged, and the name records what changed (e.g. `debug+f49`) so
-  #      two overrides are never confused in meta.json.
-  #
-  # frames: clip length. MUST be 4k+1 -- 13, 17, 21, 25, 29, ... -- so it maps
-  #   exactly onto a video VAE's temporal stride. A bad value is refused with
-  #   the nearest two legal ones.
-  # frames: 25
-  #
-  # fps: playback and simulation rate. Every violation window is a FRACTION of
-  #   the clip, so windows scale with this rather than staying a fixed number
-  #   of frames.
-  # fps: 12
-  #
-  # resolution: square render size. Render time is roughly linear in pixel
-  #   count, so 256 -> 512 is about 4x.
-  # resolution: 128
-  #
-  # spp: Cycles samples per pixel -- noise against time. Measured at 256sq,
-  #   frame time ~= 1.29 + 0.0074*spp, so only about a quarter of a frame is
-  #   sampling and halving spp does not halve the cost.
-  # spp: 16
+  # ---- optional. (resolution, fps, frames and spp live under `defaults`.)
   #
   # window: force EVERY sustained family to the same violation duration in
   #   frames. Left unset on purpose: unset means each family sizes its own

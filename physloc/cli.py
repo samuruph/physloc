@@ -159,6 +159,15 @@ def _longest_first(jobs, tier, n_bins):
     return sorted(jobs, key=cost, reverse=True)
 
 
+def _changed_dials(tier, resolution, fps, frames, spp):
+    """Each geometry dial, or None where it only restates `tier`'s own value."""
+    def changed(value, own):
+        return None if value is None or int(value) == own else int(value)
+
+    return (changed(resolution, tier.resolution), changed(fps, tier.fps),
+            changed(frames, tier.num_frames), changed(spp, tier.samples_per_pixel))
+
+
 #: Where every generated tree lives: gitignored, and never the repository root.
 OUTPUT_ROOT = "out"
 
@@ -238,16 +247,44 @@ def _print_release_size(cells, a) -> None:
     # a factor of two.
     from .scenarios.base import COMPLEXITY
 
+    from .scenarios import TIERS
+
     levels = _levels_for(a.complexity, variants)
     invalid = valid = renders = 0
     serial = 0.0
     serial_bg = {}
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
           % (a.tier, a.complexity, a.severity, variants))
+
+    # THE CONFIG'S GEOMETRY. Render time is per frame, so a changed frame count
+    # scales the price exactly. Resolution and spp change the per-frame cost
+    # itself, which was measured only at the tier's own geometry -- say so
+    # rather than quote a number that is not one.
+    frames_scale = 1.0
+    base_tier = TIERS.get(a.tier)
+    if base_tier is not None:
+        res, _fps, frames, spp = _changed_dials(
+            base_tier, getattr(a, "resolution", None), getattr(a, "fps", None),
+            getattr(a, "frames", None), getattr(a, "spp", None))
+        if frames:
+            frames_scale = float(frames) / base_tier.num_frames
+            print("   %d frames instead of %d: priced %.2fx"
+                  % (frames, base_tier.num_frames, frames_scale))
+        unmeasured = []
+        if res:
+            unmeasured.append("resolution %d" % res)
+        if spp:
+            unmeasured.append("spp %d" % spp)
+        if unmeasured:
+            print("   note: %s differ from the %s tier; the price uses the per-frame "
+                  "cost measured at %d px / %d spp -- re-measure with "
+                  "physloc/render/probe_cost.py"
+                  % (" and ".join(unmeasured), a.tier, base_tier.resolution,
+                     base_tier.samples_per_pixel))
     for level, n_v in levels:
         cx = COMPLEXITY.get(level)
         bg = cx.background if cx else "solid"
-        rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0)
+        rate = SECONDS_PER_CLIP.get((a.tier, bg), 60.0) * frames_scale
         # Every extra body is more geometry to shade, every frame -- but only
         # the `distractors` and `multi` conditions carry any, so the average
         # clip pays their combined share of the cost.
@@ -429,7 +466,12 @@ def cmd_generate(a) -> int:
                  ", ".join(TIERS)), file=sys.stderr)
         return 2
 
-    # Individual dials, for sweeping one knob without inventing a tier.
+    # Individual dials, for sweeping one knob without inventing a tier. Every
+    # config spells its tier's geometry out, so a dial that only restates the
+    # tier is dropped here: the resume ledger and the worker then see exactly
+    # the request they would have seen without it.
+    a.resolution, a.fps, a.frames, a.spp = _changed_dials(
+        TIERS[tier], a.resolution, a.fps, a.frames, a.spp)
     try:
         tier_obj = TIERS[tier].override(
             resolution=a.resolution, fps=a.fps, num_frames=a.frames,
@@ -1422,6 +1464,12 @@ def _build(suppress: bool = False):
     p.add_argument("--variants", type=int, default=5)
     p.add_argument("--workers", type=_workers, default=4,
                    help="price the run at this many parallel workers")
+    p.add_argument("--resolution", type=int,
+                   help="the run's render size, as generate takes it")
+    p.add_argument("--fps", type=int, help="the run's frame rate")
+    p.add_argument("--frames", type=int,
+                   help="the run's clip length; the price scales with it")
+    p.add_argument("--spp", type=int, help="the run's samples per pixel")
     p.set_defaults(fn=cmd_taxonomy)
 
     p = add_parser("generate", help="simulate+render+annotate end to end")

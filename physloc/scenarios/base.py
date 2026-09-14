@@ -91,7 +91,21 @@ class Tier:
 
         The name records what was changed, so it lands in `meta.json` as e.g.
         `v0+f25` and two clips from different overrides are never confused.
+
+        A dial equal to the tier's own value is NOT a change. Every config spells
+        its tier's geometry out, and restating `resolution: 512` on the release
+        tier must leave it `release` -- not relabel every clip, and not make a
+        resumed run treat its finished jobs as different ones.
         """
+        if resolution is not None and int(resolution) == self.resolution:
+            resolution = None
+        if fps is not None and int(fps) == self.fps:
+            fps = None
+        if num_frames is not None and int(num_frames) == self.num_frames:
+            num_frames = None
+        if (samples_per_pixel is not None
+                and int(samples_per_pixel) == self.samples_per_pixel):
+            samples_per_pixel = None
         changes = []
         for key, value in (("res", resolution), ("fps", fps),
                            ("f", num_frames), ("spp", samples_per_pixel)):

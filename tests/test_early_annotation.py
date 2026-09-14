@@ -28,8 +28,16 @@ def _generate(monkeypatch, fail_first=False):
             if fail_first and not failed:
                 failed.append(only[0])
                 raise RuntimeError("transient")
-        return [{"clips": {"invalid": os.path.join(outroot, os.path.basename(d))},
-                 "dir": d} for d in only]
+        # The record shape `annotate_pair` returns: `generate`'s end-of-run
+        # summary reads every one of these fields.
+        out = []
+        for d in only:
+            family, severity = os.path.basename(d).rsplit("_", 1)
+            out.append({"clips": {"invalid": os.path.join(outroot, os.path.basename(d))},
+                        "family": family, "severity": severity, "t_event": 8,
+                        "observability_lag": 0, "violation_windows": [[8, 12]],
+                        "peak_severity": 1.0, "peak_score": 1.0})
+        return out
 
     def fake_worker(scenario, seed, tier, family, severity, workdir,
                     complexity="L0", window=None, dials=None, variant=0,

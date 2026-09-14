@@ -83,34 +83,76 @@ invalid  ───────────────────────�
 
 One valid twin is shared by every family and severity staged on that scene.
 
-### What each clip contains
+### Layout on disk
 
-The layout follows Kubric's **MOVi** datasets wherever MOVi has a name for a thing, with
-PhysLoc's annotations beside it — see [docs/schema.md](docs/schema.md).
+```
+<run>/clips/<release>/<level>/<scenario>/<seed>_<condition>/
+    valid/                       the lawful twin, shared by every family and severity
+    invalid_<family>_<bin>/      one clip per cell per severity bin
+```
 
-| file | what it is |
+Every clip directory holds the same kind of files. The layout follows Kubric's
+[MOVi](https://github.com/google-research/kubric/tree/main/challenges/movi#annotations-and-format)
+datasets — same file and key names — with PhysLoc's annotations added beside them.
+
+| file | contents |
 |---|---|
-| `video.mp4` | the video |
-| `metadata.json` | MOVi's `metadata`, `camera` (K, per-frame poses), `instances`, `events.collisions`, plus `violation` (with each culprit's own windows), `difficulty`, `energy`, `provenance` |
-| `violation_mask.npz` | **bool [T,H,W] — the primary annotation.** Where the violation can be seen |
-| `severity_map.npz` | **f16 [T,H,W]** — how badly, per pixel per frame, bounded [0,1] |
-| `causal_mask.npz` | uint8 [T,H,W] — 1 = a culprit, 2 = a body it disturbed |
-| `violation_ids.npz` · `causal_ids.npz` | uint16 [T,H,W] — which culprit each masked pixel belongs to |
-| `reference_mask.npz` | bool [T,H,W] — where the culprits *should* have been (from the valid twin) |
-| `timelines.npz` | per-frame flags for the clip and `[K,T]` for each culprit |
-| `segmentations.npz` | uint16 [T,H,W] — instance ids, stable across frames, so they are object tracks |
-| `instances.npz` | MOVi's per-instance tensors: positions, quaternions, velocities, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
-| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | geometry passes |
-| `energy` · `bodies` · `residuals` | mechanical energy, per-body state, and the raw residuals |
-| `overlay.mp4` | everything above burned into one annotated video |
+| `video.mp4` | the RGB video |
+| `metadata.json` | everything about the clip (below) |
+| `segmentations.npz` | `uint16 [T,H,W]` instance ids — stable across frames, so each id is an object track |
+| `instances.npz` | per object, per frame: `positions`, `quaternions`, `velocities`, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
+| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | geometry passes, one `.npz` each |
+| **`violation_mask.npz`** | `bool [T,H,W]` — **where** the violation can be seen (invalid clips) |
+| **`severity_map.npz`** | `f16 [T,H,W]` — **how badly**, per pixel, in `[0,1]` |
+| `causal_mask.npz` | `uint8 [T,H,W]` — `1` a culprit, `2` a body it disturbed |
+| `violation_ids.npz` · `causal_ids.npz` | `uint16 [T,H,W]` — **which** culprit each masked pixel belongs to |
+| `reference_mask.npz` | `bool [T,H,W]` — where the culprits lawfully are (from the valid twin) |
+| `timelines.npz` | **when**: per-frame flags for the clip, and `[K,T]` per culprit |
+| `energy` · `bodies` · `residuals` · `traj` · `grids` | physics, raw residuals, latent-grid masks |
+| `overlay.mp4` | every annotation burned into one video, for review |
 
-Every object's track for the whole clip is one comparison:
+`metadata.json` keeps MOVi's four blocks and adds PhysLoc's:
+
+| block | what is in it |
+|---|---|
+| `metadata` | who the clip is: `label`, `scenario`, `family`, `condition`, `complexity`, `frame_rate`, `num_frames`, `resolution`, ... |
+| `camera` | `K` (normalised), `focal_length`, `positions` and `quaternions` per frame |
+| `instances` | one record per object: `id`, `name`, `role`, `asset_id`, `license`, `mass`, `is_culprit`, ... — row `i` matches row `i` of `instances.npz` |
+| `events` | `collisions`: frame, the two instance ids, force, position |
+| `violation` | **when and what**: `t_event_frame`, `violation_windows`, `intervention`, `severity_bin`, and `culprits` — one entry per violating object with its own moment and windows |
+| `difficulty`, `energy`, `provenance`, `files` | detection difficulty, energy summary, integrity checks, and every array's shape |
+
+The full field reference is [docs/schema.md](docs/schema.md).
+
+### Loading a clip
 
 ```python
-seg  = np.load("segmentations.npz")["segmentations"]   # [T,H,W]
-meta = json.load(open("metadata.json"))
-for inst in meta["instances"]:
-    track = (seg == inst["id"])                        # [T,H,W] bool
+import json
+import numpy as np
+import imageio.v2 as imageio
+
+clip = "out/review/clips/review/L0/drop/0000_multi/invalid_continuity_strong"
+
+meta  = json.load(open(f"{clip}/metadata.json"))
+video = np.stack(imageio.mimread(f"{clip}/video.mp4", memtest=False))  # [T,H,W,3] uint8
+seg   = np.load(f"{clip}/segmentations.npz")["segmentations"]          # [T,H,W]
+mask  = np.load(f"{clip}/violation_mask.npz")["mask"]                  # [T,H,W] bool
+sev   = np.load(f"{clip}/severity_map.npz")["severity"]                # [T,H,W] float16
+ids   = np.load(f"{clip}/violation_ids.npz")["ids"]                    # [T,H,W] culprit id
+
+print(meta["metadata"]["label"], meta["metadata"]["family"])
+v = meta["violation"]                          # None on a valid clip
+for c in v["culprits"]:                        # each violating object, on its own clock
+    print(c["instance_id"], c["t_event_frame"], c["violation_windows"])
+    culprit_mask = ids == c["instance_id"]     # where THIS object's violation is
+```
+
+A published release is sharded for streaming; every file above is one member of a sample:
+
+```python
+import webdataset as wds
+for sample in wds.WebDataset("shards/main-000.tar"):
+    meta = json.loads(sample["metadata.json"])
 ```
 
 ### Before you train on it
@@ -124,13 +166,7 @@ for inst in meta["instances"]:
 - **`permanence` and `dissolve` have an all-zero severity map** — the body is gone, so it has no
   pixels to score. `reference_mask` carries where it should have been.
 
-### Layout on disk
-
-```
-out/<run>/clips/<release>/<level>/<scenario>/<seed>_<condition>/
-    valid/                       the twin, shared by every family and severity
-    invalid_<family>_<bin>/      one per cell per severity
-```
+### How much is generated
 
 A *cell* is one (scenario, family) pair. Per variant, each cell renders one invalid clip per
 severity bin (families with no magnitude axis render only `strong`), and each scenario renders one
@@ -422,8 +458,9 @@ df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_count
 | taxonomy | `scenario`, `family`, `domain`, `medium` |
 | violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
 | difficulty | `difficulty`, `difficulty_rank`, `binding_factors` |
-| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`, `actor_shape`, `actor_material`, `actor_mass` |
-| geometry | `tier`, `num_frames`, `fps`, `seed`, `variant` |
+| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`, `culprit_timing`, `actor_shape`, `actor_material`, `actor_mass` |
+| geometry | `tier`, `num_frames`, `frame_rate`, `seed`, `variant` |
+| media | `video`, `overlay` (embedded mp4) |
 
 Group by `difficulty`; filter by `difficulty_rank`.
 

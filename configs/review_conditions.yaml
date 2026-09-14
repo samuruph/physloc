@@ -38,7 +38,7 @@
 #   import glob, json, collections
 #   c = collections.Counter()
 #   for f in glob.glob("out/review_conditions/clips/**/metadata.json", recursive=True):
-#       m = json.load(open(f))
+#       m = json.load(open(f))["metadata"]
 #       if m.get("label") == "invalid":
 #           c[(m["condition"], m["n_actors"], m["n_culprits"],
 #              m["n_distractors"])] += 1

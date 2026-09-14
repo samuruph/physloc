@@ -7,6 +7,7 @@ property that makes that possible: a ladder's cheap levels must not be
 extrapolated onto its expensive ones.
 """
 import io
+import time
 
 from physloc.progress import Profile, Progress, _fmt, job_weight
 
@@ -106,6 +107,94 @@ def test_progress_writes_a_line_per_job_without_a_tty():
     text = out.getvalue()
     assert "[1/3]" in text and "[2/3]" in text
     assert "FAILED" in text and "eta" in text
+
+
+def test_the_bar_counts_renders_weighted_by_their_job():
+    """A render carries an even share of its job's predicted cost."""
+    p = Progress(2, weights=[10.0, 30.0], renders=[2, 3], stream=_sink(),
+                 use_bar=False)
+    assert p.renders_total == 5
+    p.t0 = p.t0 - 10.0                      # job 0's two renders took 10 s
+    p.job_started(0)
+    p.render_done(0)
+    assert abs(p.done_weight - 5.0) < 1e-9
+    p.render_done(0)
+    p.update("job0", index=0)
+    assert p.renders_done == 2 and abs(p.done_weight - 10.0) < 1e-9
+    # 30 units left at ~1 s per unit.
+    assert 25.0 < p.eta() < 35.0
+
+
+def test_a_render_that_will_not_happen_leaves_the_total():
+    p = Progress(1, weights=[30.0], renders=[3], stream=_sink(), use_bar=False)
+    p.render_done(0)
+    p.render_dropped(0)
+    assert p.renders_total == 2 and abs(p.total_weight - 20.0) < 1e-9
+    p.render_done(0)
+    p.update("job", index=0)                # every render accounted for
+    assert p.renders_total == 2 and p.renders_done == 2
+
+
+def test_a_job_that_dies_drops_the_renders_it_never_reported():
+    p = Progress(1, weights=[30.0], renders=[3], stream=_sink(), use_bar=False)
+    p.render_done(0)
+    p.update("job", index=0, ok=False)
+    assert p.renders_total == 1 and abs(p.total_weight - 10.0) < 1e-9
+
+
+def test_jobs_finishing_out_of_order_keep_their_own_weight():
+    """Pricing by completion order would book the expensive job as the cheap one."""
+    p = Progress(2, weights=[1.0, 100.0], stream=_sink(), use_bar=False)
+    p.update("the expensive one finished first", index=1)
+    assert abs(p.done_weight - 100.0) < 1e-9
+
+
+def test_retries_widen_the_render_total_at_their_own_price():
+    p = Progress(1, weights=[10.0], renders=[2], stream=_sink(), use_bar=False)
+    p.bump(2, weights=[20.0, 20.0], renders=[4, 4])
+    assert p.total == 3 and p.renders_total == 10
+    assert abs(p.total_weight - 50.0) < 1e-9
+
+
+def test_a_resumed_job_leaves_both_totals():
+    p = Progress(2, weights=[10.0, 10.0], renders=[2, 2], stream=_sink(),
+                 use_bar=False)
+    p.skip("cached", index=0)
+    assert p.renders_total == 2 and abs(p.total_weight - 10.0) < 1e-9
+
+
+def test_status_line_and_log_file(tmp_path):
+    log = tmp_path / "progress.log"
+    p = Progress(2, weights=[1.0, 1.0], renders=[2, 2], stream=_sink(),
+                 use_bar=False, log_path=str(log))
+    p.job_started(0)
+    p.render_done(0)
+    status = p.status_line()
+    assert "renders 1/4" in status and "1 running" in status and "eta" in status
+    p.render_done(0)
+    p.update("job0", index=0)
+    p.close()
+    text = log.read_text()
+    assert "started" in text and "[1/2]" in text and "finished" in text
+
+
+def test_heartbeat_prints_the_status_line():
+    out = _sink()
+    p = Progress(1, renders=[1], stream=out, use_bar=False)
+    p.start_heartbeat(0.05)
+    time.sleep(0.3)
+    p.close()
+    assert "status:" in out.getvalue()
+
+
+def test_renders_per_job_match_the_worker():
+    from physloc import cli
+    from physloc.taxonomy import FAMILIES
+
+    graded = [f for f, m in FAMILIES.items() if getattr(m, "graded", True)][:2]
+    ungraded = [f for f, m in FAMILIES.items() if not getattr(m, "graded", True)][:1]
+    assert cli._renders_for(graded + ungraded, "all") == 1 + 3 * len(graded) + len(ungraded)
+    assert cli._renders_for(graded, "strong") == 1 + len(graded)
 
 
 def test_profile_totals_and_overlap():

@@ -1,47 +1,50 @@
 """Progress, ETA and a stage profile for a generation run.
 
-A release run is hours to days of wall clock and, until now, its only sign of
-life was one `[n/total]` line per finished job. That is enough to tell you a run
-is alive and not enough to tell you anything else: not when it will finish, and
-not which of build / simulate / render / annotate / overlay is eating the time.
+A release run is days of wall clock. Two things live here.
 
-Two things live here.
-
-`Progress` is the live view -- a tqdm bar when a terminal is attached, plain
-lines when the output is a log file, and an ETA that is WEIGHTED rather than
-naive.
+`Progress` is the live view: a tqdm bar when a terminal is attached, plain lines
+when it is not, a status line every few minutes, a plain-text log file, and an
+ETA that is WEIGHTED rather than naive.
 
 `Profile` is the post-mortem -- where the seconds went, by stage, printed as a
 table when the run ends.
 
 --------------------------------------------------------------------------
+WHY PROGRESS COUNTS RENDERS, NOT JOBS
+--------------------------------------------------------------------------
+A release job is one scenario x level x variant, and renders its valid twin
+plus every family at every severity -- about forty renders, hours of wall clock
+even on its own worker. Counting jobs left the bar at 0 and the ETA at "?" for
+the first hours of a run. The worker announces every render as it finishes, so
+the bar moves every few seconds on a busy machine and the ETA exists after the
+first few renders.
+
+--------------------------------------------------------------------------
 WHY THE ETA IS WEIGHTED
 --------------------------------------------------------------------------
 The obvious ETA is `elapsed / done * remaining`, and on a ladder run it is
-wrong by more than a factor of two. `--complexity all` emits its jobs level by
-level -- every L0 job, then every L1, then L2, then L3 -- and an L2 clip costs
-~2.6x an L0 one because its HDRI dome encloses the scene. So a naive rate
-measured across the L0 block predicts the L2 block at L0 prices and promises an
-ending it misses by hours, then walks the estimate back up while you watch.
-
-Instead every job carries a PREDICTED cost -- the same `SECONDS_PER_CLIP` the
-`taxonomy` subcommand prices a run from -- and the ETA is
+wrong by more than a factor of two: an L2 render costs ~2.6x an L0 one because
+its HDRI dome encloses the scene. So every job carries a PREDICTED cost -- the
+same `SECONDS_PER_CLIP` the `taxonomy` subcommand prices a run from -- shared
+evenly across its renders, and the ETA is
 
     remaining_predicted_work / (completed_predicted_work / elapsed)
 
-The ratio in the denominator is the correction factor between what the price
-model thinks a job costs and what this box is actually delivering, and it
-absorbs everything the model leaves out: annotation, overlays, a busy machine,
-a worker count the model was not measured at. The estimate is therefore right
-in PROPORTION from the first few jobs, rather than only becoming right once the
-run is nearly over.
+The ratio in the denominator is the correction between what the price model
+thinks and what this machine delivers, and it absorbs everything the model
+leaves out. A render that will not happen -- a family that declines its scene,
+a job that dies -- leaves the remaining work instead of sitting in it forever.
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
 from collections import defaultdict
+
+#: How often a running `generate` prints a status line.
+HEARTBEAT_SECONDS = 300
 
 
 def _fmt(seconds: float) -> str:
@@ -68,9 +71,7 @@ class Profile:
     container round trip and `render` is the part of it Blender reported, so
     `worker - render` is build plus simulate plus the npz write -- which is the
     number that tells you whether to attack the renderer or everything around
-    it. Nesting them rather than making them disjoint means each one is a thing
-    you can measure independently, instead of a subtraction you have to
-    remember to perform.
+    it.
 
     The totals are summed across workers, so on a parallel run they add up to
     more than the elapsed time. That is the point: dividing the two gives the
@@ -111,10 +112,9 @@ class Profile:
         busy = self.totals.get("worker", 0.0) + self.totals.get("annotate", 0.0)
         print("   %-*s  %9s" % (width, "wall clock", _fmt(elapsed)), file=out)
         if workers > 1 and elapsed > 0:
-            # OCCUPANCY IS THE PARALLELISM QUESTION. `--workers 8` on 8 vCPU
-            # asks each render to share a core with another; if occupancy is
-            # far under the worker count, the workers are queueing on the
-            # machine rather than on work, and raising it again buys nothing.
+            # OCCUPANCY IS THE PARALLELISM QUESTION. If it is far under the
+            # worker count, jobs are queueing -- on memory, or behind a
+            # straggler -- rather than on cores, and more workers buy nothing.
             print("   %-*s  %.2f of %d workers busy on average"
                   % (width, "occupancy", busy / elapsed, workers), file=out)
 
@@ -133,24 +133,44 @@ class _Timer:
 
 
 class Progress:
-    """A live bar with a weighted ETA, degrading to plain lines in a log.
+    """A live bar with a weighted ETA, degrading to plain lines without a tty.
 
-    `weights` is one predicted cost per job, in the same order as the job list.
-    Pass `None` and every job counts the same, which is right for a single-level
-    run and wrong for a ladder -- see the module docstring.
+    `weights` is one predicted cost per job, in job order; `None` counts every
+    job the same. `renders`, also in job order, is how many renders each job
+    makes: given it, the bar counts renders (`render_done`) rather than jobs.
+    `log_path` appends every job line and status line, timestamped, to a file
+    that `tail -f` can follow whether or not a terminal is attached.
+
+    Every method is thread-safe: jobs run in a pool and the render announcements
+    arrive from each worker's output reader.
     """
 
     def __init__(self, total: int, weights=None, desc="generate",
-                 stream=sys.stdout, use_bar=None):
+                 stream=sys.stdout, use_bar=None, renders=None, log_path=None):
         self.total = int(total)
         self.weights = list(weights) if weights else None
-        self.total_weight = float(sum(self.weights)) if self.weights else float(total)
+        self.total_weight = (float(sum(self.weights)) if self.weights
+                             else float(total))
         self.done_weight = 0.0
         self.n = 0
         self.stream = stream
         self.t0 = time.perf_counter()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._bar = None
+
+        self.renders = list(renders) if renders else None
+        self.renders_total = int(sum(self.renders)) if self.renders else 0
+        self.renders_done = 0
+        self._seen = defaultdict(int)       # renders done or dropped, per job
+        self.running = set()
+
+        self._stop = threading.Event()
+        self._heartbeat = None
+        self._log = None
+        if log_path:
+            os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
+            self._log = open(log_path, "a", buffering=1)
+
         # A tqdm bar redraws in place with \r, which turns a log file into one
         # enormous line. Only draw it when someone is actually watching.
         if use_bar is None:
@@ -158,22 +178,30 @@ class Progress:
         if use_bar:
             try:
                 from tqdm import tqdm
-                self._bar = tqdm(total=self.total, desc=desc, unit="job",
+                self._bar = tqdm(total=self._bar_total(), desc=desc,
+                                 unit="render" if self.renders else "job",
                                  dynamic_ncols=True, file=stream,
                                  bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
                                             "[{elapsed}<{postfix}]")
+                self._bar.set_postfix_str("eta ?")
             except ImportError:
                 self._bar = None
+        self._log_line("started: %d job(s)%s" % (
+            self.total,
+            ", %d render(s)" % self.renders_total if self.renders else ""))
+
+    # ------------------------------------------------------------ internals
+    def _bar_total(self) -> int:
+        return self.renders_total if self.renders is not None else self.total
 
     def _weight_for(self, i: int) -> float:
         """The predicted cost of job `i`, with a sane answer past the end.
 
-        Retries are appended after the bar is built, so they have no declared
-        weight. Falling back to 1.0 would be catastrophic rather than merely
-        approximate -- the declared weights are in HUNDREDS of seconds, so a
-        1.0 reads as a job that finished instantly and drags the ETA toward
-        zero exactly when a run is adding work. The mean of what we do know is
-        the honest guess.
+        Retries are appended after the bar is built. Falling back to 1.0 would
+        be catastrophic rather than merely approximate -- the declared weights
+        are in HUNDREDS of seconds, so a 1.0 reads as a job that finished
+        instantly and drags the ETA toward zero exactly when a run is adding
+        work. The mean of what we do know is the honest guess.
         """
         if self.weights and i < len(self.weights):
             return float(self.weights[i])
@@ -181,79 +209,190 @@ class Progress:
             return float(sum(self.weights)) / len(self.weights)
         return 1.0
 
-    def bump(self, extra: int) -> None:
-        """Widen the bar mid-run, for work discovered after it was built."""
+    def _renders_for(self, i: int) -> int:
+        if self.renders and i < len(self.renders):
+            return max(1, int(self.renders[i]))
+        if self.renders:
+            return max(1, round(sum(self.renders) / len(self.renders)))
+        return 1
+
+    def _log_line(self, text: str) -> None:
+        if self._log is not None:
+            self._log.write("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                          text.strip()))
+
+    def _say(self, line: str) -> None:
+        """A line for whoever is watching: above the bar, or on its own."""
+        if self._bar is not None:
+            self._bar.write(line)
+        else:
+            print(line, file=self.stream, flush=True)
+        self._log_line(line)
+
+    def _refresh_bar(self) -> None:
+        if self._bar is not None:
+            self._bar.total = self._bar_total()
+            self._bar.set_postfix_str("eta %s" % _fmt(self.eta()), refresh=False)
+            self._bar.refresh()
+
+    # ----------------------------------------------------------- the API
+    def bump(self, extra: int, weights=None, renders=None) -> None:
+        """Widen the bar mid-run, for work discovered after it was built.
+
+        Pass the new jobs' `weights` and `renders` when they are known (retries
+        are); without them each is priced at the mean of the known jobs.
+        """
         if extra <= 0:
             return
         with self._lock:
+            if weights is not None and self.weights is not None:
+                self.weights.extend(float(w) for w in weights)
+                self.total_weight += float(sum(weights))
+            else:
+                self.total_weight += extra * self._weight_for(len(self.weights or []))
+            if self.renders is not None:
+                new = ([int(r) for r in renders] if renders is not None
+                       else [self._renders_for(len(self.renders))] * extra)
+                self.renders.extend(new)
+                self.renders_total += sum(new)
             self.total += int(extra)
-            self.total_weight += extra * self._weight_for(len(self.weights or []))
+            self._refresh_bar()
+
+    def job_started(self, index: int) -> None:
+        with self._lock:
+            self.running.add(index)
+
+    def render_done(self, index: int) -> None:
+        """One render of job `index` finished: its share of the job's cost is done."""
+        with self._lock:
+            self.done_weight += self._weight_for(index) / self._renders_for(index)
+            self.renders_done += 1
+            self._seen[index] += 1
             if self._bar is not None:
-                self._bar.total = self.total
-                self._bar.refresh()
+                self._bar.set_postfix_str("eta %s" % _fmt(self.eta()), refresh=False)
+                self._bar.update(1)
+
+    def render_dropped(self, index: int) -> None:
+        """A planned render of job `index` will not happen: it leaves the total."""
+        with self._lock:
+            self._drop(index, 1)
+            self._refresh_bar()
+
+    def _drop(self, index: int, count: int) -> None:
+        if count <= 0 or self.renders is None:
+            return
+        self.total_weight = max(
+            self.done_weight,
+            self.total_weight - count * self._weight_for(index) / self._renders_for(index))
+        self.renders_total = max(self.renders_done, self.renders_total - count)
+        self._seen[index] += count
 
     def eta(self) -> float:
-        """Seconds remaining, by predicted work rather than by job count."""
+        """Seconds remaining, by predicted work rather than by count."""
         elapsed = time.perf_counter() - self.t0
         if self.done_weight <= 0 or elapsed <= 0:
             return float("nan")
         rate = self.done_weight / elapsed          # predicted-seconds per second
-        return (self.total_weight - self.done_weight) / rate
+        return max(0.0, self.total_weight - self.done_weight) / rate
 
-    def update(self, label: str, weight: float = None, ok: bool = True) -> str:
+    def status_line(self) -> str:
+        with self._lock:
+            parts = []
+            if self.renders is not None:
+                parts.append("renders %d/%d" % (self.renders_done, self.renders_total))
+            parts.append("jobs %d/%d done, %d running"
+                         % (self.n, self.total, len(self.running)))
+            parts.append("elapsed %s" % _fmt(time.perf_counter() - self.t0))
+            parts.append("eta %s" % _fmt(self.eta()))
+            return " | ".join(parts)
+
+    def update(self, label: str, weight: float = None, ok: bool = True,
+               index: int = None) -> str:
         """Record one finished job. Returns the line it printed, or "".
 
-        Thread-safe: the parallel path calls this from a ThreadPoolExecutor.
+        `index` is the job's position in the job list. Jobs finish out of order
+        in a pool, so a job's weight must come from its index -- counting
+        completions would price a cheap job at an expensive one's cost.
         """
         with self._lock:
             self.n += 1
-            if weight is None:
-                weight = self._weight_for(self.n - 1)
-            self.done_weight += float(weight)
+            if index is None:
+                index = self.n - 1
+            self.running.discard(index)
+            if self.renders is not None:
+                # Renders the worker never reported -- it died, or declined
+                # without saying -- are not coming.
+                self._drop(index, self._renders_for(index) - self._seen[index])
+            else:
+                self.done_weight += float(self._weight_for(index)
+                                          if weight is None else weight)
             eta = self.eta()
             elapsed = time.perf_counter() - self.t0
-            if self._bar is not None:
-                self._bar.set_postfix_str("eta %s | %s" % (_fmt(eta), label),
-                                          refresh=False)
-                self._bar.update(1)
-                return ""
-            # The plain form carries the same three facts as the bar, because
-            # a run watched through `tail -f` on a log is the normal way a long
-            # job gets watched.
             line = ("  [%d/%d] %-46s %s  elapsed %s  eta %s"
-                    % (self.n, self.total, label,
-                       "ok" if ok else "FAILED", _fmt(elapsed), _fmt(eta)))
+                    % (self.n, self.total, label, "ok" if ok else "FAILED",
+                       _fmt(elapsed), _fmt(eta)))
+            if self.renders is not None:
+                line += "  renders %d/%d" % (self.renders_done, self.renders_total)
+            self._log_line(line)
+            if self._bar is not None:
+                if self.renders is None:
+                    self._bar.update(1)
+                self._refresh_bar()
+                return ""
             print(line, file=self.stream, flush=True)
             return line
 
-    def skip(self, label: str, weight: float = None) -> None:
+    def skip(self, label: str, weight: float = None, index: int = None) -> None:
         """Record a job that was RESUMED rather than run.
 
-        Not the same as a job that finished fast. A skipped job consumed no
-        wall clock, so it must not enter the observed rate -- but its predicted
-        cost must leave the REMAINING work, or a resume that skips the first
-        thousand jobs would spend the rest of the run quoting an ETA for work
-        it is never going to do. So the weight comes off the total instead of
-        going onto the done pile.
+        A skipped job consumed no wall clock, so it must not enter the observed
+        rate -- but its predicted cost must leave the REMAINING work, or a
+        resume that skips the first thousand jobs would quote an ETA for work
+        it is never going to do.
         """
         with self._lock:
+            if index is None:
+                index = self.n
             if weight is None:
-                weight = self._weight_for(self.n)
+                weight = self._weight_for(index)
             self.n += 1
             self.total_weight = max(0.0, self.total_weight - float(weight))
+            if self.renders is not None:
+                self.renders_total -= self._renders_for(index)
+            line = "  [%d/%d] %-46s resumed" % (self.n, self.total, label)
+            self._log_line(line)
             if self._bar is not None:
-                self._bar.set_postfix_str("eta %s | %s" % (_fmt(self.eta()),
-                                                           label),
-                                          refresh=False)
-                self._bar.update(1)
+                if self.renders is None:
+                    self._bar.update(1)
+                self._refresh_bar()
             else:
-                print("  [%d/%d] %-46s resumed" % (self.n, self.total, label),
-                      file=self.stream, flush=True)
+                print(line, file=self.stream, flush=True)
+
+    def start_heartbeat(self, interval: float = HEARTBEAT_SECONDS) -> None:
+        """Print `status_line()` every `interval` seconds until `close()`."""
+        if self._heartbeat is not None:
+            return
+
+        def beat():
+            while not self._stop.wait(interval):
+                self._say("  status: " + self.status_line())
+
+        self._heartbeat = threading.Thread(target=beat, name="progress-heartbeat",
+                                           daemon=True)
+        self._heartbeat.start()
 
     def close(self) -> None:
+        self._stop.set()
+        if self._heartbeat is not None:
+            self._heartbeat.join(timeout=2)
+            self._heartbeat = None
         if self._bar is not None:
             self._bar.close()
             self._bar = None
+        if self._log is not None:
+            self._log_line("finished: " + self.status_line())
+            self._log.close()
+            self._log = None
 
     def __enter__(self):
         return self

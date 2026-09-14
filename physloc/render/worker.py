@@ -775,6 +775,18 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     return dt, {k: list(v.shape) for k, v in arrays.items()}
 
 
+def _announce(kind: str, tag: str) -> None:
+    """One line per planned render, for `generate`'s progress bar.
+
+    `RENDERED` when a render finished, `NOT_RENDERED` when a planned one will
+    not happen (the family cannot act here, declined the scene, or broke prefix
+    identity). The host reads these as they arrive, so its bar moves render by
+    render instead of once per job -- and a render that is never coming leaves
+    the total instead of holding the ETA open.
+    """
+    print("PHYSLOC_%s %s" % (kind, tag), flush=True)
+
+
 # --------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -857,6 +869,7 @@ def main() -> int:
 
     replay(spec, objs, traj_valid, renderer, scene)
     t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
+    _announce("RENDERED", "valid")
 
     families = [f.strip() for f in a.family.split(",") if f.strip()]
     variants, timings = [], {"valid": round(t_valid, 2)}
@@ -892,16 +905,19 @@ def main() -> int:
                                  "ok": False, "skipped": True,
                                  "error": "family cannot act at complexity %s"
                                           % spec.complexity})
+                _announce("NOT_RENDERED", tag)
                 continue
             try:
                 plan = inj.plan(spec, traj_valid, rng, sev)
             except Exception as exc:                       # noqa: BLE001
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": "plan raised: %r" % (exc,)})
+                _announce("NOT_RENDERED", tag)
                 continue
             if plan is None:
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": "injector produced no plan"})
+                _announce("NOT_RENDERED", tag)
                 continue
             # A SCRIPTED body is pinned in the simulator -- `sim_static`, mass
             # zero -- and its motion arrives from the trajectory instead. So a
@@ -959,6 +975,7 @@ def main() -> int:
             if not ok:
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": "trajectory prefix differs: %s" % why})
+                _announce("NOT_RENDERED", tag)
                 continue
 
             # Windows that can only be known from the finished trajectory --
@@ -975,6 +992,7 @@ def main() -> int:
 
             replay(spec, objs, traj_invalid, renderer, scene)
             dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
+            _announce("RENDERED", tag)
             timings[tag] = round(dt, 2)
             variants.append({"family": family, "severity": sev, "ok": True,
                              "dir": vdir, "kind": plan.kind,

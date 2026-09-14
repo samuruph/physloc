@@ -72,7 +72,7 @@
 # own name rather than overwriting a release with a sample.
 #
 # Tiers are `debug` and `release` -- two geometries, nothing more. Difficulty is
-# the complexity ladder (README section 8), and `v0`/`v1` are what a published
+# the complexity ladder (README, Complexity ladder), and `v0`/`v1` are what a published
 # dataset is CALLED, set by the config's outdir.
 #
 # FASTER, WHEN THE PIXELS MAY MOVE. Kubric leaves adaptive sampling off and
@@ -88,7 +88,7 @@
 #   PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off bash scripts/run.sh review_L0
 #
 # It changes the pixels, so decide it BEFORE a run: a release must not mix
-# backends. README section 13 has the measured table.
+# backends. docs/performance.md has the measured table.
 #
 # The config decides tier, complexity, severity, seed and variants; see
 # configs/*.yaml, which document every key. Anything after the config name is
@@ -99,6 +99,16 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CONFIG="${1:-review}"
 shift || true
 PV="conda run --no-capture-output -n physloc python -m physloc.cli"
+
+# A long run belongs in tmux: it survives a closed terminal, and the progress bar
+# draws in place because the output is still a terminal.
+#
+#   tmux new -s release        # then: bash scripts/run.sh v0_release
+#   Ctrl-b d                   # detach; `tmux attach -t release` to come back
+#
+# `generate` also writes <outdir>/progress.log -- every finished job and a status
+# line every few minutes -- which `tail -f` follows from any other terminal.
+echo "== $(date '+%F %T') =="
 
 echo "== generate: --config $CONFIG $* =="
 $PV generate --config "$CONFIG" "$@"

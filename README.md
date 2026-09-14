@@ -570,9 +570,9 @@ bash scripts/run.sh v0_release
 ```
 
 That is the whole command: it generates, validates, visualises and packages the release into
-`out/physloc_v0`, and writes everything it prints to `out/logs/v0_release.txt`. Nothing needs
-editing first — the release config uses one worker per core, resumes automatically, and renders
-with the default backend (64 spp, NLM denoiser, adaptive sampling off).
+`out/physloc_v0`. Nothing needs editing first — the release config uses one worker per core,
+resumes automatically, and renders with the default backend (64 spp, NLM denoiser, adaptive
+sampling off).
 
 A release takes days, so start it inside **tmux**, which keeps it running after you close the
 terminal or disconnect:
@@ -584,11 +584,39 @@ bash scripts/run.sh v0_release   # start the run inside it
 tmux attach -t release           # come back to it later
 ```
 
-Before the first run on a new machine:
+Before the first run on a new machine, check the price:
 
 ```bash
-python -m physloc.cli taxonomy --config v0_release     # the price on this machine
+python -m physloc.cli taxonomy --config v0_release
 ```
+
+### Following a run
+
+- **The progress bar** counts renders, so it moves every few seconds, and shows a weighted ETA
+  once the first renders finish:
+
+  ```
+  generate all:  12%|███▏                      | 1227/10220 [5h 14m<eta 1d 14h]
+  ```
+
+- **A status line every five minutes** appears above the bar:
+
+  ```
+    status: renders 1227/10220 | jobs 18/260 done, 96 running | elapsed 5h 14m | eta 1d 14h
+  ```
+
+- **`out/physloc_v0/progress.log`** records every finished job and every status line with a
+  timestamp. Follow it from any terminal, whether or not the tmux session is attached:
+
+  ```bash
+  tail -f out/physloc_v0/progress.log
+  ```
+
+- **At the end**, a stage profile reports where the time went. Its `occupancy` line says how many
+  workers were busy on average; far below the worker count means jobs were waiting on memory or
+  on a long straggler, not on cores.
+
+### Resuming, splitting and memory
 
 - **Resuming.** Running the same command again continues where it stopped: a finished job is
   skipped when its recorded request — config, dials and render backend — matches, so an
@@ -596,20 +624,17 @@ python -m physloc.cli taxonomy --config v0_release     # the price on this machi
   To start over, delete `out/physloc_v0` and `out/work_v0`.
 - **Across machines.** Run one level per machine — `bash scripts/run.sh v0_L0` on one,
   `v0_L1` on the next, and so on; see [Generating one level at a time](#generating-one-level-at-a-time).
-- **Checking memory on a new machine.** One job type, release-size L3 `pour`, uses an estimated
-  ~60 GB. Measure it once and update `JOB_MEMORY_GB` in `physloc/cli.py` if it differs — run this
-  and watch `docker stats` in a second terminal:
+- **Memory.** A job starts only when its memory fits in host RAM, and every container is capped,
+  so a crowded machine cannot OOM-kill its own jobs. One job type is heavy: release-size L3
+  `pour`, set to an estimated ~60 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). Measure it once on a
+  new machine — run this and watch `docker stats` in a second terminal — and update the figure if
+  it differs:
 
   ```bash
   python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \
       --severity strong --variants 1 --workers 1 \
       --outdir out/_pour_l3_probe --workdir out/_pour_l3_probe_work
   ```
-- **Memory.** A job starts only when its measured memory fits in host RAM, and every container is
-  capped, so a crowded machine cannot OOM-kill its own jobs. L3 `pour` is the heavy cell; its
-  release figure is set in `JOB_MEMORY_GB` in `physloc/cli.py` — update it from step 2.
-- **Monitoring.** The run ends with a stage profile. Its `occupancy` line reports how many workers
-  were busy on average; far below the worker count means jobs were waiting on memory, not cores.
 
 ---
 

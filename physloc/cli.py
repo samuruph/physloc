@@ -159,6 +159,25 @@ def _longest_first(jobs, tier, n_bins):
     return sorted(jobs, key=cost, reverse=True)
 
 
+def _renders_for(families, severity) -> int:
+    """How many renders one worker job makes, decided as `render.worker` does.
+
+    Its valid twin, plus one render per family per severity bin -- except a
+    family with no magnitude axis, whose bins would be the same clip three
+    times, so the worker renders only its strongest.
+    """
+    from .taxonomy import FAMILIES
+
+    bins = (["weak", "medium", "strong"] if severity == "all"
+            else [x.strip() for x in str(severity).split(",") if x.strip()])
+    n = 1
+    for family in families:
+        meta = FAMILIES.get(family)
+        graded = meta is None or getattr(meta, "graded", True)
+        n += len(bins) if graded else min(1, len(bins))
+    return n
+
+
 #: How far apart each complexity level's seed block sits. Wide enough that no
 #: run's variant count can reach the next block, so `--complexity all` produces
 #: independent scenes per level rather than one scene laddered four ways, and
@@ -574,7 +593,7 @@ def cmd_generate(a) -> int:
     # from the first few jobs rather than only near the end. See
     # physloc/progress.py -- a ladder emits its levels in blocks and they
     # differ by ~2.6x, so an unweighted rate promises an ending it cannot make.
-    from .progress import Profile, Progress, job_weight
+    from .progress import HEARTBEAT_SECONDS, Profile, Progress, job_weight
     from .scenarios.base import COMPLEXITY
     from .taxonomy import SEVERITY_BINS
 
@@ -589,10 +608,20 @@ def cmd_generate(a) -> int:
     weights = [job_weight(level, tier, SECONDS_PER_CLIP, COMPLEXITY,
                           n_families=len(families), n_bins=n_bins)
                for _seed, _scen, families, _v, level, _n in jobs]
+    renders = [_renders_for(families, a.severity)
+               for _seed, _scen, families, _v, _level, _n in jobs]
     prof = Profile()
 
-    def run_one(job):
+    def run_one(job, index=0):
         seed, scenario, families, variant, level, n_v = job
+
+        # Each render the worker announces moves the bar the moment it lands.
+        def on_line(line):
+            if line.startswith("PHYSLOC_RENDERED "):
+                progress.render_done(index)
+            elif line.startswith("PHYSLOC_NOT_RENDERED "):
+                progress.render_dropped(index)
+
         # A level of its own in the work tree when the ladder is walked. Not
         # required for correctness any more -- the seed blocks are disjoint, so
         # the scratch paths cannot collide -- but a ladder run's scratch is
@@ -612,7 +641,8 @@ def cmd_generate(a) -> int:
                                               "fps": a.fps,
                                               "frames": a.frames,
                                               "spp": a.spp},
-                                       env=dict(env, **container_cap))
+                                       env=dict(env, **container_cap),
+                                       on_line=on_line)
         finally:
             slots.put(env)
             memory.release(held)
@@ -651,26 +681,29 @@ def cmd_generate(a) -> int:
     # RETRIES PUSH THE TOTAL UP. A declined cell is rebuilt on a fresh seed, so
     # the job count is not known until the run is over; `bump` widens the bar
     # rather than letting it sit at 100% while work continues.
-    progress = Progress(len(jobs), weights=weights,
-                        desc="generate %s" % (a.complexity or "L0"))
+    # A PLAIN-TEXT LOG BESIDE THE LEDGER. The bar lives in a terminal; the log
+    # is what `tail -f` follows from anywhere, with a status line every few
+    # minutes so a run is visibly alive long before its first job finishes.
+    progress_log = os.path.join(rel, "progress.log")
+    progress = Progress(len(jobs), weights=weights, renders=renders,
+                        desc="generate %s" % (a.complexity or "L0"),
+                        log_path=progress_log)
+    print("  progress log: %s  (tail -f it from anywhere)" % progress_log,
+          flush=True)
+    progress.start_heartbeat(HEARTBEAT_SECONDS)
 
-    def run_and_report(job, total=None):
+    def run_and_report(job, index):
+        label = lambda o: "%-16s seed=%-6d %-3s" % (o["scenario"], o["seed"],
+                                                    o.get("level", ""))
         if getattr(a, "resume", False):
             cached = _ledger_load(job)
             if cached is not None:
-                if total and total > progress.total:
-                    progress.bump(total - progress.total)
-                progress.skip("%-16s seed=%-6d %-3s"
-                              % (cached["scenario"], cached["seed"],
-                                 cached.get("level", "")))
+                progress.skip(label(cached), index=index)
                 return cached
-        out = run_one(job)
+        progress.job_started(index)
+        out = run_one(job, index)
         _ledger_save(job, out)
-        if total and total > progress.total:
-            progress.bump(total - progress.total)
-        progress.update("%-16s seed=%-6d %-3s"
-                        % (out["scenario"], out["seed"], out.get("level", "")),
-                        ok=out["rc"] == 0)
+        progress.update(label(out), ok=out["rc"] == 0, index=index)
         return out
 
     workers = _workers(getattr(a, "workers", 1) or 1)
@@ -685,13 +718,15 @@ def cmd_generate(a) -> int:
     print("  memory budget %.0f GB for %d worker(s); a job waits until its "
           "measured peak fits" % (budget_gb, workers), flush=True)
 
-    def run_all(batch, total=None):
+    def run_all(batch, offset=0):
+        """Run `batch`, whose first job is job `offset` of the progress bar."""
+        items = list(enumerate(batch, offset))
         if workers > 1 and len(batch) > 1:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                return list(pool.map(lambda j: run_and_report(j, total),
-                                     batch))
-        return [run_and_report(j, total) for j in batch]
+                return list(pool.map(lambda ij: run_and_report(ij[1], ij[0]),
+                                     items))
+        return [run_and_report(job, i) for i, job in items]
 
     # NO SERIAL WARM-UP JOB. One used to run alone "to populate Kubric's asset
     # cache", but the pinned Kubric has no shared cache: `AssetSource` copies
@@ -752,11 +787,19 @@ def cmd_generate(a) -> int:
                                n_at.get(level)))
         print("  retrying %d declined cell(s) on %d clip(s), attempt %d"
               % (len(declined), len(retry_jobs), attempt + 1), flush=True)
-        total = len(jobs) + len(retry_jobs)
+        # RETRIES WIDEN THE BAR, priced like any other job, so it does not sit
+        # at 100% while work continues.
+        offset = progress.total
+        progress.bump(len(retry_jobs),
+                      weights=[job_weight(lv, tier, SECONDS_PER_CLIP, COMPLEXITY,
+                                          n_families=len(fams), n_bins=n_bins)
+                               for _s, _sc, fams, _v, lv, _n in retry_jobs],
+                      renders=[_renders_for(fams, a.severity)
+                               for _s, _sc, fams, _v, _lv, _n in retry_jobs])
         # Through the pool like the main pass. A release declines hundreds of
         # cells and each retry is a whole container job, so running them one
         # at a time left every other worker idle for the length of the tail.
-        for out in run_all(retry_jobs, total=total):
+        for out in run_all(retry_jobs, offset=offset):
             outcomes.append(out)
             if out["rc"] != 0:
                 continue
@@ -1003,7 +1046,7 @@ class MemoryBudget:
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
                 complexity="L0", window=None, dials=None, variant=0,
-                n_variants=None, params_path=None, env=None):
+                n_variants=None, params_path=None, env=None, on_line=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
@@ -1018,16 +1061,37 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
     for flag, value in (dials or {}).items():
         if value is not None:
             cmd += ["--%s" % flag, str(value)]
-    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                       env=dict(os.environ, **env) if env else None)
-    for line in p.stdout.splitlines():
+    # STREAMED, not collected at exit: the worker announces each render as it
+    # finishes (`PHYSLOC_RENDERED` / `PHYSLOC_NOT_RENDERED`), and `on_line`
+    # hands those to the progress bar while the container is still running.
+    # stderr is drained on its own thread so a chatty Blender cannot fill the
+    # pipe and stall the worker.
+    import collections
+    import threading
+
+    proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, bufsize=1,
+                            env=dict(os.environ, **env) if env else None)
+    err = collections.deque(maxlen=2000)
+    drain = threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True)
+    drain.start()
+    info = None
+    for line in proc.stdout:
         if line.startswith("PHASE0 "):
             info = json.loads(line[len("PHASE0 "):])
-            return (0, info) if info.get("ok") else (3, info)
+        elif on_line is not None and line.startswith("PHYSLOC_"):
+            try:
+                on_line(line.strip())
+            except Exception:                              # noqa: BLE001
+                pass                    # a progress hiccup must not fail a job
+    proc.wait()
+    drain.join(timeout=5)
+    if info is not None:
+        return (0, info) if info.get("ok") else (3, info)
     # Keep enough of the tail to contain the actual exception. 600 characters
     # cut the traceback off above the error line, which turned a diagnosable
     # container failure into "something went wrong in a png reader".
-    return (p.returncode or 4, {"stderr": p.stderr[-4000:]})
+    return (proc.returncode or 4, {"stderr": "".join(err)[-4000:]})
 
 
 def _annotate(workdir, outroot, overlay=True, only=None):

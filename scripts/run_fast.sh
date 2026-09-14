@@ -4,10 +4,10 @@
 #   bash scripts/run_fast.sh review_L0
 #
 # FOR EXPERIMENTS, NOT THE RELEASE. The release renders on the default backend
-# -- 64 spp, NLM, adaptive off -- and `bash scripts/run.sh v0_release --resume`
+# -- 64 spp, NLM, adaptive off -- and `bash scripts/run.sh v0_release`
 # is how it is run. Measured against a 512-spp reference, adaptive sampling at
 # 64 spp moved the image seven times further than the default's own error, so
-# it was not adopted (README section 13, "Render backend").
+# it was not adopted (docs/performance.md, "Render settings").
 #
 # Exactly equivalent to exporting two variables yourself and calling run.sh --
 # it exists so the pair is one thing to remember rather than two to spell:
@@ -15,7 +15,7 @@
 #   PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off bash scripts/run.sh review_L0
 #
 # WHAT IT BUYS, AND WHAT IT COSTS. Measured at release geometry on an idle box,
-# against a 512-spp reference (README section 13, "Render backend"):
+# against a 512-spp reference (docs/performance.md, "Render settings"):
 #
 #   NLM, no adaptive  -- today's default   7.80 s/frame   RMSE 0.15
 #   adaptive, no denoiser, spp 128         3.72 s/frame   RMSE 0.37   2.10x

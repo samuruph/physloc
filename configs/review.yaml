@@ -104,7 +104,7 @@ generate:
   #   byte-identical at any worker count: each job writes its own directory and
   #   the per-clip rng is keyed by (seed, family, severity), never by position
   #   in a queue. `auto` is one per core. How far it scales is measured in the
-  #   README, "Scaling across cores and machines".
+  #   docs/performance.md.
   workers: 8 #4
 
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)

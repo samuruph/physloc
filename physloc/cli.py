@@ -1319,7 +1319,7 @@ def _build(suppress: bool = False):
                    help="list every (scenario, family) cell")
     p.add_argument("--tier", default="release", help="debug | release")
     p.add_argument("--complexity", default="L0",
-                   help="L0..L3, or `all` -- see README section 8")
+                   help="L0..L3, or `all` -- see the README's Complexity ladder section")
     p.add_argument("--scenario",
                    help="price only these scenarios (comma list), so the "
                         "estimate matches a filtered `generate`")
@@ -1369,7 +1369,7 @@ def _build(suppress: bool = False):
     p.add_argument("--complexity", default="L0",
                    help="L0..L3, a comma list, or `all` to walk the whole "
                         "ladder in one run at the declared shares "
-                        "(see README section 8)")
+                        "(see the README's Complexity ladder section)")
     p.add_argument("--workdir")
     p.add_argument("--outdir")
     p.add_argument("--no-overlay", action="store_true")
@@ -1462,7 +1462,7 @@ def _build(suppress: bool = False):
                    help="how many instances of each scenario to sample")
     p.add_argument("--tier", default="debug")
     p.add_argument("--complexity", default="L0",
-                   help="L0..L3 -- see README section 8. L0-L1 are built.")
+                   help="L0..L3 -- see the README's Complexity ladder section. L0-L1 are built.")
     p.add_argument("--scenario", help="restrict to one scenario")
     p.set_defaults(fn=cmd_randomisation)
 

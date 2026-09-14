@@ -313,7 +313,7 @@ SCENARIOS: Dict[str, Scenario] = {
         "dense collisions, heavy occlusion", True, "rigid", "MOVi baseline",
         provides=('actor', 'flight', 'contact', 'impact', 'multi_body')),
     "pour": Scenario(
-        "a loose column of grains falls into an open box (40 at the debug tier, 96 above)",
+        "a loose column of grains falls into an open box (96 at the debug tier, 212 above)",
         "streaming flow, accumulation, break-up", False, "granular",
         "LikePhys Faucet Flow (as granular, not fluid)",
         provides=('actor', 'flight', 'contact', 'impact', 'multi_body', 'converging', 'identical_pair', 'resting', 'sliding')),

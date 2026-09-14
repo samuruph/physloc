@@ -3,24 +3,75 @@
 **A physics-violation video dataset where every invalid clip ships *where* the violation is,
 *when* it happens, and *how badly* — derived from the simulator, not annotated by hand.**
 
-Most intuitive-physics benchmarks ask one bit per clip: *is this possible?* PhysLoc asks the
-harder question a model should be able to answer if it understands the scene at all — **which
-object is wrong, in which pixels, during which frames, and by how much.** Because the labels
-come out of the simulator that produced the violation, they are exact and free.
+Most intuitive-physics benchmarks ask one bit per clip: *is this possible?* PhysLoc asks what a
+model should be able to answer if it understands the scene — **which object is wrong, in which
+pixels, during which frames, and by how much.** The labels come out of the simulator that
+produced the violation, so they are exact and free.
+
+- **Twins** — every invalid clip has a valid twin, bit-identical up to the violation.
+- **Dense labels** — per-pixel violation masks, severity maps, causal masks and timelines.
+- **A full taxonomy** — violation families grouped by domain, staged across scenarios, at three
+  severities.
+- **Two independent difficulty axes** — scene realism (L0–L3) and five named conditions — plus a
+  measured easy / moderate / hard label per clip.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [The dataset](#the-dataset)
+- [Taxonomy](#taxonomy)
+- [Severity](#severity)
+- [Complexity ladder](#complexity-ladder)
+- [Difficulty conditions](#difficulty-conditions)
+- [Detection difficulty](#detection-difficulty)
+- [Scene variation](#scene-variation)
+- [Splits, index and evaluation](#splits-index-and-evaluation)
+- [Generating data](#generating-data)
+- [Running the full release](#running-the-full-release)
+- [Cost and performance](#cost-and-performance)
+- [Publishing](#publishing)
+- [Development](#development)
+- [References](#references)
 
 ---
 
-# Part I — Using the dataset
+## Quick start
 
-## 1. Clips come in twins
+**Requirements:** Linux, Docker and conda. Rendering is CPU-only — the more physical cores the
+better — and a release run wants about 2 GB of RAM per vCPU.
 
-Every invalid clip has a **valid twin**: the same scene, the same seed, the same objects, and
-a **bit-identical prefix** up to the moment the violation is introduced (`t_event`). Only
-after that do they differ.
+```bash
+# Host environment: annotation, severity, validation, visualisation.
+conda env create -f environment.yml
+conda activate physloc
 
-That is the whole design. It means the difference between the two clips is attributable to
-the intervention and nothing else — no lighting change, no re-rolled object, no camera drift.
-It is verified per clip and recorded as `provenance.prefix_identical_verified`.
+# Simulation and rendering run inside the pinned Kubric image.
+docker pull kubricdockerhub/kubruntu      # digest pinned in docker/IMAGE_DIGEST
+```
+
+Generate a small review sweep and look at it:
+
+```bash
+python -m physloc.cli taxonomy --config review_severity   # what it produces and how long it takes
+bash scripts/run.sh review_severity                       # generate, validate, visualise, package
+```
+
+`run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
+tiled into one video.
+
+To generate the full dataset, see [Running the full release](#running-the-full-release).
+
+---
+
+## The dataset
+
+### Valid and invalid twins
+
+Every invalid clip has a **valid twin**: the same scene, seed and objects, and a
+**bit-identical prefix** up to the frame the violation is introduced (`t_event`). Any difference
+between the two is attributable to the intervention alone — no lighting change, no re-rolled
+object, no camera drift. Prefix identity is verified per clip and recorded as
+`provenance.prefix_identical_verified`.
 
 ```
 valid    ─────────────────────────●──────────────────────
@@ -30,10 +81,9 @@ invalid  ───────────────────────�
          before t_event                    and its consequences
 ```
 
-One valid twin is shared by every family and severity bin staged on that scene, because the
-prefix is identical — rendering it per family would be waste, and any drift would be a bug.
+One valid twin is shared by every family and severity staged on that scene.
 
-## 2. What one clip gives you
+### What each clip contains
 
 | file | what it is |
 |---|---|
@@ -43,13 +93,13 @@ prefix is identical — rendering it per family would be waste, and any drift wo
 | `causal_mask.npz` | uint8 [T,H,W] — 1 = the culprit, 2+ = bodies it disturbed |
 | `reference_mask.npz` | bool [T,H,W] — where the culprit *should* have been (from the valid twin) |
 | `timelines.npz` | per-frame flags: `active`, `observable`, `occluded`, `severity_t` |
-| `meta.json` | labels, taxonomy, windows, magnitudes, provenance |
-| `seg.npz` | uint16 [T,H,W] — instance ids, stable across frames, so they *are* object tracks |
-| `depth` · `flow_fwd/bwd` · `normals` · `object_coords` | the usual geometry passes |
+| `meta.json` | labels, taxonomy, windows, magnitudes, provenance — see [docs/schema.md](docs/schema.md) |
+| `seg.npz` | uint16 [T,H,W] — instance ids, stable across frames, so they are object tracks |
+| `depth` · `flow_fwd/bwd` · `normals` · `object_coords` | geometry passes |
 | `energy` · `bodies` · `residuals` | mechanical energy, per-body state, and the raw residuals |
-| `overlay.mp4` | everything above burned into one annotated video, for looking at |
+| `overlay.mp4` | everything above burned into one annotated video |
 
-Every object's mask for the whole clip is one comparison:
+Every object's track for the whole clip is one comparison:
 
 ```python
 seg  = np.load("seg.npz")["seg"]                 # [T,H,W]
@@ -58,22 +108,36 @@ for bid, name in zip(bods["body_ids"], bods["body_names"]):
     track = (seg == bid)                         # [T,H,W] bool
 ```
 
-**Three traps, worth knowing before you train on any of it:**
+### Before you train on it
 
-- **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel space
-  and diverges *everywhere* downstream of the event. A model trained on it learns to find the
-  edit, not the physics. Train on `violation_mask` and `severity_map`.
+- **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel space and
+  diverges everywhere downstream of the event, so a model trained on it learns to find the edit,
+  not the physics. Train on `violation_mask` and `severity_map`.
 - **`violation_mask` is gated on visibility.** It answers *where can this be seen*, so it is
-  empty on frames where the violation is active but the culprit is hidden.
-  `timelines.active` is the unhedged truth about *when*. The gap between them is the
-  observability lag, and it is deliberate.
-- **`permanence` and `dissolve` have an all-zero severity map** — the body is gone, so it has
-  no pixels to score. `reference_mask` carries where it should have been.
+  empty while the culprit is hidden. `timelines.active` is the unhedged truth about *when*; the
+  gap between them is the observability lag.
+- **`permanence` and `dissolve` have an all-zero severity map** — the body is gone, so it has no
+  pixels to score. `reference_mask` carries where it should have been.
 
-## 3. The taxonomy
+### Layout on disk
 
-Five levels: **medium → domain → family → scenario → instance.** A *cell* is one
-(scenario, family) pair; there are **166** of them.
+```
+out/<run>/clips/<release>/<level>/<scenario>/<seed>_<condition>/
+    valid/                       the twin, shared by every family and severity
+    invalid_<family>_<bin>/      one per cell per severity
+```
+
+A *cell* is one (scenario, family) pair. Per variant, each cell renders one invalid clip per
+severity bin (families with no magnitude axis render only `strong`), and each scenario renders one
+valid twin. A variant is a **fresh seed**, and each complexity level draws from its own seed block,
+so no two levels share a scene.
+
+---
+
+## Taxonomy
+
+Five levels: **medium → domain → family → scenario → instance.**
+`python -m physloc.cli taxonomy` prints every cell.
 
 ### Medium — what the violation is made of
 
@@ -112,7 +176,7 @@ Five levels: **medium → domain → family → scenario → instance.** A *cell
 | `drop` | rigid | 14 | sphere or cube falls to a floor and bounces |
 | `occluder_pass` | rigid | 12 | body travels behind a screen and re-emerges |
 | `pendulum_swing` | rigid | 8 | bob on a rigid rod, swung from a pivot (scripted, not solved) |
-| `pour` | granular | 17 | a loose column of grains falls into an open box (40 at the debug tier, 96 above) |
+| `pour` | granular | 17 | a loose column of grains falls into an open box (96 at the debug tier, 212 above) |
 | `pyramid_impact` | rigid | 13 | cube dropped onto a sphere pyramid |
 | `ramp_slide` | rigid | 11 | block slides down an incline |
 | `resting_table` | rigid | 11 | several bodies at rest on a surface |
@@ -124,33 +188,33 @@ Five levels: **medium → domain → family → scenario → instance.** A *cell
 
 `clutter_toss` and `tumble` are declared but not built.
 
-## 4. Severity — two numbers that are never the same thing
+---
 
-Each cell is staged at three strengths: **`weak`, `medium`, `strong`.**
+## Severity
+
+Each cell is staged at three strengths: **`weak`, `medium`, `strong`.** Two numbers describe it,
+and they are never the same thing:
 
 | field | what it is | when it is known |
 |---|---|---|
-| `magnitude` | **the knob we turned** — one scalar, exact, in the family's own units | *before* simulating |
-| `peak_severity` | **the measured effect** — the residual, z-scored against a noise floor and bounded to [0,1] | *after* |
+| `magnitude` | **the knob that was turned** — one exact scalar, in the family's own units | *before* simulating |
+| `peak_severity` | **the measured effect** — the residual, z-scored against a noise floor, bounded to [0,1] | *after* |
 
-They answer different questions and must not be conflated. `magnitude` says how hard the
-intervention pushed; `peak_severity` says how much came out, which depends on the scene. A
-strong push into a wall can produce less measured effect than a medium push into open space.
-
-`severity_map` is the spatial version of the second: `violation_mask` is binary *where*,
+`magnitude` says how hard the intervention pushed; `peak_severity` says how much came out, which
+depends on the scene — a strong push into a wall can measure less than a medium push into open
+space. `severity_map` is the spatial form of the second: `violation_mask` is binary *where*,
 `severity_map` is continuous *how badly*.
 
-**Every ladder is monotone in distance-from-lawful** — checked by
-`tests/test_severity_ladders.py`, which refuses any family whose `medium` is milder than its
-`weak`.
+Every family's ladder is monotone in distance from lawful, enforced by
+`tests/test_severity_ladders.py`.
 
-## 5. The complexity ladder — how hard the scene is to look at
+---
 
-Severity asks *how badly is the law broken*. Complexity asks *how hard is the scene to
-parse*. They are independent axes, and reporting across both is what separates "understands
-physics" from "copes with clutter".
+## Complexity ladder
 
-**Four levels of scene realism**, each the one below it plus exactly one thing:
+Severity asks *how badly is the law broken*; complexity asks *how hard is the scene to parse*.
+They are independent axes. Four levels of scene realism, each the one below plus exactly one
+thing:
 
 <!-- physloc:ladder -->
 | level | adds | background | objects | materials | share | built |
@@ -161,17 +225,17 @@ physics" from "copes with clutter".
 | **L3** | **GSO objects** — real 3D scans | hdri | gso | yes | 10% | yes |
 <!-- /physloc:ladder -->
 
-Every clip carries its level in `complexity`, so a level is a filter rather than a separate
-download. **Each level draws its own scenes** — an L1 clip is not an L0 clip in better
-materials, it is a different event — so the ladder buys breadth as well as difficulty.
+- Every clip carries its level in `complexity`, so a level is a filter, not a separate download.
+- **Each level draws its own scenes** — an L1 clip is a different event, not an L0 clip in better
+  materials — so the ladder adds breadth as well as difficulty.
+- At L0 every object shares one density, so mass varies only with size. From L1 up mass is
+  `density × volume`, and a heavy-looking object is heavy.
 
-Below L1 every object shares **one density**, so mass varies only with size, which a viewer
-can see. From L1 up mass is `density × volume` and a heavy-looking object is heavy.
+---
 
-## 6. Difficulty conditions — what else is in the scene
+## Difficulty conditions
 
-Camera motion, distractors and multiple culprits are three ways to make a clip harder. Every
-clip carries **exactly one** condition:
+Every clip carries **exactly one** condition:
 
 <!-- physloc:conditions -->
 | condition | share | camera | extra objects | objects with invalid physics |
@@ -183,55 +247,38 @@ clip carries **exactly one** condition:
 | `camera+multi` | 10% | **moves** | **3–10** | **2 … N−1** |
 <!-- /physloc:conditions -->
 
-Marginals: the camera moves on **20%** of clips, **10%** carry distractors, **20%** have
-multiple culprits. Fields: `condition`, `camera_motion`, `n_distractors`, `n_actors`,
-`n_culprits`.
+The camera moves on 20% of clips, 10% carry distractors and 20% have multiple culprits. Fields:
+`condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`. One condition per clip,
+rather than independent coin flips per axis, keeps every count exact and makes every comparison
+against `standard` isolate one change.
 
-**One condition per clip, not independent coin flips.** Independent per-axis ratios blur what
-a benchmark reports — a "moving camera" clip that also carries clutter mixes two effects —
-so every count is exact and every comparison against `standard` isolates one change.
-
-**`distractors` and `multi` differ in one thing: how many objects have invalid physics.**
-Both put **N ∈ [3,10]** extra objects in the scene, drawn per clip, and in both some of those
-objects move and some are still. What separates them:
+**`distractors` and `multi` differ only in how many objects violate:**
 
 | | `distractors` | `multi` |
 |---|---|---|
-| extra objects | 3–10 | 3–10 |
+| extra objects | 3–10, some moving | 3–10, some moving |
 | **objects violating** | **exactly 1** | **2 … N−1** |
 | what the extras are | scenery no family can target (`role="distractor"`) | eligible culprits (`role="actor"`) |
 | the question it asks | *is anything wrong?* | ***which** of these is wrong?* |
 
-That is the distinction worth drawing, because only the second is a localisation problem.
-With one culprit, *which object is wrong* has a trivial answer — there is one candidate — so
-a model can score by detecting that *something* is off and pointing at it. With 2 of 7
-violating among 5 that are fine, the spatial annotation has to be earned.
+Only `multi` is a true localisation problem. The counts are drawn per clip so a model cannot learn
+a layout, and the two conditions are never combined.
 
-The counts are drawn rather than fixed for the same reason in both cases: a scene that is
-always six objects with two wrong teaches the layout, not the physics.
+**Camera motion** is `track` (40%, slides with the aim held), `orbit` (40%, fixed radius) or
+`dolly` (20%) — never a pan, which would make *did the object move or did the camera?*
+unanswerable. Under a moving camera `flow` and `depth` include camera motion; per-frame
+extrinsics ship in `meta.json`.
 
-**They are never combined.** A scene with both would ask you to separate inert clutter from
-lawful peers from culprits — three distinctions where the label makes one.
+---
 
-**Camera motion** is one of three kinds, never a pan: `track` (40%) slides across with the
-aim held, `orbit` (40%) swings around the subject at fixed radius, `dolly` (20%) approaches
-or retreats. A panning camera would make *"did the object move or did the camera?"*
-unanswerable from the clip, and every violation here is a claim about object motion. Under a
-moving camera, `flow` and `depth` stop being pure object motion — the per-frame extrinsics
-ship in `meta.json` so you can undo it.
+## Detection difficulty
 
-## 7. Detection difficulty — easy, moderate, hard
+Conditions are the **knob** — what was asked for. `difficulty` is the **measurement** — what came
+out. A clip with eight distractors whose culprit fills a quarter of the frame is not hard; a
+`standard` clip whose two-frame violation happens behind a screen is. `difficulty` is to
+`condition` what `peak_severity` is to `magnitude`.
 
-Section 6 is the **knob**: we asked for a moving camera, or for clutter, and the sampler
-delivered it. This is the **measurement**: what actually came out. A clip built with eight
-distractors whose culprit still fills a quarter of the frame is not hard, and a `standard`
-clip whose two-frame violation happens behind a screen is.
-
-> **`difficulty` is to `condition` what `peak_severity` is to `magnitude`.** The same
-> refusal to conflate the knob with the measurement, one axis over.
-
-Every **invalid** clip carries one label. A valid twin has no violation to detect, so it has
-no difficulty and belongs to no evaluation set.
+Every **invalid** clip carries one label (a valid twin has nothing to detect):
 
 ```json
 "difficulty": {
@@ -242,7 +289,7 @@ no difficulty and belongs to no evaluation set.
 }
 ```
 
-### Seven factors, and the clip takes its worst
+### Seven factors; a clip takes its worst
 
 <!-- physloc:difficulty -->
 | factor | the question it asks | unit | easy | moderate | hard |
@@ -256,45 +303,27 @@ no difficulty and belongs to no evaluation set.
 | `camera` | how far does the camera travel? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
 <!-- /physloc:difficulty -->
 
-A clip is `easy` only when it is easy on **every** axis; one small footprint makes it hard
-however clean the rest of it is. That is KITTI's Easy/Moderate/Hard construction, and it is
-chosen over a weighted score for three reasons:
+A clip is `easy` only when it is easy on **every** factor (KITTI's construction, not a weighted
+score):
 
-- **It says why.** `binding_factors` names the axes that set the label. A model that fails on
-  occlusion-bound clips and passes on footprint-bound ones has told you something; a single
-  number has not.
-- **The sets nest.** easy ⊂ moderate ⊂ hard, so *"at moderate"* means every clip of
-  `rank <= 1` and the three numbers are comparable to each other. A weighted score gives three
-  disjoint buckets whose members share nothing.
-- **A sum hides trade-offs.** Averaging a tiny footprint against a static camera claims the
-  two cancel. They do not.
+- **It says why** — `binding_factors` names the factors that set the label.
+- **The sets nest** — easy ⊂ moderate ⊂ hard, so "moderate" means every clip with `rank <= 1`.
+- **Nothing cancels** — a tiny footprint is not offset by a static camera.
 
 ```python
-df[df.difficulty_rank <= 1]                       # the "moderate" evaluation set
-df[df.difficulty == "hard"].binding_factors        # and what made them hard
+df[df.difficulty_rank <= 1]                        # the "moderate" evaluation set
+df[df.difficulty == "hard"].binding_factors         # and what made them hard
 ```
 
-### What is deliberately *not* a factor
+**Not factors, on purpose:** the complexity level (its own axis — report
+`difficulty × complexity` as a grid, which `physloc stats` plots), the family and scenario, and
+`magnitude` (the knob; `severity` is its measurement). `pour`'s grains count as **one** body for
+`clutter` and `culprits`, unless a family targets a genuine subset of them.
 
-**The complexity level.** L3 is harder to parse than L0 — and it is already its own axis,
-with its own share of the release and its own directory. Folding it in would correlate the two
-and destroy the ablation both exist for. Report **`difficulty × complexity` as a grid**; that
-grid is the interesting result, and it only exists if the two are measured apart.
-`physloc stats` plots it. **The family and the scenario** are excluded for the same reason,
-and **`magnitude`** because it is the knob — `severity` is its measured counterpart and is the
-one that belongs here.
+### Thresholds
 
-### Where the thresholds come from, and how to change them
-
-Four are **fitted**, at the tertiles of 431 invalid clips from the review corpus. Three are
-**chosen**, because the corpus could not answer: every review config holds one window setting,
-so `duration`'s tertiles would encode the config rather than the difficulty, and 60% of clips
-are `standard`, so `clutter` and `culprits` mostly report 1. Which is which is recorded per
-factor in `physloc/annotate/difficulty.py` — a fitted threshold describes *this* dataset, a
-chosen one makes a claim about detection, and the two age differently.
-
-They live in **`configs/common.yaml`**, written `[easy, moderate]` and always in the
-easier-is-better direction:
+The cuts live in **`configs/common.yaml`**, written `[easy, moderate]`; which direction is easier
+belongs to the factor, not the config:
 
 ```yaml
 difficulty:
@@ -303,47 +332,28 @@ difficulty:
   clutter:   [2, 6]
 ```
 
-Which way a factor runs belongs to the factor, not the config. To refit against your own
-corpus:
+Four are fitted at the tertiles of a review corpus and three are chosen; which is which is recorded
+per factor in `physloc/annotate/difficulty.py`. To refit against your own runs:
 
 ```bash
 python scripts/fit_difficulty.py out/review_conditions out/review_severity
 ```
 
-It prints each factor's tertiles and what the current cuts do to that corpus, so a change
-starts from data rather than from taste.
-
-> **Freeze them once you publish.** A benchmark whose difficulty labels move between releases
-> cannot be compared with itself. They are editable because a dataset with different geometry
-> or a different window policy will want different cuts — and because the resolved values ride
-> in every `meta.json`, so a clip always says what it was labelled under. Changing them is a
+> **Freeze them once you publish.** A benchmark whose labels move between releases cannot be
+> compared with itself. The resolved values are recorded in every `meta.json`; changing them is a
 > new release, not a bug fix.
 
-**A granular medium counts once.** `pour` has 80 grains and nobody is asked which grain is
-wrong, so `clutter` and `culprits` see one thing rather than eighty. A family that acts on a
-genuine *subset* of the medium keeps its count, because then the question really is "which".
+---
 
-## 8. What else varies
+## Scene variation
 
-Every free parameter is drawn per clip from the seed: object shape, size, colour, mass,
-starting position and velocity, floor and backdrop colour, camera pose, and **the frame the
-violation fires on**.
+Every free parameter is drawn per clip from the seed: object shape, size, colour, mass, starting
+position and velocity, floor and backdrop colour, camera pose, and the frame the violation fires
+on. `python -m physloc.cli randomisation` reports the distinct values per axis.
 
-**Materials** (from L1) give appearance and density that agree, so a heavy-looking object is
-heavy and the resulting motion is legible rather than arbitrary.
-
-They apply to the **staging** as well as the actors — a ramp is wooden, a pendulum post is
-steel — because half of what is on screen is staging, and leaving it as untextured blocks
-meant the level changed only a fraction of the frame. Four materials are metallic and two
-transmissive, which matters most from L2 up: a metal or glass body *reflects and refracts the
-environment*, and that is what makes an object look like it belongs in the scene rather than
-composited onto it.
-
-**The draw is weighted, not uniform**, and the `share` column is why. The palette is not
-uniform in density — the metals that make a level legible are also 7800–8900 kg/m³ — so
-drawing evenly would put the mean density at 3458 against the 2313 the scenarios' contact
-parameters were tuned against, and double the median. That is a change to the *physics*
-smuggled in by a change to the *appearance*. Weighting the light end up puts it back at 2256.
+**Materials** (from L1) make appearance and density agree, on the staging as well as the actors.
+The draw is weighted so the mean density stays where the scenarios' contact parameters were tuned
+(2256 kg/m³ against 2313; a uniform draw would give 3458):
 
 <!-- physloc:materials -->
 | material | density kg/m³ | share | surface |
@@ -364,46 +374,30 @@ smuggled in by a change to the *appearance*. Weighting the light end up puts it 
 | `copper` | 8900 | 4% | **metal**, rough 0.26, spec 0.60 |
 <!-- /physloc:materials -->
 
-**Environments** (from L2): **509** HDRI Haven captures — every one the manifest has, since
-an environment map has no geometry to get wrong. **Objects** (L3): **140** Google Scanned
-Objects across 14 categories, all CC BY-SA 4.0, curated squat and roughly isotropic so their
-lawful motion is predictable — an object that topples unexpectedly reads as the violation.
-13 of them are in Kubric's own held-out split.
+- Glass and ice are **frosted** so a transparent culprit can still be pointed at, and the two
+  transmissive materials have different densities so *transparent* is not a cue for *heavy*.
+- Scenery draws from a narrower set — no glass ramp, no mirror floor — and the floor keeps its
+  contrast-guarded colour, taking only the surface finish.
+- **Environments** (from L2): 509 HDRI Haven captures.
+- **Objects** (L3): 140 Google Scanned Objects across 14 categories, all CC BY-SA 4.0, curated
+  squat and roughly isotropic so their lawful motion is predictable.
 
-The floor is the one exception to materials: it keeps the colour
-`_recolour_scenery` chose for it, because that colour is guarded for contrast against every
-actor in the scene, and takes only the surface finish.
+---
 
-Two deliberate limits. Glass and ice are **frosted** rather than clear, because a transparent
-culprit is hard to point at and pointing at it is the task; and there are two transmissive
-materials at different densities (920 and 2500) so that *transparent* does not become a cue
-for *heavy*. Scenery draws from a **narrower set** — no glass ramp, no mirror floor.
+## Splits, index and evaluation
 
-The floor is the one body that keeps its own colour: `_recolour_scenery` chooses it with a
-contrast guard against every actor in the scene, so the floor takes only the surface finish
-from its material.
+### Splits
 
-`python -m physloc.cli randomisation` reports distinct values per axis, so *"is it actually
-varied"* is a number rather than an impression.
+`main` **75%** · `held_out` **20%** · `debug` **5%**, grouped by `pair_uid` so a valid twin and its
+invalid siblings never land in different splits. Pairs are cut by a hash of their uid within each
+scenario, so every split sees every scenario in the same proportions and a re-generated release
+reproduces its splits. Every split ships every annotation — for a blind leaderboard set, strip
+annotations at that point.
 
-## 9. Splits
+### The index
 
-`main` **75%** · `held_out` **20%** · `debug` **5%**.
-
-**Grouped by `pair_uid`, never by clip.** A valid twin and its invalid siblings share every
-frame before `t_event`, so splitting them apart would put the answer on the other side.
-Pairs are ordered by a hash of their uid and cut at the quantiles *within each scenario*, so
-every split sees every scenario in the same proportions. There is no rng — reproducing the
-release reproduces its splits.
-
-**Every split ships every annotation.** The split is a label, not a filter: you can re-cut it,
-and you can score any clip. If you need a genuinely blind held-out set for a leaderboard,
-strip the annotations at that point — nothing has to be regenerated.
-
-## 10. The index
-
-`index.parquet` is one row per clip, with the video embedded so it plays inline in the
-HuggingFace viewer. A breakdown is a groupby, not a crawl over thousands of `meta.json`:
+`index.parquet` has one row per clip, with the video embedded so it plays in the HuggingFace
+viewer:
 
 ```python
 import pandas as pd
@@ -411,138 +405,77 @@ df = pd.read_parquet("index.parquet")
 
 df.groupby(["domain", "severity_bin"]).peak_severity.mean()
 df.groupby("condition").size()                       # standard / camera / multi / ...
-df[df.complexity == "L3"].groupby("family").size()   # what survives the hardest level
+df[df.complexity == "L3"].groupby("family").size()
 df[df.n_culprits > 1]                                # the multi-object clips
-
-df[df.difficulty_rank <= 1]                          # the "moderate" evaluation set
 df.groupby(["complexity", "difficulty"]).size()      # the grid worth reporting
 df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_counts()
 ```
 
-Columns: identity (`clip_uid`, `pair_uid`, `twin_uid`, `label`, `split`), taxonomy
-(`scenario`, `family`, `domain`, `medium`), violation (`severity_bin`, `magnitude`,
-`peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag`), difficulty
-(`difficulty`, `difficulty_rank`, `binding_factors`), scene
-(`complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`,
-`actor_shape`, `actor_material`, `actor_mass`), and geometry (`tier`, `num_frames`, `fps`,
-`seed`, `variant`).
+| group | columns |
+|---|---|
+| identity | `clip_uid`, `pair_uid`, `twin_uid`, `label`, `split` |
+| taxonomy | `scenario`, `family`, `domain`, `medium` |
+| violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
+| difficulty | `difficulty`, `difficulty_rank`, `binding_factors` |
+| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`, `actor_shape`, `actor_material`, `actor_mass` |
+| geometry | `tier`, `num_frames`, `fps`, `seed`, `variant` |
 
-`difficulty` is what you group by; **`difficulty_rank` is what you filter by**, because the
-sets nest and a string comparison cannot say `rank <= 1`.
+Group by `difficulty`; filter by `difficulty_rank`.
 
-## 11. Evaluating on it
+### Evaluating
 
-Report **per family (23)**, aggregate to **domain (8)**, and cross with **severity**,
-**complexity** and **condition**.
-
-- **Do not pool families into one number.** Cell counts are uneven by sixteen times —
-  `identity` has 48 cells, `optical` has 3 — so a pooled score is largely a measurement of
-  `identity`.
+- **Report per family, aggregate to domain,** and cross with severity, complexity and condition.
+  Do not pool families into one number: cell counts per domain are very uneven (see
+  [Taxonomy](#taxonomy)), so a pooled score mostly measures the largest domain.
 - **Use `timelines.active` for temporal metrics and `violation_mask` for spatial ones.** They
-  disagree on purpose; see §2.
-- **Some families are separable by residual, some only by situation.** `taxonomy.EXCLUSIVE_LAWS`
-  names the ones with a clean tripwire, and `tests/test_orthogonality.py` fails if any other
-  family moves one. The rest — `antigravity`, `phantom_impulse`, `newton1_inertia` — all move
-  `linear_momentum` because they must: bend a body's gravity and its momentum residual moves
-  with it. What separates those is the situation, which a model has to read from the image.
+  disagree on purpose.
+- **Some families are separable by residual, some only by situation.**
+  `taxonomy.EXCLUSIVE_LAWS` names the ones with a clean tripwire (`tests/test_orthogonality.py`
+  enforces it). `antigravity`, `phantom_impulse` and `newton1_inertia` all move linear momentum
+  because they must; what separates them has to be read from the image.
 
 ---
 
-# Part II — Building it
+## Generating data
 
-## 12. Setup (once)
+Simulation and rendering run in the pinned Kubric container; everything else runs on the host.
+`python -m physloc.cli <command> --help` documents every command.
 
-```bash
-# Host environment: annotation, severity, grids, validation, viz.
-# Does NOT contain Kubric/Blender/PyBullet -- those live in the docker image.
-conda env create -f environment.yml
-conda activate physloc
+### Configs
 
-docker pull kubricdockerhub/kubruntu      # digest pinned in docker/IMAGE_DIGEST
-bash scripts/fetch_refs.sh                # optional, read-only Kubric source
-```
-
-**Two environments, never mixed.** The pinned container holds Kubric 2022.4.1 / Blender
-2.93.4 / PyBullet (Python 3.9) and does simulation + rendering. The `physloc` conda env
-(Python 3.11) does everything else. They meet at the trajectory seam, `traj.npz`.
-
-## 13. The runs
-
-**Each config answers ONE question**, which is what keeps them all minutes rather than hours —
-a check you will not run is a check you do not have.
-`python -m physloc.cli taxonomy --config <name>` prices any of them exactly, first.
+Each config answers one question. Price any of them first with
+`python -m physloc.cli taxonomy --config <name>`.
 
 | config | the question it answers |
 |---|---|
+| `review` | does **every cell** build? |
 | `review_severity` | do **weak / medium / strong** differ, for every family? |
 | `review_conditions` | do the **five conditions** do what they claim? |
 | `review_L0` … `review_L3` | does **this level** render every scene correctly? |
 | `review_ladder` | do the levels come out in their **declared proportions**? |
-| `review` | does **every cell** build? |
 | `v0_mini` | **the whole dataset in miniature** — every family, level, condition and bin |
-| `v0_release` | the published dataset, whole ladder, 10 variants |
-| `v0_L0` … `v0_L3` | one level of that release, on its own — the four **sum to** `v0_release` |
+| `v0_release` | **the published dataset**: the whole ladder, 10 variants |
+| `v0_L0` … `v0_L3` | one level of the release on its own — the four **sum to** `v0_release` |
 
-**What each costs is [one section down](#what-each-config-costs)**, and generated there from
-the measured constants. It used to be a column here as well; the two copies disagreed within
-a day of being written, which is the whole reason the tables in this file are generated.
+`v0_mini` has the release's structure made small: ten variants (the fewest at which every level
+and condition appears) over three scenarios that between them cover every family.
 
-**`v0_mini` is not a review sweep** — it is the same structure as the release, made small, so
-what you learn from it transfers. It is small in *cells*, not variants, and that is forced:
-the condition cycle has ten slots and each level takes a share of them, so it takes **ten
-variants** before all four levels and all five conditions appear at all. Three scenarios
-(`pour`, `shadow_track`, `drop`) cover all 23 families between them, which is 41 cells
-instead of 166.
+### Running and checking a config
 
-**`v0_release` is days to weeks on one box** (see [Scaling](#scaling)), and embarrassingly
-parallel: jobs are independent by `(scenario, seed, level)` and the per-clip rng is keyed by
-content rather than queue position, so N machines is N× faster. Split with `--scenario a,b,c`
-per machine, or a level apiece with `v0_L0`…`v0_L3`, and merge the clip trees — nothing collides.
-
-**Running the full release.** Nothing needs editing first: the `v0_*` configs use
-`workers: auto`, so a run uses one worker per core on whatever machine it lands on, and the
-render backend is the default (64 spp, NLM, adaptive off).
-
-```bash
-# 1. Price it on the machine that will run it.
-python -m physloc.cli taxonomy --config v0_release
-
-# 2. Once per new machine: measure the one memory figure that is still an estimate
-#    (release L3 `pour`, set to ~60 GB). Watch `docker stats` in a second terminal.
-python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \
-    --severity strong --variants 1 --workers 1 \
-    --outdir out/_pour_l3_probe --workdir out/_pour_l3_probe_work
-
-# 3. Run it detached and resumable -- a spot reclaim, a full disk or a Ctrl-C loses only
-#    the jobs in flight. Generate, validate, viz and export, into out/physloc_v0.
-mkdir -p out/logs
-nohup bash scripts/run.sh v0_release --resume > out/logs/v0_release.txt 2>&1 &
-tail -f out/logs/v0_release.txt       # one line per finished job, with a weighted ETA
-
-# ...or split across machines, one level each (see "Generating one level at a time").
-nohup bash scripts/run.sh v0_L0 --resume > out/logs/v0_L0.txt 2>&1 &    # machine 1
-nohup bash scripts/run.sh v0_L2 --resume > out/logs/v0_L2.txt 2>&1 &    # machine 2 ...
-```
-
-Re-running the same command resumes: a job is skipped only when its recorded request —
-config, dials and render backend — matches, so resuming across a changed setting re-renders
-rather than mixing. The run ends with a stage profile whose **occupancy** line says how many
-workers were busy on average; far below the worker count means jobs were queueing for memory
-rather than for cores.
+`bash scripts/run.sh <config>` runs the whole pipeline — generate, validate, coverage video,
+viz, export — and passes extra flags through to `generate`. The steps individually:
 
 ```bash
 python -m physloc.cli generate --config review_severity
-python -m physloc.cli validate  out/review_severity      # must exit 0
-python -m physloc.cli audit     out/review_severity      # cells depicting nothing
+python -m physloc.cli validate  out/review_severity      # schema + cross-checks; must exit 0
+python -m physloc.cli audit     out/review_severity      # cells whose violation is not visible
 python -m physloc.cli stats     out/review_severity      # the distributions, plotted
-python -m physloc.cli viz       out/review_severity      # grids + sheets, one folder
-python -m physloc.cli coverage  out/review_severity      # every cell, one video
+python -m physloc.cli viz       out/review_severity      # every grid and sheet, one folder
+python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
 ```
 
-**`stats` is how you check the run came out in the shape it declares.** `validate` says a
-release is well formed and `audit` says every cell depicts something; neither says what the
-*distributions* look like, and those are what a benchmark is judged on. It reads `meta.json`
-and nothing else, so it runs in seconds over a full release.
+`stats` checks the run came out in the shape it declares; it reads only `meta.json`, so it takes
+seconds over a full release:
 
 ```
 out/review_severity/stats/
@@ -551,43 +484,21 @@ out/review_severity/stats/
   composition.png         levels; conditions measured vs declared; difficulty x complexity
   severity.png            measured peak score per declared bin, and the counts
   coverage.png            clips per family and per scenario
-  stats.json              the numbers behind all five, so a regression is diffed
+  stats.json              the numbers behind all five
 ```
 
-It earns its place immediately. On `review_ladder` the levels come out **80 / 40 / 24 / 16** —
-exactly the declared 1.00 / 0.50 / 0.30 / 0.20 — while the conditions come out
-**60 / 5 / 10 / 15 / 10** against a declared 60/10/10/10/10: the per-level spread does not hit
-its marginals when each level gets only a few variants. One glance at the middle panel; not
-visible in any amount of log reading.
-
-**`viz` is how you look at a finished run**, and it re-reads clips already on
-disk — nothing is rendered again, so it takes seconds and can be re-run after
-any change to the visualisers.
+`viz` re-reads finished clips — nothing is rendered again — and names its videos so the sort
+order is the reading order:
 
 ```
 out/review_severity/viz/
   L0_drop_0777_solidity.mp4        one family: the valid clip beside weak/medium/strong
   L0_drop_0777_sheet_strong.mp4    one scene: every family, at one bin
-  L0_pour_0777_continuity.mp4
 ```
 
-`grid` and `sheet` write beside the clips they came from, which is right for a
-single look and wrong for reviewing a sweep — a twenty-pair run scatters them
-four levels deep across twenty directories, putting the videos you most want to
-compare furthest apart. `viz` collects them and names them so the sort order is
-the reading order.
+### Overriding a config
 
-```bash
-python -m physloc.cli viz out/review_conditions --outdir out/inspect
-python -m physloc.cli viz out/review_conditions --severity strong   # sheets: one bin
-```
-
-`review_severity` reaches all 23 families in 41 cells rather than 166, because three
-scenarios — `pour`, `shadow_track`, `drop` — cover the whole taxonomy between them.
-`review_conditions` runs ten variants, exactly one turn of `CONDITION_CYCLE`, so it contains
-every condition at least once.
-
-Anything typed on the command line overrides the config:
+Anything on the command line overrides the config:
 
 ```bash
 python -m physloc.cli generate --config review --scenario drop --family solidity
@@ -596,90 +507,119 @@ python -m physloc.cli generate --config review --complexity all --variants 10
 PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --scenario drop
 ```
 
-`--workers N` runs N container jobs at once; `--workers auto` (what the `v0_*` configs use) is
-one per core. Each worker gets its own core slice and a matching Blender thread count, and a
-job only starts once its measured peak memory fits. Output is byte-identical at any worker
-count. How far that scales, and what to expect on a bigger machine, is measured in
-[Scaling across cores and machines](#scaling).
+`--workers N` runs N render containers at once, and `--workers auto` (used by the `v0_*` configs)
+is one per core. Output is byte-identical at any worker count.
 
-### Render backend — buying time back from the denoiser
+### Generating one level at a time
 
-**The release uses the default backend: 64 spp, the NLM denoiser, adaptive sampling off.** That
-was chosen on measurement. Against a 512-spp reference of the same clip (`drop × solidity`, L2,
-512², 25 frames), 64 spp has RMSE 0.63 on a 0–255 scale with 99% of pixels within 2 levels, and
-costs a third of the time (5.8 s a frame against 18.0). Adaptive sampling at 64 spp moved the
-image by RMSE 4.6 from that default — seven times the default's own error — so it is not used.
-Nothing below changes a run unless you set it; it is here for experiments.
-
-Kubric constructs its renderer with **adaptive sampling off** and the **legacy NLM** denoiser,
-and neither was ever revisited. Both are measurable, and both are expensive.
-
-The existing fit (`T = 1.29 + 0.0074·spp`, only ~26% of a frame is sampling) was read as
-"there is no room to speed a render up". It really says *the room is not in sampling* — and
-until now nobody had measured what the other 74% was. Measured at release geometry, on `drop`,
-against a 512-spp reference, on an idle box:
-
-| backend | L0 s/frame | speedup | RMSE vs 512-spp | worst pixel |
-|---|---|---|---|---|
-| `NLM`, no adaptive — **today's default** | 7.80 | 1.00× | 0.15 | 7 |
-| adaptive + `OPENIMAGEDENOISE`, spp 128 | 5.87 | 1.33× | 0.30 | 10 |
-| **adaptive + no denoiser, spp 128** | **3.72** | **2.10×** | 0.37 | 11 |
-| adaptive + no denoiser, spp 64 | 3.57 | 2.18× | 0.45 | 22 |
-
-**NLM costs 2.4 s of every 7.8 s frame** — 31% of the render, for a denoiser Blender kept only
-for compatibility. Adaptive sampling buys back another 1.9 s by not sampling pixels that have
-already converged, which a flat slab and six primitives do early.
-
-**Raising spp costs almost nothing once sampling is adaptive**: 64 → 128 is +0.15 s a frame and
-halves the worst-pixel error, because the extra budget is only spent where the image is still
-noisy. That is why the recommended row is the 128 one and not the faster 64.
-
-The errors are all far below one 8-bit level — 0.15 against 0.37 on a 0–255 scale — so this is
-a small realism cost, not a visible one. It is still a real one, and it is **a decision to make
-before a run, never during**: the backend changes the pixels, so a release must not mix them.
-`plan.json` records `spec.notes.render_backend` on every clip so a mixed tree is detectable.
-
-Set them as environment variables — `scripts/run.sh` and `generate` both inherit them, and
-`docker/kubric.sh` forwards them into the container:
+`v0_L0` … `v0_L3` **partition** `v0_release`: each carries the variants that level gets in a full
+run, so all four together produce exactly what the release config produces.
 
 ```bash
-# an experiment on a review sweep -- never mix backends inside a release
-PHYSLOC_ADAPTIVE=1 PHYSLOC_DENOISER=off bash scripts/run.sh review_L0 --spp 128
-
-# scripts/run_fast.sh is the same two variables, pre-set
-bash scripts/run_fast.sh review_L0 --spp 128
+python -m physloc.cli taxonomy --config v0_L0     # price the level
+python -m physloc.cli generate --config v0_L0     # ...and generate only that level
 ```
 
-| variable | values | default |
-|---|---|---|
-| `PHYSLOC_ADAPTIVE` | `1`, or a float noise threshold | unset — off |
-| `PHYSLOC_DENOISER` | `off`, `OPENIMAGEDENOISE`, `NLM` | unset — `NLM` |
-| `PHYSLOC_GPU` | `1` | unset — CPU (see [§13.1](#gpu)) |
+Use them to spread a release across machines, regenerate one level after a fix, or ship an
+L0-only dataset. Nothing collides: the clip path is keyed by level and every level draws from its
+own seed block.
 
-**Prefix identity holds under all of them** — verified on a real twin pair: all seven passes
-bit-identical before `t_event`, diverging after. Both twins render in one process with one
-setting, so non-negotiable #1 is unaffected.
+### Tiers
 
-**The dome levels gain less.** L2 measures **1.53×** (9.0 s/frame against 13.8) rather than L0's
-2.10×: a dome fills the frame with surface that never fully converges, so adaptive sampling has
-less it can skip. L2 and L3 are 46% of a release's bill, so the whole-run speedup is nearer
-**1.8×** than 2.1×. `scripts/probe_backend.sh` reproduces every number here and refuses to run
-while a container is up, because a probe on a busy box measures contention.
+A tier is a geometry — how big and how long — and nothing else:
 
-<a name="gpu"></a>
-**The GPU is not one of these dials.** The pinned image's Blender is the CPU-only `bpy` wheel:
-`compute_device_type` offers `('NONE', 'CUDA', 'OPENCL')` with no OptiX, CUDA enumerates the
-host CPU and no card, and the only Cycles kernels present are `.cu` source. `PHYSLOC_GPU=1`
-therefore *fails loudly* on the pinned image rather than silently rendering on the CPU. Reaching
-a card means replacing Blender — `docker/Dockerfile.gpu` is a starting point, separate from the
-pin, and Cycles X will need kubric patched. Note that a GPU would also delete the 2.4 s
-denoiser cost, so the often-quoted 1.37× ceiling is an underestimate.
+<!-- physloc:tiers -->
+| tier | resolution | frames | duration | spp | latent grid |
+|---|---|---|---|---|---|
+| `debug` | 128² | 25 @ 12 fps | 2.08 s | 16 | 7×8×8 |
+| `release` | 512² | 89 @ 30 fps | 2.97 s | 64 | 23×16×16 |
+<!-- /physloc:tiers -->
+
+`debug` is for iteration and never published. Frame counts are `4k+1` so they map exactly onto a
+video VAE's temporal stride. `v0` / `v1` are what a published dataset is *called*, set by
+`--outdir`, not tiers.
+
+### Generation knobs
+
+Shares, counts and bands live in **`configs/common.yaml`**, and any config may override part of
+it in its own `params:` block:
+
+```bash
+python -m physloc.cli params                    # what is in force, and what differs from defaults
+python -m physloc.cli params --config v0_mini   # ...for one run
+```
+
+| section | what it holds |
+|---|---|
+| `ladder` | each level's share of a full generation |
+| `conditions` | the difficulty cycle — its length is the period, its contents the shares |
+| `objects` | extra-object counts, culprit counts, distractor size / speed / clearance |
+| `camera` | motion kinds and weights, travel and dolly ranges |
+| `materials` | the mass scale |
+| `difficulty` | the detection-difficulty thresholds |
+
+Every layer is validated, so a typo is an error rather than a silently ignored value. The resolved
+values are written to `params.json` and recorded in every `meta.json`.
+
+---
+
+## Running the full release
+
+```bash
+bash scripts/run.sh v0_release
+```
+
+That is the whole command: it generates, validates, visualises and packages the release into
+`out/physloc_v0`, and writes everything it prints to `out/logs/v0_release.txt`. Nothing needs
+editing first — the release config uses one worker per core, resumes automatically, and renders
+with the default backend (64 spp, NLM denoiser, adaptive sampling off).
+
+A release takes days, so start it inside **tmux**, which keeps it running after you close the
+terminal or disconnect:
+
+```bash
+tmux new -s release              # open a named session
+bash scripts/run.sh v0_release   # start the run inside it
+                                 # Ctrl-b then d: detach and leave it running
+tmux attach -t release           # come back to it later
+```
+
+Before the first run on a new machine:
+
+```bash
+python -m physloc.cli taxonomy --config v0_release     # the price on this machine
+```
+
+- **Resuming.** Running the same command again continues where it stopped: a finished job is
+  skipped when its recorded request — config, dials and render backend — matches, so an
+  interruption loses only the jobs in flight and a changed setting re-renders rather than mixing.
+  To start over, delete `out/physloc_v0` and `out/work_v0`.
+- **Across machines.** Run one level per machine — `bash scripts/run.sh v0_L0` on one,
+  `v0_L1` on the next, and so on; see [Generating one level at a time](#generating-one-level-at-a-time).
+- **Checking memory on a new machine.** One job type, release-size L3 `pour`, uses an estimated
+  ~60 GB. Measure it once and update `JOB_MEMORY_GB` in `physloc/cli.py` if it differs — run this
+  and watch `docker stats` in a second terminal:
+
+  ```bash
+  python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \
+      --severity strong --variants 1 --workers 1 \
+      --outdir out/_pour_l3_probe --workdir out/_pour_l3_probe_work
+  ```
+- **Memory.** A job starts only when its measured memory fits in host RAM, and every container is
+  capped, so a crowded machine cannot OOM-kill its own jobs. L3 `pour` is the heavy cell; its
+  release figure is set in `JOB_MEMORY_GB` in `physloc/cli.py` — update it from step 2.
+- **Monitoring.** The run ends with a stage profile. Its `occupancy` line reports how many workers
+  were busy on average; far below the worker count means jobs were waiting on memory, not cores.
+
+---
+
+## Cost and performance
 
 ### What each config costs
 
-Every number below is **priced from measured constants**, not estimated — and generated from
-them, so it cannot go stale silently. `python -m physloc.cli taxonomy --config <name>` prints
-the same figure for any config, with the per-level split.
+Priced from constants measured on a 32-vCPU machine, at each config's own worker count.
+`taxonomy --config <name>` prints the same figure with a per-level split. The price covers
+rendering; a real run finishes roughly 10% over it.
 
 <!-- physloc:costs -->
 | config | levels | cells | renders | workers | wall clock |
@@ -692,125 +632,18 @@ the same figure for any config, with the per-level split.
 | `review_L3` | L3 | 166 | 179 | 8 | **1.3 h** |
 | `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | 8 | **9.4 h** |
 | `review` | L0 | 166 | 511 | 8 | **36 min** |
-| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 32 | 145 h (**6.0 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 32 | 72 h (**3.0 days**) |
-| `v0_L2` | L2 | 166 | 1533 | 32 | 123 h (**5.1 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 32 | 82 h (**3.4 days**) |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 422 h (**17.6 days**) |
+| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 96 | **6.2 h** |
+| `v0_L0` | L0 | 166 | 5110 | 96 | 145 h (**6.0 days**) |
+| `v0_L1` | L1 | 166 | 2555 | 96 | 72 h (**3.0 days**) |
+| `v0_L2` | L2 | 166 | 1533 | 96 | 123 h (**5.1 days**) |
+| `v0_L3` | L3 | 166 | 1022 | 96 | 82 h (**3.4 days**) |
+| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 96 | 422 h (**17.6 days**) |
 <!-- /physloc:costs -->
-
-Each row is priced at that config's own `workers`, on the box the constants were measured on
-(32 vCPU). A different machine is a different price — see the next section.
-
-<a name="scaling"></a>
-### Scaling across cores and machines
-
-Measured on a 32-vCPU box (Intel Xeon Platinum 8488C: **16 physical cores** + hyperthreads,
-61 GB), release geometry (512², 64 spp, all seven passes), idle apart from the run itself.
-
-**One render cannot use a big box.** Most of a frame is serial — scene sync, pass writing, the
-NLM denoiser — so threads buy little past a handful:
-
-| Blender threads | 1 | 2 | 4 | 8 | 16 | 32 |
-|---|---|---|---|---|---|---|
-| s / frame (L0) | 17.15 | 9.42 | 5.56 | 3.68 | 2.81 | 2.58 |
-| speedup | 1.0× | 1.8× | 3.1× | 4.7× | 6.1× | 6.6× |
-
-**Narrow renders side by side are what scale.** N workers, each pinned to `cores/N` with a
-matching thread count; throughput relative to one container using the whole box:
-
-| workers × threads | 1 × 32 | 2 × 16 | 4 × 8 | 8 × 4 | 16 × 2 | 32 × 1 |
-|---|---|---|---|---|---|---|
-| L0 s / frame per container | 2.56 | 3.35 | 4.89 | 8.03 | 14.43 | 28.06 |
-| L0 throughput | 1.00× | 1.53× | 2.09× | 2.55× | 2.84× | **2.92×** |
-| L2 (HDRI dome) s / frame | 5.82 | – | – | 20.80 | 39.54 | – |
-| L2 throughput | 1.00× | – | – | 2.24× | 2.35× | – |
-| CPU busy | 32% | 47% | 64% | 79% | 89% | 96% |
-
-It flattens near **3×** because the box has 16 physical cores: sixteen one-thread renders
-pinned to those alone run at the isolated 17.3 s a frame — no contention at all — and the
-hyperthreads add only ~20% on top. **Throughput follows physical cores, not vCPUs.** Pinning
-itself buys nothing measurable (sixteen workers: 14.61 s a frame unpinned, 14.43 pinned); it
-is there to keep each container's thread count honest. An HDRI frame costs 2.3× a solid one
-on an idle box and **2.74× under full load**, and `SPEEDUP` in `physloc/cli.py` is kept per
-background for that reason.
-
-*A caveat on the multi-worker rows.* They were taken with `probe_cost.py` before it gave each
-run its own scratch folder, so the concurrent containers wrote their frames into one shared
-folder. Every container rendered the same resolution and frame count, and the render — which
-dominates at 16 frames — is real work either way; what was not isolated is Kubric reading the
-passes back, which globs every EXR in the folder. The single-container rows were clean.
-
-**Never fewer than two threads, never a one-core slice.** Cycles 2.93 hangs on the first frame
-of a real worker job with one render thread, or when pinned to a single core whatever the
-thread count — the main thread spins in `sched_yield` inside `_cycles.render` and the render
-threads never run. Two threads on two or more cores, or AUTO, render normally. `_cpu_slots`
-enforces it: at 32 workers on 32 vCPUs each worker runs unpinned with two threads.
-
-**Memory, not CPU, is what a crowded box runs out of — and one cell drives it.** Peak memory of
-a single worker job:
-
-| job | L0 | L1 | L2 | L3 |
-|---|---|---|---|---|
-| `pour`, debug | 2.7 GB | 2.7 GB | 3.5 GB | **26.4 GB** |
-| `pour`, release | 5.9 GB | – | – | ~60 GB (estimate) |
-| `drop`, release | 2.6 GB | – | – | – |
-
-Every other scenario measured 0.3–2.6 GB at any level, and memory is flat in the number of
-renders (one `drop` job rendering 43 clips stayed at 0.8 GB). The outlier is L3 `pour`: from
-L3 up every moving body becomes a scanned GSO mesh, and in `pour` every grain moves, so 96
-grains are 96 textured meshes and 96 mesh colliders. On this box three `pour` jobs among 32
-workers got one OOM-killed. `generate` therefore admits jobs through a memory budget (host RAM
-minus 6 GB, first in first out) and caps every container at that budget, so an overrun kills
-one job rather than letting the host's OOM killer choose. Only the cells in `JOB_MEMORY_GB` are
-charged their measured peak; every other job is charged 1 GB, what one typically holds — 32
-release containers rendering together averaged ~0.6 GB each. Charging every job its peak was
-tried and left most of the pool idle: replaying the `v0_release` queue on 96 workers and 186 GB,
-32.4 h against 22.1 h.
-
-**The release L3 `pour` figure is the number to measure before a big run.** It is the debug
-value scaled by grain count (212 against 96) — ~60 GB, set high on purpose and not measured —
-and it now drives most of the remaining queueing: at 60 GB a job, a 186 GB budget runs two of
-them while everything else shares the rest, and on this 61 GB box one of them runs alone. One
-`bash docker/kubric.sh physloc/render/worker.py --scenario pour --tier release --complexity L3
---family continuity --severity strong` under `docker stats` on the target machine settles it.
-
-**What a full `v0_release` should take.** From the measured constants: 1114 render-hours on one
-container of this box, 2.64× at 32 workers, plus ~10% for scene build, simulation, container
-start and annotation, scaled to other machines by physical cores. Rough — the per-core speed of
-a different CPU and memory bandwidth on a bigger one are not measured:
-
-| machine | expected | pessimistic (+25%) |
-|---|---|---|
-| 32 vCPU = 16 cores + HT (this box) | 464 h (**19.3 days**) | 24.2 days |
-| 64 vCPU = 32 cores + HT | 232 h (**9.7 days**) | 12.1 days |
-| 96 vCPU = 48 cores + HT (e.g. c7i.24xlarge) | 155 h (**6.4 days**) | 8.1 days |
-| 96 vCPU = 96 cores, no HT (e.g. c7a.24xlarge) | 95 h (**4.0 days**) | 5.0 days |
-| 192 vCPU = 96 cores + HT (e.g. c7i.48xlarge) | 77 h (**3.2 days**) | 4.0 days |
-| 4 × 96 vCPU (48 cores + HT each) | 39 h (**1.6 days**) | 2.0 days |
-
-On a new machine:
-
-1. **Prefer physical cores.** A 96-vCPU instance with no hyperthreading should do ~1.6× the work
-   of one with 48 cores + HT.
-2. **Use `workers: auto`**, and give it at least 2 GB of RAM per vCPU so memory admission rarely
-   queues anything but L3 `pour`.
-3. **Measure before trusting a table.** `physloc/render/probe_cost.py` gives the per-frame cost of
-   one container, and every `generate` ends with a stage profile and an **occupancy** line: how
-   many of its workers were busy on average. Far under the worker count means jobs are waiting
-   on memory or on a straggler, not on cores.
-4. **Across machines it is genuinely N×.** Jobs are independent by `(scenario, seed, level)`:
-   split with `v0_L0` … `v0_L3` or `--scenario`, and merge the clip trees — nothing collides.
 
 ### Where a release's time goes
 
-A level's cost is its variant count times its per-render rate, and those pull in opposite
-directions: L0 gets ten variants at the cheap solid rate, L3 two at the expensive HDRI one.
-Neither the declared share nor the rate predicts the answer alone, so here it is.
-
 <!-- physloc:costs_ladder -->
-| level | variants | renders | per render | at 32 workers | share of the run |
+| level | variants | renders | per render | at 96 workers | share of the run |
 |---|---|---|---|---|---|
 | **L0** | 10 | 5110 | 298 s | 145 h (**6.0 days**) | 34% |
 | **L1** | 5 | 2555 | 298 s | 72 h (**3.0 days**) | 17% |
@@ -819,184 +652,114 @@ Neither the declared share nor the rate predicts the answer alone, so here it is
 | **all four** | -- | 10220 | -- | 421 h (**17.6 days**) | 100% |
 <!-- /physloc:costs_ladder -->
 
-**Three quarters of the renders are half of the bill.** L0 and L1 are 7665 of the 10220
-renders and about half the time; L2 and L3 are the remaining quarter and the other half,
-because the dome charges each of them 2.3× a slab. The ladder's shares put the breadth where
-it is cheapest, deliberately — the baseline is what every other level is compared against, so
-it should be the largest stratum.
+L0 and L1 are three quarters of the renders and about half the time; L2 and L3 cost more per
+render because their HDRI dome encloses the scene. `v0_L0` alone is a complete, publishable
+dataset.
 
-On the 32-vCPU box, `v0_L0` alone is 6 days and is a complete, publishable dataset by itself;
-`v0_L2` and `v0_L3` are 205 h together and are what you add when there is capacity for them.
-The four **partition** the release, so nothing is wasted and nothing collides.
+### Expected time on other machines
 
-**Where the numbers come from.** `SECONDS_PER_CLIP` in `physloc/cli.py` is a tier's frame
-count times the measured per-frame cost of its background, and `physloc/render/probe_cost.py`
-reproduces every per-frame number in it:
+Scaled from the 32-vCPU measurements by physical cores, including ~10% for scene build,
+simulation and annotation. Rough: the per-core speed of a different CPU is not measured.
 
-| | s/render | frames × measured s/frame |
+| machine | expected | pessimistic (+25%) |
 |---|---|---|
-| `debug` solid | **8** | 25 × 0.32, at 128², 16 spp — on the previous 8-core box |
-| `debug` hdri | **44** | 25 × 1.76 — on the previous 8-core box; at 128² the environment map's fixed cost dominates |
-| `release` solid | **228** | 89 × 2.56, one container on the 32-vCPU box |
-| `release` hdri | **518** | 89 × 5.82, one container on the 32-vCPU box |
+| 32 vCPU = 16 cores + HT | 464 h (**19.3 days**) | 24.2 days |
+| 64 vCPU = 32 cores + HT | 232 h (**9.7 days**) | 12.1 days |
+| 96 vCPU = 48 cores + HT (e.g. c7i.24xlarge) | 155 h (**6.4 days**) | 8.1 days |
+| 96 vCPU = 96 cores, no HT (e.g. c7a.24xlarge) | 95 h (**4.0 days**) | 5.0 days |
+| 192 vCPU = 96 cores + HT (e.g. c7i.48xlarge) | 77 h (**3.2 days**) | 4.0 days |
+| 4 × 96 vCPU (48 cores + HT each) | 39 h (**1.6 days**) | 2.0 days |
 
-The debug pair was not re-measured on the new box, so the `review_*` rows above are priced
-from the old one. The per-render rates in the two tables above are higher than these — 298 s
-where the constant says 228 — because `DISTRACTOR_COST` scales every estimate by the extra
-bodies the average clip carries: `distractors` and `multi` add 3–10 of them, on 30% of the
-clips.
+- **Prefer physical cores.** One render cannot use many threads, so throughput follows physical
+  cores; hyperthreads add only ~20%.
+- **Give it RAM**: about 2 GB per vCPU, so memory admission rarely queues anything but L3 `pour`.
+- **Several machines scale almost linearly** — split by level, as above.
 
-**This prices the render and nothing else.** Build, simulation, annotation and the overlay
-video are real and are not in the constant, so what `taxonomy` prints is a floor and a run
-comes in over it. That is the trade for a number `probe_cost` can reproduce in four frames.
+### Render settings
 
-Per frame, at 512², spp 64, all seven passes, on an idle box:
+The release renders at **64 spp with the NLM denoiser and adaptive sampling off**. Against a
+512-spp reference, 99% of pixels are within two levels (0–255) at a third of the render time.
+Other settings exist as environment variables for experiments; they change the pixels, so never
+mix them inside a release.
 
-| | L0 | L1 | L2 | L3 |
-|---|---|---|---|---|
-| s/frame | **7.69** | **7.93** | **19.31** | **21.61** |
+**How every number in this section was measured** — thread scaling, parallel throughput, memory
+per job, the render-setting experiments, and how prices are computed — is in
+[docs/performance.md](docs/performance.md).
 
-The step is the **dome**, not the environment map. L2 and L3 project their HDRI onto a
-KuBasic dome, and a dome *encloses* the scene: every ray that misses an object hits it and
-bounces, where a flat slab lets those rays escape. L0 and L1 have no dome and cost a third as
-much.
+---
 
-**The HDRI rate was the stale one.** It was 2930 s a clip and had never been measured at
-release geometry at all — it was the debug tier's 5.5× ratio scaled up, which is exactly the
-kind of copy this file's generated tables exist to prevent. At 128² that ratio is real,
-because an environment map's fixed per-frame cost dominates a cheap frame; at 512² sampling
-dominates and the true ratio is 2.6×. The guess was 60% high, on the quarter of the dataset
-that is L2 and L3.
-
-**And the size of the dome is why the levels split at all.** The ground used to be that dome at
-*every* level — the fix for a real bug, that a cube below the HDRI level and a dome at it are
-different collision shapes, so the same seed did not roll the same way and a level comparison
-measured lighting plus a changed floor. It worked, and it charged L0 and L1 **27.54 s/frame
-against a slab's 8.69** for a backdrop they are not even lit by. The dome is now a render-only
-backdrop at L2 and L3 (`_common.backdrop`, collisions disabled), the ground is a slab
-everywhere, and level isolation is unchanged: 0 of 13 scenarios differ.
-
-## 14. Tiers
-
-A tier is a **geometry** — how big and how long. Nothing else. Difficulty is the complexity
-ladder; `v0`/`v1` are what a published dataset is *called*, set by `--outdir`.
-
-<!-- physloc:tiers -->
-| tier | resolution | frames | duration | spp | latent grid |
-|---|---|---|---|---|---|
-| `debug` | 128² | 25 @ 12 fps | 2.08 s | 16 | 7×8×8 |
-| `release` | 512² | 89 @ 30 fps | 2.97 s | 64 | 23×16×16 |
-<!-- /physloc:tiers -->
-
-`debug` is never published. Frame counts are `4k+1` so they map exactly onto a video VAE's
-temporal stride.
-
-## 15. Output layout
-
-```
-out/release/
-  clips/<release>/<level>/<scenario>/<seed>/
-      valid/                       one twin, shared by every family and bin
-      invalid_<family>_<bin>/      one per cell per severity
-```
-
-A *cell* is one (scenario, family) pair. Each is rendered once per severity bin per variant:
-
-```
-clips = 166 cells × bins × variants        invalid
-      + 13 scenarios × variants            valid
-```
-
-A variant is a **fresh seed**, not a re-roll: variant *N* uses `seed + N`, and each complexity
-level draws from its own seed block, so no two levels share a scene.
-
-### Generating one level at a time
-
-`v0_L0` … `v0_L3` are `v0_release` split by level, and they **partition** it: each carries the
-number of variants that level would get in a full run, so generating all four produces exactly
-what `--complexity all` produces, and generating one produces exactly that level's share.
-
-```bash
-python -m physloc.cli taxonomy --config v0_L0     # price the level
-python -m physloc.cli generate --config v0_L0     # ...and only that level
-```
-
-Useful for spreading a release across machines a level at a time, regenerating one level after
-a fix, or shipping a smaller dataset that is only ever L0. Nothing collides when the trees
-are merged: the clip path is keyed by level already, and every level draws from its own seed
-block.
-
-## 16. Publishing
+## Publishing
 
 ```bash
 python -m physloc.cli export out/physloc_v0 --push-to <user>/physloc
 ```
 
-Packaging always happens; **uploading only when you ask**, because packaging is local and
-repeatable and uploading is neither. `run.sh` does both if `PHYSLOC_PUSH_TO` is set
-(`PHYSLOC_PUSH_PRIVATE=1` for a private repo). What lands: the dataset card, `index.parquet`
-with videos playable inline, `taxonomy.json`, `splits/`, `LICENSE` and the WebDataset shards.
+Packaging always happens; **uploading only when asked**. `run.sh` does both when
+`PHYSLOC_PUSH_TO` is set (`PHYSLOC_PUSH_PRIVATE=1` for a private repository), or set
+`PHYSLOC_PUSH_OWNER` once and every run publishes as `<owner>/physloc-<run>`. A push replaces the
+card and index at that repository id. What lands: the dataset card, `index.parquet` with inline
+video, `taxonomy.json`, `splits/`, `LICENSE` and the WebDataset shards.
 
-## 17. The generation knobs
+---
 
-Shares, counts and bands used to be module constants spread across three files. They are now
-**`configs/common.yaml`** — one place to see them and one place to change them.
+## Development
 
-```bash
-python -m physloc.cli params                    # what is in force, and what differs
-python -m physloc.cli params --config v0_mini   # ...for one run
-```
+### Two environments
 
-| section | what it holds |
-|---|---|
-| `ladder` | each level's share of a full generation |
-| `conditions` | the difficulty cycle — its length is the period, its contents are the shares |
-| `objects` | extra-object count, culprit counts, distractor size/speed/clearance |
-| `camera` | motion kinds and weights, travel and dolly ranges |
-| `materials` | the mass scale |
+| | runs | contains |
+|---|---|---|
+| **container** — pinned Kubric image | scene sampling, simulation, rendering | Kubric 2022.4.1, Blender 2.93.4, PyBullet, Python 3.9 |
+| **host** — `conda activate physloc` | annotation, residuals, masks, validation, visualisation | numpy, scipy, opencv, jsonschema, Python 3.11 |
 
-Any config may override part of it in its own `params:` block, so `common.yaml` holds the
-defaults and a run states its differences. Three layers — shipped defaults, `common.yaml`,
-the run — each validated against the known tree, so **a typo is an error rather than a value
-that silently does nothing**.
+They meet at the trajectory seam, `traj.npz`; never install Kubric, Blender or PyBullet on the
+host. `docker/kubric.sh <script.py>` runs a script from this repo inside the container.
+`bash scripts/fetch_refs.sh` checks out a read-only copy of the Kubric source for reference.
 
-The resolved values are written to `params.json` and recorded in every `meta.json`, so a clip
-says what it was generated under: a tunable nobody can reproduce is worse than a constant
-nobody can change.
+### Keeping the tables honest
 
-They cross the container seam as **JSON, not YAML** — the render container has Kubric's
-pinned packages and no PyYAML, and scene sampling happens there.
-
-## 18. Keeping the tables honest
-
-The taxonomy, ladder, condition and tier tables in Part I are **generated** from
-`physloc/taxonomy.py` and `physloc/scenarios/base.py` — prose copies of these numbers have
-drifted five separate ways before.
+The taxonomy, ladder, condition, difficulty, material, tier and cost tables in this README are
+**generated** from `physloc/taxonomy.py`, `physloc/scenarios/base.py` and `physloc/cli.py`. After
+changing any of them:
 
 ```bash
 python -m physloc.reference            # is the README current? exits 1 if stale
 python -m physloc.reference --write    # regenerate the tables in place
 ```
 
-`tests/test_reference.py` fails if they are stale, and the HuggingFace card is generated from
-the same functions, so the two documents cannot disagree.
+`tests/test_reference.py` fails when they are stale, and the HuggingFace card is generated from the
+same functions.
 
-## 19. Repo layout
+### Tests
+
+```bash
+python -m pytest tests                 # the full suite: about 40 minutes, pour cells are slowest
+python -m pytest tests/test_reference.py tests/test_cpu_slots.py   # a quick subset
+```
+
+### Repository layout
 
 ```
-physloc/scenarios/    13 scenario builders + the ladder and conditions (base.py)
-physloc/injectors/    23 violation families, one file per domain
-physloc/render/       the container worker; probes that measured the hard numbers
-physloc/annotate/     residuals -> masks, severity, timelines, meta.json
+physloc/scenarios/    scenario builders, the complexity ladder and conditions (base.py)
+physloc/injectors/    the violation families, one file per domain
+physloc/render/       the container worker, and probes for render cost
+physloc/sim/          trajectories and the simulation seam
+physloc/residuals/    the physical residuals severity is measured from
+physloc/annotate/     residuals -> masks, severity, timelines, difficulty, meta.json
 physloc/release/      export, splits, dataset card
-configs/*.yaml        the runs above, each documenting every key
+physloc/viz/          overlays, grids, sheets; every mp4 is written here
+physloc/cli.py        the `physloc` command line
+configs/              common.yaml and one file per run
+scripts/              run.sh, run_fast.sh, probes and refresh tools
 docs/schema.md        the meta.json field reference
+docs/performance.md   how cost and performance were measured
 docs/PLAN.md          the design document
-docs/roadmap.md       what is next and why
+docs/roadmap.md       what is next
 ```
 
-## 20. Papers
+---
+
+## References
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
-[Kubric](https://github.com/google-research/kubric). The IntPhys 2 category and LikePhys
-domain each family maps to are **data**, on the family in `physloc/taxonomy.py`.
+[Kubric](https://github.com/google-research/kubric). The IntPhys 2 category and LikePhys domain
+each family maps to are data, on each family in `physloc/taxonomy.py`.

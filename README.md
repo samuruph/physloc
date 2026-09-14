@@ -637,6 +637,22 @@ python -m physloc.cli taxonomy --config v0_release
   workers were busy on average; far below the worker count means jobs were waiting on memory or
   on a long straggler, not on cores.
 
+### Stopping a run
+
+Each render runs in its own Docker container, and a container does not die with the process that
+started it — so stopping a run has to stop the containers too:
+
+- **Ctrl-C once** in the terminal running it: no new jobs start, the run's render containers are
+  killed, and it exits saying how many finished jobs are kept. **Ctrl-C twice** exits at once.
+- **From any other terminal**, or when the run's terminal is gone:
+
+  ```bash
+  bash scripts/stop.sh      # stops every generate / run.sh, then every PhysLoc container
+  ```
+
+It reports what is still running afterwards — `0 ... 0` means everything has stopped. Finished jobs
+are kept either way, and running the same command again resumes.
+
 ### Resuming, splitting and memory
 
 - **Resuming.** Running the same command again continues where it stopped: a finished job is
@@ -646,10 +662,10 @@ python -m physloc.cli taxonomy --config v0_release
 - **Across machines.** Run one level per machine — `bash scripts/run.sh v0_L0` on one,
   `v0_L1` on the next, and so on; see [Generating one level at a time](#generating-one-level-at-a-time).
 - **Memory.** A job starts only when its memory fits in host RAM, and every container is capped,
-  so a crowded machine cannot OOM-kill its own jobs. One job type is heavy: release-size L3
-  `pour`, set to an estimated ~60 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). Measure it once on a
-  new machine — run this and watch `docker stats` in a second terminal — and update the figure if
-  it differs:
+  so a crowded machine cannot OOM-kill its own jobs; smaller jobs may start ahead of a big one
+  that does not fit yet. One job type is heavy: release-size L3 `pour`, which measured 39–47 GB
+  in a live run and is charged 55 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). On a machine with much
+  less memory, check it once — run this and watch `docker stats` in a second terminal:
 
   ```bash
   python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \

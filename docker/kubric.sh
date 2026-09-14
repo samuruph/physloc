@@ -63,6 +63,14 @@ fi
 if [ -n "${PHYSLOC_MEMORY:-}" ]; then
   CPU_ARGS+=(--memory "$PHYSLOC_MEMORY" --memory-swap "$PHYSLOC_MEMORY")
 fi
+# Every container is labelled `physloc`, and with the run that started it when
+# PHYSLOC_RUN_ID is set. A container does not die with the process that ran
+# `docker run`, so stopping a run -- Ctrl-C in `generate`, or scripts/stop.sh --
+# finds its containers by these labels rather than by guessing at command lines.
+CPU_ARGS+=(--label physloc=1)
+if [ -n "${PHYSLOC_RUN_ID:-}" ]; then
+  CPU_ARGS+=(--label "physloc.run=$PHYSLOC_RUN_ID")
+fi
 
 exec docker run --rm --interactive \
   "${GPU_ARGS[@]}" \

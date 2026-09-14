@@ -159,6 +159,48 @@ def _longest_first(jobs, tier, n_bins):
     return sorted(jobs, key=cost, reverse=True)
 
 
+def _kill_run_containers(run_id) -> int:
+    """Kill every render container a run started; they carry its label."""
+    try:
+        ids = subprocess.run(["docker", "ps", "-q", "--filter",
+                              "label=physloc.run=%s" % run_id],
+                             capture_output=True, text=True, timeout=30).stdout.split()
+        if ids:
+            subprocess.run(["docker", "kill"] + ids, capture_output=True, timeout=120)
+        return len(ids)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+
+def _install_stop_handler(stopping, run_id):
+    """First SIGINT/SIGTERM: stop starting jobs and kill this run's containers.
+    Second: exit immediately. Returns a function restoring the old handlers."""
+    import signal
+
+    def handler(signum, frame):
+        if stopping.is_set():
+            print("\n-- interrupted again: exiting now", file=sys.stderr, flush=True)
+            _kill_run_containers(run_id)
+            os._exit(130)
+        stopping.set()
+        print("\n-- stopping: no new jobs will start, killing this run's "
+              "containers (Ctrl-C again to exit at once)", file=sys.stderr, flush=True)
+        print("-- killed %d render container(s)" % _kill_run_containers(run_id),
+              file=sys.stderr, flush=True)
+
+    try:
+        previous = {sig: signal.signal(sig, handler)
+                    for sig in (signal.SIGINT, signal.SIGTERM)}
+    except ValueError:                  # not the main thread: nothing to install
+        return lambda: None
+
+    def restore():
+        for sig, old in previous.items():
+            signal.signal(sig, old)
+
+    return restore
+
+
 def _changed_dials(tier, resolution, fps, frames, spp):
     """Each geometry dial, or None where it only restates `tier`'s own value."""
     def changed(value, own):
@@ -701,6 +743,15 @@ def cmd_generate(a) -> int:
         # threads can never each hold what the other is waiting for.
         held = memory.acquire(job_memory_gb(scenario, tier, level))
         env = slots.get()
+        if stopping.is_set():
+            # Admitted after a stop was asked for: start nothing, and pass the
+            # memory straight on so the rest of the queue unwinds too.
+            slots.put(env)
+            memory.release(held)
+            return {"scenario": scenario, "seed": seed, "level": level,
+                    "variant": variant, "rc": 130,
+                    "info": {"stderr": "stopped before it started"},
+                    "results": [], "bad": []}
         # RUNNING only from here: a job waiting for memory is not running, and
         # counting it as one made a memory-starved pool look fully busy.
         progress.job_started(index)
@@ -788,6 +839,19 @@ def cmd_generate(a) -> int:
     budget_gb = max(4.0, _host_memory_gb() - HOST_RESERVE_GB)
     memory = MemoryBudget(budget_gb, backfill_seconds=BACKFILL_SECONDS)
     container_cap = {"PHYSLOC_MEMORY": "%dg" % int(budget_gb)}
+
+    # STOPPING. A render container does not die with the process that started
+    # it, so Ctrl-C used to stop only this front-end while dozens of containers
+    # rendered on -- and threads queued for memory went on starting new ones.
+    # Every container now carries this run's id as a label; the first Ctrl-C
+    # (or SIGTERM) stops new jobs from starting and kills exactly those
+    # containers, and a second exits at once.
+    import threading
+
+    run_id = "%s-%d" % (time.strftime("%Y%m%d-%H%M%S"), os.getpid())
+    container_cap["PHYSLOC_RUN_ID"] = run_id
+    stopping = threading.Event()
+    restore_signals = _install_stop_handler(stopping, run_id)
     print("  memory budget %.0f GB for %d worker(s); a job waits until its "
           "measured peak fits" % (budget_gb, workers), flush=True)
 
@@ -839,7 +903,7 @@ def cmd_generate(a) -> int:
         for o in outcomes
         for b in o["bad"] if b.get("error") == NO_PLAN})
     for attempt in range(RETRY_SEEDS):
-        if not declined:
+        if not declined or stopping.is_set():
             break
         by_clip = {}
         for level, variant, scenario, family in declined:
@@ -886,6 +950,14 @@ def cmd_generate(a) -> int:
     # be interleaved with a redraw, so close it before anything else prints.
     progress.close()
     prof.report(workers=workers)
+    restore_signals()
+    if stopping.is_set():
+        # Once more, for a container launched in the instant the stop landed.
+        _kill_run_containers(run_id)
+        kept = sum(1 for o in outcomes if o.get("rc") == 0)
+        print("-- stopped. %d finished job(s) are kept; run the same command "
+              "again to resume." % kept, file=sys.stderr, flush=True)
+        return 130
 
     # Reported in job order, not completion order, so two runs at different
     # worker counts produce the same transcript.

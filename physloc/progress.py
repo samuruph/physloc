@@ -264,6 +264,10 @@ class Progress:
         with self._lock:
             self.waiting.add(index)
 
+    def running_count(self) -> int:
+        with self._lock:
+            return len(self.running)
+
     def job_started(self, index: int) -> None:
         with self._lock:
             self.waiting.discard(index)

@@ -62,6 +62,17 @@ def test_never_pinned_to_a_single_core(cores, n_cores, workers):
             assert s["PHYSLOC_THREADS"] == str(cli.MIN_RENDER_THREADS)
 
 
+@pytest.mark.parametrize("running,cores_,expected", [
+    (22, 96, 4),       # the first 61-frame release run: 22 rendering on 96 cores
+    (96, 96, 2),       # a full machine
+    (1, 96, 8),        # alone: capped, scaling flattens past a handful
+    (0, 96, 8),
+    (200, 96, 2),      # more jobs than cores: never below the floor
+])
+def test_threads_follow_how_many_jobs_are_running(running, cores_, expected):
+    assert cli._threads_for(running, cores_) == expected
+
+
 def test_workers_auto_is_the_core_count(cores):
     cores(96)
     assert cli._workers("auto") == 96

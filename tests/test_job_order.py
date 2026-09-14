@@ -7,12 +7,20 @@ def _job(scenario, level, n_families=10, seed=1, variant=0):
             level, 3)
 
 
-def test_expensive_jobs_come_first():
-    jobs = [_job("drop", "L0"), _job("drop", "L2"), _job("pour", "L0"),
-            _job("pour", "L3")]
+def test_expensive_jobs_come_first_among_the_light_ones():
+    jobs = [_job("drop", "L0"), _job("drop", "L2"), _job("pour", "L0")]
     order = [(j[1], j[4]) for j in cli._longest_first(jobs, "release", 3)]
-    assert order[0] == ("pour", "L3")
+    assert order[0] == ("drop", "L2")
     assert order[-1] == ("drop", "L0")
+
+
+def test_memory_heavy_jobs_run_last():
+    """Two L3 pour jobs at ~47 GB each once held half the machine for hours."""
+    assert cli.job_memory_gb("pour", "release", "L3") >= cli.HEAVY_JOB_GB
+    jobs = [_job("pour", "L3"), _job("drop", "L0"), _job("drop", "L2")]
+    order = [(j[1], j[4]) for j in cli._longest_first(jobs, "release", 3)]
+    assert order[-1] == ("pour", "L3")
+    assert order[0] == ("drop", "L2")
 
 
 def test_the_same_jobs_come_out():

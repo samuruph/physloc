@@ -99,6 +99,16 @@ the queue by predicted cost, replayed over the real `v0_release` job list withou
 not absolute hours.) A job's seed, variant and output directory never depend on its position, so
 the order changes nothing a run produces.
 
+**Memory-heavy jobs last.** The first 61-frame release run on a 96-vCPU / 185 GB machine started
+both L3 `pour` jobs (~47 GB each) at once. They held half the memory for hours: 22 of 96 workers
+rendered, 74 waited for memory, and 55% of the CPU was idle. A job charged `HEAVY_JOB_GB` (20 GB)
+or more now runs after every lighter job, when the machine is otherwise free.
+
+**Threads follow how busy the machine is.** An unpinned worker starts with as many Blender threads
+as there are cores per running job, between 2 and 8 (`_threads_for`): 8 when it runs alone, 4 with
+22 running on 96 cores, 2 on a full machine. A fixed two threads assumed every worker would run,
+and left idle cores unused whenever memory admitted fewer.
+
 **Retries** of cells that declined their scene run through the same pool.
 
 **Occupancy.** Every `generate` ends with a stage profile whose `occupancy` line reports how many

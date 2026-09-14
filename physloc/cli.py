@@ -141,8 +141,21 @@ SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
 SCENARIO_COST = {"pour": 2.0}
 
 
+#: A job charged at least this much memory runs after every lighter one.
+HEAVY_JOB_GB = 20.0
+
+
 def _longest_first(jobs, tier, n_bins):
-    """The job queue ordered by predicted cost, most expensive first.
+    """The job queue: lighter jobs longest first, then the memory-heavy ones.
+
+    LONGEST FIRST, so the expensive HDRI and scanned-object jobs do not all
+    arrive at the end of the queue to run while every other worker idles.
+
+    HEAVY LAST. The first 61-frame release run started both L3 `pour` jobs --
+    ~47 GB each -- at once. They held half the machine's memory for hours, 74
+    of 96 workers waited for memory behind them, and half the CPU sat idle. A
+    job charged HEAVY_JOB_GB or more now runs after every lighter job, when the
+    machine is otherwise free, and with the threads to use it (`_threads_for`).
 
     Stable, so jobs of equal cost keep the order they were emitted in. The
     order changes nothing a job produces -- only which workers are busy when.
@@ -156,7 +169,11 @@ def _longest_first(jobs, tier, n_bins):
                            n_families=len(families), n_bins=n_bins)
                 * SCENARIO_COST.get(scenario, 1.0))
 
-    return sorted(jobs, key=cost, reverse=True)
+    def key(job):
+        heavy = job_memory_gb(job[1], tier, job[4]) >= HEAVY_JOB_GB
+        return (heavy, -cost(job))
+
+    return sorted(jobs, key=key)
 
 
 def _kill_run_containers(run_id) -> int:
@@ -755,6 +772,12 @@ def cmd_generate(a) -> int:
         # RUNNING only from here: a job waiting for memory is not running, and
         # counting it as one made a memory-starved pool look fully busy.
         progress.job_started(index)
+        # An unpinned worker's thread count follows how busy the machine is
+        # right now. The slot itself goes back to the pool unchanged.
+        launch_env = env
+        if workers > 1 and "PHYSLOC_CPUSET" not in env:
+            launch_env = dict(env, PHYSLOC_THREADS=str(
+                _threads_for(progress.running_count(), n_cores)))
         try:
             with prof.timer("worker"):
                 rc, info = _run_worker(scenario, seed, tier, ",".join(families),
@@ -765,7 +788,7 @@ def cmd_generate(a) -> int:
                                               "fps": a.fps,
                                               "frames": a.frames,
                                               "spp": a.spp},
-                                       env=dict(env, **container_cap),
+                                       env=dict(launch_env, **container_cap),
                                        on_line=on_line)
         finally:
             slots.put(env)
@@ -832,6 +855,10 @@ def cmd_generate(a) -> int:
 
     workers = _workers(getattr(a, "workers", 1) or 1)
     slots = _cpu_slots(workers)
+    try:
+        n_cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n_cores = os.cpu_count() or 1
     # The whole budget is also every container's hard cap: a job that blows
     # past its estimate is then killed by docker on its own, instead of the
     # host OOM killer choosing a victim -- which, measured, was a system
@@ -1096,6 +1123,23 @@ def _cpu_slots(workers: int):
 #: See `_cpu_slots`: Cycles 2.93 hangs below two threads or two cores.
 #: `render.worker` applies the same floor to a hand-set `PHYSLOC_THREADS`.
 MIN_RENDER_THREADS = 2
+
+#: The most Blender threads one render gets. A single render's scaling flattens
+#: past a handful -- 8 threads measured 4.7x one thread, 16 threads 6.1x -- and a
+#: render started while few others run keeps its threads when more start later.
+MAX_RENDER_THREADS = 8
+
+
+def _threads_for(running: int, cores: int) -> int:
+    """Blender threads for a job starting while `running` jobs, itself included,
+    share `cores` cores: the cores per running job, between the floor and cap.
+
+    A fixed two threads assumed every worker would run. When memory admits far
+    fewer -- the first 61-frame release run had 22 of 96 rendering -- that left
+    half the CPU idle. Thread count does not change the pixels.
+    """
+    return max(MIN_RENDER_THREADS,
+               min(MAX_RENDER_THREADS, int(cores) // max(1, int(running))))
 
 
 #: Peak memory of ONE worker job, GB, by (scenario, tier, level). Measured with

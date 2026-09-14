@@ -57,6 +57,7 @@ defaults:
 
 generate:
   keep_going: true
+  resume: true
   workers: auto
   workdir: out/work_v0_L0
   outdir: out/physloc_v0_L0

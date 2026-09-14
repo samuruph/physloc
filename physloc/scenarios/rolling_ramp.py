@@ -37,8 +37,12 @@ class RollingRamp(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        tilt = float(rng.uniform(0.44, 0.56))
-        half_len, thick = 1.3, 0.08
+        # A LONGER RAMP, and a slightly gentler one. The block starts near the
+        # top now (see `start_along`), so the tilt comes down a little to keep
+        # the speed at the lip -- and with it the landing distance the camera
+        # has to take in -- close to what it was.
+        tilt = float(rng.uniform(0.36, 0.46))
+        half_len, thick = 1.75, 0.08
         sin_t, cos_t = math.sin(tilt), math.cos(tilt)
         # The LIP height is the number that matters, so set it and derive the
         # slab centre -- not the other way round. It fixes the drop off the end
@@ -49,19 +53,27 @@ class RollingRamp(Scenario):
         lip_z = 1.15
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
         half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
-        v0 = float(rng.uniform(1.9, 2.4))
+        v0 = float(rng.uniform(0.3, 0.8))
+        mu = float(rng.uniform(0.25, 0.38))
         d, _ = C.ramp_axes(tilt)
-        # Start close to the lip so the body leaves the slab a third of the way
-        # in; starting at the top spends the whole of the debug tier sliding and never
-        # reaches the airborne stretch angular_momentum needs.
-        start_along = half_len - float(rng.uniform(0.55, 0.78))
+        # NEAR THE TOP, so the slide is a visible stretch of the clip rather
+        # than a few frames before the lip. It used to start 0.55-0.78 m above
+        # the lip at a launch speed of ~2 m/s, which had the block off the slab
+        # within the opening frames: every contact-phase violation (`friction`,
+        # `newton1_inertia`) had almost nothing to act on, and what it did act
+        # on was over before a viewer had seen what lawful sliding looks like.
+        # The longer ramp is what keeps the airborne stretch after the lip that
+        # `angular_momentum` needs within reach of the debug tier.
+        start_along = -half_len + half + float(rng.uniform(0.10, 0.45))
 
         # ---- where the block ends up, so the camera can be pointed at it ----
         # A block that coasts out of shot is a violation injected off-screen.
         # Rather than tune an eye position against one tier, work the run out:
-        # slide to the lip, fall, land, and decelerate to a stop.
-        v_lip = math.sqrt(v0 ** 2 + 2.0 * 9.81
-                          * (half_len - start_along) * sin_t)
+        # slide to the lip, fall, land, and decelerate to a stop. The slide is
+        # slowed by the slab's friction, which PyBullet takes as the product of
+        # the pair -- `mu**2` by construction below.
+        a_slide = 9.81 * max(sin_t - mu * mu * cos_t, 0.05)
+        v_lip = math.sqrt(v0 ** 2 + 2.0 * a_slide * (half_len - start_along))
         vx_lip, vz_lip = v_lip * cos_t, -v_lip * sin_t
         t_fall = (-vz_lip + math.sqrt(vz_lip ** 2 + 2.0 * 9.81 * lip_z)) / 9.81
         x_lip = half_len * cos_t
@@ -77,7 +89,9 @@ class RollingRamp(Scenario):
         floor_mu = 0.6
         block_mu = min(1.2, max(0.20, vx_lip ** 2
                                 / (2.0 * 9.81 * run_out * floor_mu)))
-        mu = float(rng.uniform(0.25, 0.38))
+        # Where the cap binds, the block needs more floor than was budgeted,
+        # and the camera must be framed for the run-out it will really have.
+        run_out = max(run_out, vx_lip ** 2 / (2.0 * 9.81 * block_mu * floor_mu))
         ramp_mu = min(1.0, max(0.02, mu * mu / block_mu))
 
         block = BodySpec(
@@ -109,6 +123,7 @@ class RollingRamp(Scenario):
             notes={"tilt_rad": tilt, "mu": mu, "lip": list(lip),
                    "block_friction": block_mu, "ramp_friction": ramp_mu,
                    "x_land": x_land, "run_out": run_out,
+                   "half_len": half_len, "start_along": start_along,
                    "ramp_id": self.SEG_RAMP})
 
 

@@ -163,6 +163,7 @@ class Progress:
         self.renders_done = 0
         self._seen = defaultdict(int)       # renders done or dropped, per job
         self.running = set()
+        self.waiting = set()                # queued, e.g. for memory
 
         self._stop = threading.Event()
         self._heartbeat = None
@@ -258,8 +259,14 @@ class Progress:
             self.total += int(extra)
             self._refresh_bar()
 
+    def job_waiting(self, index: int) -> None:
+        """Job `index` is queued -- for memory, or for a core slice."""
+        with self._lock:
+            self.waiting.add(index)
+
     def job_started(self, index: int) -> None:
         with self._lock:
+            self.waiting.discard(index)
             self.running.add(index)
 
     def render_done(self, index: int) -> None:
@@ -300,8 +307,11 @@ class Progress:
             parts = []
             if self.renders is not None:
                 parts.append("renders %d/%d" % (self.renders_done, self.renders_total))
-            parts.append("jobs %d/%d done, %d running"
-                         % (self.n, self.total, len(self.running)))
+            jobs = "jobs %d/%d done, %d running" % (self.n, self.total,
+                                                    len(self.running))
+            if self.waiting:
+                jobs += ", %d waiting for memory" % len(self.waiting)
+            parts.append(jobs)
             parts.append("elapsed %s" % _fmt(time.perf_counter() - self.t0))
             parts.append("eta %s" % _fmt(self.eta()))
             return " | ".join(parts)
@@ -319,6 +329,7 @@ class Progress:
             if index is None:
                 index = self.n - 1
             self.running.discard(index)
+            self.waiting.discard(index)
             if self.renders is not None:
                 # Renders the worker never reported -- it died, or declined
                 # without saying -- are not coming.

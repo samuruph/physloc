@@ -178,6 +178,18 @@ def test_status_line_and_log_file(tmp_path):
     assert "started" in text and "[1/2]" in text and "finished" in text
 
 
+def test_a_job_waiting_for_memory_is_not_counted_as_running():
+    p = Progress(3, renders=[1, 1, 1], stream=_sink(), use_bar=False)
+    for i in range(3):
+        p.job_waiting(i)
+    p.job_started(0)
+    status = p.status_line()
+    assert "1 running" in status and "2 waiting for memory" in status
+    p.render_done(0)
+    p.update("job0", index=0)
+    assert "0 running" in p.status_line()
+
+
 def test_heartbeat_prints_the_status_line():
     out = _sink()
     p = Progress(1, renders=[1], stream=out, use_bar=False)

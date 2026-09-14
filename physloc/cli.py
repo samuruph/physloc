@@ -701,6 +701,9 @@ def cmd_generate(a) -> int:
         # threads can never each hold what the other is waiting for.
         held = memory.acquire(job_memory_gb(scenario, tier, level))
         env = slots.get()
+        # RUNNING only from here: a job waiting for memory is not running, and
+        # counting it as one made a memory-starved pool look fully busy.
+        progress.job_started(index)
         try:
             with prof.timer("worker"):
                 rc, info = _run_worker(scenario, seed, tier, ",".join(families),
@@ -770,7 +773,7 @@ def cmd_generate(a) -> int:
             if cached is not None:
                 progress.skip(label(cached), index=index)
                 return cached
-        progress.job_started(index)
+        progress.job_waiting(index)
         out = run_one(job, index)
         _ledger_save(job, out)
         progress.update(label(out), ok=out["rc"] == 0, index=index)
@@ -783,7 +786,7 @@ def cmd_generate(a) -> int:
     # host OOM killer choosing a victim -- which, measured, was a system
     # service before it was the worker.
     budget_gb = max(4.0, _host_memory_gb() - HOST_RESERVE_GB)
-    memory = MemoryBudget(budget_gb)
+    memory = MemoryBudget(budget_gb, backfill_seconds=BACKFILL_SECONDS)
     container_cap = {"PHYSLOC_MEMORY": "%dg" % int(budget_gb)}
     print("  memory budget %.0f GB for %d worker(s); a job waits until its "
           "measured peak fits" % (budget_gb, workers), flush=True)
@@ -1041,12 +1044,29 @@ MIN_RENDER_THREADS = 2
 #: the measured debug value scaled by the grain count (212 against 96). A job
 #: that overruns its estimate is still capped per container (`PHYSLOC_MEMORY`),
 #: so a low guess costs one retried job, never the host.
+#:
+#: RELEASE VALUES ARE FROM A LIVE RUN: 96 vCPU / 185 GB, 61 frames, all
+#: containers at once, mid-render --
+#:
+#:      pour     L0 4.5-4.9   L2 3.7-4.0   L3 39-47
+#:      others   L2 ~1.1      L3 1.8-3.7   (collision, rolling_ramp)
+#:
+#: -- charged with a margin. Over-charging is not free: the first release run
+#: charged pour L3 at 60 GB and pour L2 at 8, filled the budget with 18 jobs
+#: while 78 waited, and left 64% of the CPU idle.
+#:
+#: A `None` scenario is the charge for every other scenario at that level.
 JOB_MEMORY_GB = {
     ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
     ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
-    ("pour", "release", "L0"): 6.5, ("pour", "release", "L1"): 6.5,
-    ("pour", "release", "L2"): 8.0, ("pour", "release", "L3"): 60.0,
+    ("pour", "release", "L0"): 6.0, ("pour", "release", "L1"): 6.0,
+    ("pour", "release", "L2"): 5.0, ("pour", "release", "L3"): 55.0,
+    (None, "release", "L2"): 1.5, (None, "release", "L3"): 3.0,
 }
+
+#: How long the head of the memory queue may be passed by smaller jobs that fit.
+#: See `MemoryBudget`.
+BACKFILL_SECONDS = 1800.0
 
 #: Anything not in the table is charged what a job TYPICALLY holds, not its
 #: peak. Every other scenario peaked at 0.3-2.6 GB, but peaks are brief and
@@ -1062,8 +1082,10 @@ HOST_RESERVE_GB = 6.0
 
 
 def job_memory_gb(scenario: str, tier: str, level: str = "L0") -> float:
-    return JOB_MEMORY_GB.get((scenario, tier, level),
-                             DEFAULT_JOB_MEMORY_GB.get(tier, 4.0))
+    for key in ((scenario, tier, level), (None, tier, level)):
+        if key in JOB_MEMORY_GB:
+            return JOB_MEMORY_GB[key]
+    return DEFAULT_JOB_MEMORY_GB.get(tier, 4.0)
 
 
 def _host_memory_gb() -> float:
@@ -1078,32 +1100,48 @@ def _host_memory_gb() -> float:
 
 
 class MemoryBudget:
-    """Admit a job only once its measured peak fits in the memory left.
+    """Admit a job only once its charged memory fits in what is left.
 
     Workers alone bound CPU, not memory, and memory is what a crowded box runs
-    out of first: see `JOB_MEMORY_GB`. Admission is FIRST IN, FIRST OUT -- a
-    20 GB `pour` job waiting behind a stream of 2 GB ones would otherwise never
-    see 20 GB free -- and a job larger than the whole budget is admitted alone
-    rather than never.
+    out of first: see `JOB_MEMORY_GB`. A job larger than the whole budget is
+    admitted alone rather than never.
+
+    ORDER, WITH BACKFILL. Strict first-in-first-out starved the pool: on the
+    first release run the head of the queue was a 6.5 GB job facing 6 GB free,
+    and the 77 jobs behind it -- most charged 1 GB -- waited with it, 18 of 96
+    workers running and 64% of the CPU idle. So while the head does not fit, a
+    later job that DOES fit may start ahead of it -- but only for
+    `backfill_seconds` after the head began waiting. After that the queue
+    drains in order, so a big job is delayed a bounded time, never starved.
+    `backfill_seconds=0` is strict first-in-first-out.
     """
 
-    def __init__(self, total_gb: float):
+    def __init__(self, total_gb: float, backfill_seconds: float = 0.0):
         import collections
         import threading
 
         self.total = max(0.0, float(total_gb))
         self.free = self.total
+        self.backfill_seconds = max(0.0, float(backfill_seconds))
         self._cv = threading.Condition()
-        self._queue = collections.deque()
+        self._queue = collections.deque()      # [token, time it began waiting]
+
+    def _may_start(self, entry, gb: float) -> bool:
+        if self.free < gb:
+            return False
+        head = self._queue[0]
+        if head is entry:
+            return True
+        return time.monotonic() - head[1] < self.backfill_seconds
 
     def acquire(self, gb: float) -> float:
         gb = min(max(0.0, float(gb)), self.total)
-        me = object()
+        entry = [object(), time.monotonic()]
         with self._cv:
-            self._queue.append(me)
-            while self._queue[0] is not me or self.free < gb:
+            self._queue.append(entry)
+            while not self._may_start(entry, gb):
                 self._cv.wait()
-            self._queue.popleft()
+            self._queue.remove(entry)
             self.free -= gb
             self._cv.notify_all()
         return gb

@@ -50,6 +50,54 @@ def test_a_big_job_is_not_starved_by_small_ones():
     assert order == ["big", "small"]
 
 
+def _race(budget, need_head, need_small, settle=0.05):
+    """A head that does not fit, then a small job that does. Returns start order."""
+    order = []
+
+    def job(name, gb):
+        g = budget.acquire(gb)
+        order.append(name)
+        return g
+
+    held = {}
+    th = threading.Thread(target=lambda: held.setdefault("big", job("big", need_head)))
+    th.start()
+    time.sleep(settle)
+    ts = threading.Thread(target=lambda: held.setdefault("small", job("small", need_small)))
+    ts.start()
+    return order, held, th, ts
+
+
+def test_a_small_job_backfills_while_the_head_is_young():
+    """The first release run: 77 jobs waited behind one that did not fit."""
+    b = cli.MemoryBudget(24, backfill_seconds=60)
+    running = b.acquire(10)                                   # 14 GB free
+    order, held, th, ts = _race(b, need_head=20, need_small=2)
+    ts.join(2)
+    assert order == ["small"]                                 # passed the head
+    b.release(running)
+    b.release(held["small"])
+    th.join(2)
+    assert order == ["small", "big"]
+
+
+def test_backfill_stops_once_the_head_has_waited_long_enough():
+    """A big job is delayed a bounded time, never starved."""
+    b = cli.MemoryBudget(24, backfill_seconds=0.05)
+    running = b.acquire(10)
+    order, held, th, ts = _race(b, need_head=20, need_small=2, settle=0.15)
+    time.sleep(0.1)
+    assert order == []                                        # head too old to pass
+    b.release(running)
+    th.join(2)
+    ts.join(2)
+    assert order == ["big", "small"]
+
+
+def test_ordinary_scanned_jobs_are_charged_more_than_the_baseline():
+    assert cli.job_memory_gb("collision", "release", "L3") > cli.job_memory_gb("collision", "release", "L0")
+
+
 def test_pour_is_the_outlier_only_at_the_scanned_level():
     """96 grains become 96 scanned meshes at L3; below it pour is ordinary-sized."""
     assert cli.job_memory_gb("pour", "debug", "L3") > 5 * cli.job_memory_gb("pour", "debug", "L0")

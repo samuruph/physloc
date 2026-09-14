@@ -78,9 +78,13 @@ not change the pixels: all seven passes are byte-identical at 2 and 32 threads.
 throwaway container, so there is no shared cache to race on; 32 containers fetching HDRI and GSO
 assets cold at the same moment ran without an error.
 
-**Memory admission.** A job starts only when its memory fits in a budget of host RAM minus 6 GB,
-first in first out, and every container is capped at that budget, so an overrun kills one job
-rather than letting the host's OOM killer pick a victim. See [Memory per job](#memory-per-job).
+**Memory admission.** A job starts only when its charged memory fits in a budget of host RAM
+minus 6 GB, and every container is capped at that budget, so an overrun kills one job rather than
+letting the host's OOM killer pick a victim. Jobs are admitted in order, **with backfill**: while
+the job at the head of the queue does not fit, a later job that does may start ahead of it, for up
+to 30 minutes of the head's waiting; after that the queue drains in order. Strict ordering starved
+the first release run — the head was a 6.5 GB job facing 6 GB free, the 77 jobs behind it waited
+with it, and 18 of 96 workers ran with 64% of the CPU idle. See [Memory per job](#memory-per-job).
 
 **Longest jobs first.** The ladder emits its levels in blocks, which put every expensive HDRI and
 scanned-object job at the end of the queue, running while the rest of the pool sat idle. Ordering
@@ -108,7 +112,7 @@ Peak memory of one worker job (valid plus invalid renders), measured with `docke
 | job | L0 | L1 | L2 | L3 |
 |---|---|---|---|---|
 | `pour`, debug | 2.7 GB | 2.7 GB | 3.5 GB | **26.4 GB** |
-| `pour`, release | 5.9 GB | – | – | ~60 GB (estimate) |
+| `pour`, release | 5.9 GB | – | 3.7–4.0 GB (live run) | 39–47 GB (live run, mid-job) |
 | `drop`, release | 2.6 GB | – | – | – |
 
 - **Memory is flat in the number of renders**: one `drop` job rendering 43 clips stayed between

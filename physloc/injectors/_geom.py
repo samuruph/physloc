@@ -10,6 +10,10 @@ py3.9-compatible: runs inside the container.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import math
+import zlib
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -137,29 +141,144 @@ EVENT_FRACTION = 0.35
 WINDOW_FRACTION = 0.55
 
 
-#: How far the event moment is jittered per scene, as a fraction of the clip.
+#: The band an event is drawn from when nothing physical dictates the moment,
+#: as fractions of the clip -- further narrowed by `MIN_VISIBLE_AFTER`.
 #:
-#: Without it every clip that has no physical cue fires at exactly the same
-#: frame: measured across twelve seeds, `immutability` and `colour_shift`
-#: produced ONE distinct `t_event` and `continuity` three. A benchmark whose
-#: violations all begin a third of the way in teaches when to look rather than
-#: what to look for.
-EVENT_JITTER = 0.10
+#: It used to be `EVENT_FRACTION` jittered by a tenth either way, one draw per
+#: SCENE: every family on a scene fired at the same moment, and every clip in
+#: the release between a quarter and 45% of the way in. A benchmark whose
+#: violations all begin in one stretch of the clip teaches when to look rather
+#: than what to look for. The lower edge keeps a lawful prefix long enough to
+#: establish what the scene is doing.
+EVENT_BAND = (0.15, 0.70)
+
+#: How much of the clip must remain AFTER an event for its effect to be seen,
+#: as a share of the clip, floored at `MIN_VISIBLE_SECONDS`. Also the span a
+#: culprit must stay on screen from its event -- see `eligible_event_frames`
+#: and `culprits_visible`.
+MIN_VISIBLE_AFTER = 0.35
+MIN_VISIBLE_SECONDS = 0.8
+
+#: Share of a group of culprits that must be on screen for a frame to count as
+#: showing them, so one grain of forty drifting out of a `pour` is not the same
+#: as the whole pour leaving. The same fraction `Injector._offscreen_frames`
+#: has always used.
+VISIBLE_SHARE = 0.6
+
+#: (family, attempt) the current event draw is keyed on. Set around every
+#: `Injector.plan` by `Injector.__init_subclass__`, and by the worker's retry
+#: loop through `Injector.event_attempt`. A context rather than an argument so
+#: the dozen helpers between `plan` and the draw need not all carry it.
+_EVENT_KEY = contextvars.ContextVar("physloc_event_key",
+                                    default=("", 0, None))
+
+#: Domains whose violation is a claim about MOTION -- gravity, momentum, a
+#: force, the flow of time. Applied to a body that has already come to rest it
+#: means nothing a viewer can see: antigravity on a ball lying on the floor is a
+#: ball lying on the floor, and a phantom impulse to a settled block is a block
+#: that twitches. Their events are drawn only while the actor still moves; see
+#: `motion_limit`.
+MOTION_DOMAINS = frozenset({"kinematics", "dynamics", "global"})
+
+#: Below this speed, in m/s, a body counts as at rest.
+REST_SPEED = 0.15
+
+#: Share of the clip a motion event must leave between itself and the moment
+#: the actor comes to rest, floored at two frames.
+MOTION_ROOM = 0.15
 
 
-def scene_fraction(spec) -> float:
-    """A number in [0, 1) that is a property of the SCENE, not the family.
+@contextlib.contextmanager
+def event_context(family: str, attempt: int = 0, traj=None):
+    """Key every event draw inside the block on `family` and `attempt`, and
+    let it see the lawful rollout `traj` (for `motion_limit`)."""
+    token = _EVENT_KEY.set((str(family), int(attempt), traj))
+    try:
+        yield
+    finally:
+        _EVENT_KEY.reset(token)
 
-    One draw, reused wherever a family has a *choice* of moment, so that the
-    three severities of a cell fire together -- otherwise their magnitudes stop
-    being comparable -- and two families on the same scene sit at the same
-    relative point in whatever window each of them can use.
+
+def motion_limit(spec) -> Optional[int]:
+    """The latest frame a MOTION family may fire on, or None for no limit.
+
+    The frame the primary actor last moves, less `MOTION_ROOM` of the clip, on
+    the rollout the current event context carries. None when the family is not
+    in `MOTION_DOMAINS`, when there is no rollout to ask, or when the actor
+    never moves -- `resting_table` and `stack_topple` stage bodies at rest on
+    purpose, and there is no motion to protect.
+    """
+    family, _, traj = _EVENT_KEY.get()
+    if traj is None or not family:
+        return None
+    from ..taxonomy import FAMILIES
+
+    fam = FAMILIES.get(family)
+    if fam is None or fam.domain not in MOTION_DOMAINS:
+        return None
+    live = [b for b in actors(spec) if not b.dormant and not b.static]
+    if not live:
+        return None
+    try:
+        bi = traj.index_of(int(live[0].segmentation_id))
+    except Exception:                                         # noqa: BLE001
+        return None
+    speed = np.linalg.norm(np.asarray(traj.lin_vel[:, bi, :], np.float64), axis=1)
+    moving = np.flatnonzero(speed > REST_SPEED)
+    if moving.size == 0:
+        return None
+    T = int(traj.num_frames)
+    return int(moving[-1]) - max(2, int(round(MOTION_ROOM * T)))
+
+
+def event_fraction(spec, body_id: Optional[int] = None) -> float:
+    """A number in [0, 1) keyed on (scene, family, culprit, attempt).
+
+    NOT on the severity bin: the three severities of one cell must fire
+    together or their magnitudes stop being comparable. But per FAMILY, where
+    it used to be per scene -- two families on one scene firing at the same
+    moment bought comparability nobody used, at the price of a release whose
+    event times clustered. `body_id` gives each culprit of a `multi` clip its
+    own moment; `attempt` is how the worker asks for a different moment when a
+    culprit would leave the frame.
 
     Salted away from `Scenario.rng` so that consulting it cannot shift any
     physics draw.
     """
-    seed = (int(spec.seed) * 2654435761 + 0x51ED) % (2 ** 31 - 1)
-    return float(np.random.RandomState(seed).uniform())
+    family, attempt, _ = _EVENT_KEY.get()
+    key = (int(spec.seed) * 2654435761 + 0x51ED
+           + zlib.crc32(family.encode()) + 7919 * int(attempt)
+           + (0 if body_id is None else 104729 * (int(body_id) + 1)))
+    return float(np.random.RandomState(key % (2 ** 31 - 1)).uniform())
+
+
+def scene_fraction(spec) -> float:
+    """The event draw with no culprit named. Kept under its old name because
+    it is what every helper below calls; see `event_fraction`."""
+    return event_fraction(spec)
+
+
+def event_attempt() -> int:
+    """Which draw of the event moment the current context asks for."""
+    return int(_EVENT_KEY.get()[1])
+
+
+def min_visible_frames(spec, num_frames: int) -> int:
+    """Frames a culprit must stay on screen from its event -- see
+    `MIN_VISIBLE_AFTER`."""
+    fps = float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
+    need = max(math.ceil(MIN_VISIBLE_AFTER * num_frames),
+               int(round(MIN_VISIBLE_SECONDS * fps)))
+    return int(max(1, min(need, num_frames - 2)))
+
+
+def band_frame(spec, num_frames: int) -> Optional[int]:
+    """An event frame drawn inside `EVENT_BAND`, leaving the visible span."""
+    T = int(num_frames)
+    lo = max(1, int(round(EVENT_BAND[0] * T)))
+    hi = min(int(round(EVENT_BAND[1] * T)), T - 1 - min_visible_frames(spec, T))
+    t = frame_in_band(spec, lo, max(lo, hi))
+    return int(t) if 1 <= t < T - 1 else None
 
 
 def frame_in_band(spec, lo: int, hi: int) -> int:
@@ -174,29 +293,152 @@ def frame_in_band(spec, lo: int, hi: int) -> int:
     jitter upstream was working perfectly.
 
     Interpolating instead means the choice survives however narrow the band is.
+
+    A MOTION family's band also ends before its actor comes to rest -- see
+    `motion_limit` -- whenever that leaves any band at all.
     """
     lo, hi = int(lo), int(hi)
+    limit = motion_limit(spec)
+    if limit is not None and limit >= lo:
+        hi = min(hi, limit)
     if hi <= lo:
         return lo
     return lo + int(round(scene_fraction(spec) * (hi - lo)))
 
 
 def default_event_frame(spec, num_frames: int) -> Optional[int]:
-    """When to fire, absent a physical cue: hidden if possible, else a third in.
+    """When to fire, absent a physical cue: hidden if possible, else in the band.
 
-    Roughly a third of the way in leaves the opening frames untouched -- so the
-    prefix is long enough to establish what lawful motion looks like -- and
-    still leaves most of the clip for the consequences to play out. Jittered per
-    SCENE, not per family or per bin: the three severities of one cell must fire
-    together or their magnitudes stop being comparable, and two families on one
-    scene sharing a moment is what makes them comparable to each other.
+    Anywhere in `EVENT_BAND` that still leaves `min_visible_frames` of clip for
+    the consequences to play out. Drawn per (scene, family, attempt), never per
+    bin -- see `event_fraction`.
+
+    The occlusion is preferred on the FIRST attempt only. It is a fixed frame,
+    so a retry that preferred it again fired at exactly the moment that had just
+    failed: measured on `occluder_pass` 22260826 `multi`, all four attempts of
+    `phantom_impulse` chose frame 13, where the push sends one culprit behind
+    the screen and another out of shot.
     """
-    t0 = occluded_midpoint(spec)
+    t0 = occluded_midpoint(spec) if event_attempt() == 0 else None
     if t0 is None:
-        frac = (EVENT_FRACTION
-                + (2.0 * scene_fraction(spec) - 1.0) * EVENT_JITTER)
-        t0 = max(1, int(round(frac * num_frames)))
+        return band_frame(spec, num_frames)
     return int(t0) if 1 <= t0 < num_frames - 1 else None
+
+
+def _bodies_by_id(spec, body_ids) -> List:
+    by_id = {int(b.segmentation_id): b for b in spec.bodies}
+    return [by_id[int(i)] for i in body_ids if int(i) in by_id]
+
+
+#: How many bodies of a group the line-of-sight test looks at. It is a ray per
+#: body per frame per static box, in Python, and a `pour` has hundreds of
+#: grains; an even sample of a dozen answers "can the group be seen" as well.
+LINE_OF_SIGHT_SAMPLE = 12
+
+
+def culprits_on_screen(spec, traj, bodies,
+                       share: float = VISIBLE_SHARE) -> np.ndarray:
+    """[T] bool: is at least `share` of `bodies` present, in frame and in sight?
+
+    Per frame against the camera as it is on that frame. A body that is absent
+    -- dormant, or removed by the violation -- is not on screen, which is the
+    point: the question is whether the clip SHOWS it. So is one standing behind
+    a static screen or wall (`hidden_behind_static`), except on the frames a
+    scenario DECLARES occluded: `occluder_pass` hides its actor on purpose, and
+    that interval is the observability lag the scenario exists to produce.
+    """
+    T = int(traj.num_frames)
+    idx = []
+    for b in bodies:
+        try:
+            idx.append(traj.index_of(int(b.segmentation_id)))
+        except Exception:                                     # noqa: BLE001
+            continue
+    if not idx:
+        return np.zeros((T,), bool)
+    pts = np.asarray(traj.pos[:, idx, :], np.float64)
+    vis = np.asarray(in_frame(spec, pts, from_frame=0, num_frames=T), bool)
+    vis = vis.reshape(T, len(idx))
+    here = np.asarray(traj.present[:, idx], bool)
+    ok = vis & here
+    if any(b.static and b.kind == "cube" and b.role != "floor"
+           for b in spec.bodies):
+        declared = {int(f) for f in (spec.notes.get("occluded_frames") or [])}
+        # The SAME silhouette bound `occluder_pass` declares its occlusion
+        # with: exact for a sphere, the corner reach for anything else. With
+        # the bounding radius alone a cube read as hidden three frames before
+        # the scenario would call it fully occluded, and on seed 3 those three
+        # frames alone failed the framing check.
+        by_id = {int(b.segmentation_id): b for b in bodies}
+        radii = np.asarray(
+            [float(traj.radius[j]) * (1.0 if by_id.get(int(traj.body_ids[j])) is not None
+                                      and by_id[int(traj.body_ids[j])].kind == "sphere"
+                                      else math.sqrt(3.0))
+             for j in idx], np.float64)
+        step = max(1, int(math.ceil(len(idx) / float(LINE_OF_SIGHT_SAMPLE))))
+        for f in range(T):
+            if f in declared:
+                continue
+            for j in range(0, len(idx), step):
+                if ok[f, j] and fully_hidden_behind_static(spec, pts[f, j],
+                                                           radii[j]):
+                    ok[f, j] = False
+    seen = ok.sum(axis=1)
+    return seen >= np.maximum(1, np.ceil(share * len(idx)))
+
+
+def eligible_event_frames(spec, traj, bodies, lo: int, hi: int) -> np.ndarray:
+    """Frames in [lo, hi] from which `bodies` stay on screen, uninterrupted,
+    for `min_visible_frames` -- measured on the LAWFUL rollout `traj`."""
+    T = int(traj.num_frames)
+    need = min_visible_frames(spec, T)
+    on = culprits_on_screen(spec, traj, bodies).astype(np.int64)
+    csum = np.concatenate([[0], np.cumsum(on)])
+    lo, hi = max(0, int(lo)), min(T - 1, int(hi))
+    out = [t for t in range(lo, hi + 1)
+           if t + need <= T and csum[t + need] - csum[t] == need]
+    return np.asarray(out, np.int64)
+
+
+def visible_band(spec, traj, bodies, lo: int, hi: int) -> Tuple[int, int]:
+    """`[lo, hi]` narrowed to the frames `eligible_event_frames` allows, or
+    left alone when none are -- the worker's visibility gate is the backstop."""
+    ok = eligible_event_frames(spec, traj, bodies, lo, hi)
+    if ok.size == 0:
+        return int(lo), int(hi)
+    return int(ok.min()), int(ok.max())
+
+
+#: Share of the `min_visible_frames` after an event that must show the
+#: culprits. Not all of them: a super-elastic ball that climbs out of the top
+#: of the shot and falls back in, or a shoved pendulum bob that swings wide and
+#: returns, is a violation anyone can see.
+VISIBLE_AFTER_SHARE = 0.6
+
+#: ...but the opening moment after the event must show them without a break,
+#: because that is where the evidence first appears.
+EVIDENCE_SECONDS = 0.25
+
+
+def culprits_visible(spec, traj, bodies, t_event: int,
+                     tolerance: float = VISIBLE_AFTER_SHARE) -> bool:
+    """Does the clip keep `bodies` on screen after `t_event`?
+
+    Every frame of the first `EVIDENCE_SECONDS` after the event, and at least
+    `tolerance` of the `min_visible_frames` from it, must show them. Asked of
+    the INVALID trajectory by the worker, so an intervention that throws a
+    culprit out of shot is caught; a family whose violation is the body going
+    out of sight asks it of the valid one instead.
+    """
+    T = int(traj.num_frames)
+    t = int(np.clip(t_event, 0, T - 1))
+    span = min(min_visible_frames(spec, T), T - t)
+    if span <= 0:
+        return False
+    on = culprits_on_screen(spec, traj, bodies)[t:t + span]
+    fps = float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
+    head = max(1, min(span, int(round(EVIDENCE_SECONDS * fps))))
+    return bool(on[:head].all() and on.mean() >= tolerance)
 
 
 def window_frames(num_frames: int, t0: int, fraction: float = None,
@@ -901,6 +1143,11 @@ def acting_frame(spec, traj, body_id: int, num_frames: int,
     floor = int(round(floor_fraction * num_frames))
     if earliest <= floor <= latest:
         earliest = floor
+    # And from a frame the body stays on screen after -- a free body can be
+    # thrown out of shot by its own lawful flight.
+    earliest, latest = visible_band(
+        spec, traj, _bodies_by_id(spec, [body_id]), earliest,
+        max(earliest, latest))
     # Honour `want` when it already lands inside the usable band; otherwise
     # place it within the band rather than clamping to whichever edge it
     # overshot, which is how a family ends up firing on one frame forever.
@@ -940,7 +1187,8 @@ def unoccluded_event_frame(spec, num_frames: int, span: int,
         # moment is right either way.
         want = default_event_frame(spec, num_frames)
         if want is None:
-            want = max(1, int(round(EVENT_FRACTION * num_frames)))
+            want = band_frame(spec, num_frames) or max(
+                1, int(round(EVENT_FRACTION * num_frames)))
     occ = set(int(f) for f in (spec.notes.get("occluded_frames") or []))
     span = max(1, int(span))
 
@@ -954,6 +1202,25 @@ def unoccluded_event_frame(spec, num_frames: int, span: int,
             if 1 <= t < num_frames - 1 and clear(t):
                 return int(t)
     return int(want) if 1 <= want < num_frames - 1 else None
+
+
+def fully_hidden_behind_static(spec, centre, radius: float) -> bool:
+    """Is a body of `radius` at `centre` hidden ENTIRELY behind static boxes?
+
+    "Occluded" means fully occluded (CLAUDE.md): a few visible pixels make a
+    violation observable. The centre alone is not enough to say so -- a ball
+    whose middle has just passed behind a screen edge is still half on show,
+    and asking the centre only failed `occluder_pass`'s framing check on every
+    seed. So the centre and the four points of its silhouette across and up
+    the camera's view must all be hidden.
+    """
+    _, _, right, up = camera_basis(spec)
+    c = np.asarray(centre, np.float64)
+    r = float(radius)
+    for p in (c, c + right * r, c - right * r, c + up * r, c - up * r):
+        if not hidden_behind_static(spec, p):
+            return False
+    return True
 
 
 def hidden_behind_static(spec, point) -> bool:

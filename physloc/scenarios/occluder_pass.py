@@ -105,6 +105,31 @@ class OccluderPass(Scenario):
                    "occluded_frames": occ, "actor_kind": kind,
                    "occluder_id": self.SEG_SCREEN})
 
+    def finalise(self, spec: SceneSpec) -> None:
+        _finalise_occlusion(spec)
+
+
+def _finalise_occlusion(spec) -> None:
+    """The occluded interval, for the camera the clip is ACTUALLY filmed from.
+
+    `_sample` computes it from the hand-framed `CAMERA`, and `_vary` then swings
+    the camera up to 35 degrees round the aim point -- so the list every
+    observability label on this scenario is derived from described a different
+    shot. Measured on seed 3: the list was empty while the ball sat fully behind
+    the screen for nine frames of the rendered clip.
+
+    Read off the scene as it now stands, so it also holds at L3: the centre
+    height and the silhouette are the swapped body's, and anything that is not
+    a primitive sphere takes the conservative corner bound a cube does.
+    """
+    ball, screen = spec.body("ball"), spec.body("screen")
+    height = float(ball.centre[2])
+    round_ = ball.kind == "sphere"
+    silhouette = float(ball.bounding_radius) * (1.0 if round_ else math.sqrt(3.0))
+    spec.notes["occluded_frames"] = _occluded_frames(
+        spec.camera_position, ball, screen, spec.tier, height,
+        float(ball.centre[1]), silhouette)
+
 
 def _occluded_frames(cam, ball, screen, tier, radius, y_path,
                      silhouette_radius=None) -> List[int]:
@@ -142,8 +167,18 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path,
         ix = cx + s * (bx - cx)
         iz = cz + s * (bz - cz)
         r_proj = silhouette_radius * s     # the ball's silhouette at that plane
+        # Vertically, the body's real top and bottom rather than a disc of the
+        # conservative radius: nothing of it reaches below the floor it rolls
+        # on. The disc did, for a cube -- its corner bound hung under the slab,
+        # below the screen's bottom edge, so full occlusion was impossible and
+        # every cube seed declared no occluded frames while sitting squarely
+        # behind the screen.
+        low = max(bz - silhouette_radius, 0.0)
+        high = bz + silhouette_radius
+        iz_low = cz + s * (low - cz)
+        iz_high = cz + s * (high - cz)
         if (abs(ix - sx) <= hw - r_proj
-                and (sz - hh) + r_proj <= iz <= (sz + hh) - r_proj):
+                and (sz - hh) <= iz_low and iz_high <= (sz + hh)):
             out.append(f)
     return out
 

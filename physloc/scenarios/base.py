@@ -1764,7 +1764,8 @@ class Scenario:
 
     def sample(self, seed: int, tier: Tier,
                complexity: str = DEFAULT_COMPLEXITY,
-               variant: int = 0, n_variants: Optional[int] = None) -> SceneSpec:
+               variant: int = 0, n_variants: Optional[int] = None,
+               attempt: int = 0) -> SceneSpec:
         """Sample one instance, then vary how it looks. Do not override.
 
         Level 4 of the taxonomy is the *instance*, and two instances of one
@@ -1787,7 +1788,18 @@ class Scenario:
             raise NotImplementedError(
                 "complexity %s is scaffolded but not built yet; built: %s"
                 % (complexity, implemented_complexities()))
-        spec = self._sample(seed, tier, complexity)
+        # A FRAMING RETRY draws a different scene under the same identity.
+        # Attempt 0 is the scene this seed always produced, bit for bit; a later
+        # attempt salts every stream the scene is drawn from and is recorded, so
+        # the host can rebuild exactly the scene the worker accepted. See
+        # `framing_ok`.
+        attempt = int(attempt)
+        draw = int(seed) if attempt == 0 else int(
+            (int(seed) * 2654435761 + 0xF4A3 * attempt) % (2 ** 31 - 1))
+        spec = self._sample(draw, tier, complexity)
+        spec.seed = int(seed)
+        if attempt:
+            spec.notes["framing_attempt"] = attempt
         spec.variant = int(variant)
         spec.n_variants = None if n_variants is None else int(n_variants)
         # RESOLVED ONCE, here, and carried on the spec. Three gates and the
@@ -1797,8 +1809,46 @@ class Scenario:
         if self.scales_size:
             from . import _common as C
 
-            spec.notes["size_scale"] = C.size_scale(seed, self.name)
-        return _vary(spec, seed)
+            spec.notes["size_scale"] = C.size_scale(draw, self.name)
+        spec = _vary(spec, draw)
+        # AFTER `_vary`, which is where the camera finally stands. Anything a
+        # scenario worked out against its hand-framed camera has to be worked
+        # out again for this one.
+        self.finalise(spec)
+        return spec
+
+    def finalise(self, spec: SceneSpec) -> None:
+        """Re-derive what `_sample` staged against the hand-framed camera, now
+        that `_vary` has moved it. Nothing, by default; see `occluder_pass`."""
+        return None
+
+    def framing_ok(self, spec: SceneSpec, traj) -> bool:
+        """Do the actors stay on screen through the part of the clip events use?
+
+        Asked of the LAWFUL rollout, before anything is rendered, by the worker:
+        a scene whose actor rolls or bounces out of shot early leaves every
+        violation staged on it nothing to be seen in -- and the in-frame energy
+        drops to zero while the clip still claims something is happening. Such
+        a scene is resampled (`sample(attempt=k)`) rather than annotated.
+
+        From the start of `_geom.EVENT_BAND` to `FRAMING_MIN` of the clip, at
+        least `VISIBLE_SHARE` of the actors must be on screen on
+        `FRAMING_TOLERANCE` of the frames. The opening frames are exempt,
+        because `pour` releases its grains above the shot by design.
+        """
+        from ..injectors import _geom
+
+        T = int(traj.num_frames)
+        if not camera_clear_of_ground(spec, T):
+            return False
+        actors = [b for b in spec.bodies
+                  if b.role == "actor" and not b.dormant and not b.static]
+        if not actors:
+            return True
+        lo = int(round(_geom.EVENT_BAND[0] * T))
+        hi = max(lo + 1, int(round(FRAMING_MIN * T)))
+        on = _geom.culprits_on_screen(spec, traj, actors)[lo:hi]
+        return bool(on.size == 0 or on.mean() >= FRAMING_TOLERANCE)
 
     #: Whether this scenario's own size draws are multiplied by
     #: `_common.size_scale`. False only where size is bounded by something
@@ -1880,6 +1930,13 @@ class Scenario:
         # numpy 1.21 in the container and numpy 2.x on the host.
         return np.random.RandomState(seed)
 
+
+#: How far into the clip the actors must stay on screen -- see
+#: `Scenario.framing_ok` -- on what share of those frames, and how many scenes
+#: the worker draws before keeping the last one anyway.
+FRAMING_MIN = 0.60
+FRAMING_TOLERANCE = 0.90
+FRAMING_ATTEMPTS = 6
 
 _REGISTRY: Dict[str, Scenario] = {}
 

@@ -16,6 +16,7 @@ py3.9-compatible: runs inside the container.
 from __future__ import annotations
 
 import copy
+import functools
 import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -133,6 +134,33 @@ class Injector:
     """Base class. `family` must be a key in taxonomy.FAMILIES."""
 
     family: str = "unnamed"
+
+    #: Which draw of the event moment to use. 0 is the first; the worker bumps
+    #: it when the culprit would not stay on screen after the event, so the
+    #: retry fires at a different moment rather than failing the same way.
+    event_attempt: int = 0
+
+    def __init_subclass__(cls, **kwargs):
+        """Run every family's `plan` inside its own event context.
+
+        Event moments are drawn per (scene, family, attempt) -- see
+        `_geom.event_fraction` -- and the helpers that draw them sit several
+        calls below `plan`. Wrapping here keys all of them without threading a
+        family name through each, and without any family having to remember.
+        """
+        super().__init_subclass__(**kwargs)
+        fn = cls.__dict__.get("plan")
+        if fn is None or getattr(fn, "_event_keyed", False):
+            return
+
+        @functools.wraps(fn)
+        def plan(self, spec, *args, **kw):
+            traj = args[0] if args else kw.get("traj")
+            with _geom.event_context(self.family, self.event_attempt, traj):
+                return fn(self, spec, *args, **kw)
+
+        plan._event_keyed = True
+        cls.plan = plan
 
     #: Set by the caller to request a uniform violation duration, in frames.
     #: Honoured by `sustained` families; `instant` ones ignore it, because

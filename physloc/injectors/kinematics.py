@@ -33,7 +33,9 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     `drop` mid-bounce, and a parabola fitted across a bounce is not a
     parabola.
     """
-    occ = _geom.occluded_midpoint(spec)
+    # On the first attempt only -- a retry must be able to fire elsewhere; see
+    # `_geom.default_event_frame`.
+    occ = _geom.occluded_midpoint(spec) if _geom.event_attempt() == 0 else None
     if occ is not None and 1 <= occ < num_frames - 1:
         return int(occ)
     bi = traj.index_of(int(body.segmentation_id))
@@ -46,7 +48,8 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
         # every seed, so the family fired on frame `num_frames // 4` in every
         # clip it ever produced. `continuity` and `phantom_impulse` were pinned
         # that way across twelve scenarios each.
-        t = _geom.frame_in_band(spec, max(run[0] + 1, lo), run[1])
+        t = _geom.frame_in_band(spec, *_geom.visible_band(
+            spec, traj, [body], max(run[0] + 1, lo), run[1]))
         if 1 <= t < num_frames - 1:
             return int(t)
     # No airborne run at all -- a ball rolling the whole clip, a body at rest
@@ -955,7 +958,8 @@ class TimeSlip(Injector):
         # a body that emerges late -- which is not something a viewer can read
         # as a stall at all. You reported it as barely visible on
         # `occluder_pass`; this is why.
-        want = max(1, int(round(_geom.EVENT_FRACTION * T)))
+        want = _geom.band_frame(spec, T) or max(
+            1, int(round(_geom.EVENT_FRACTION * T)))
         occluded = set(int(f) for f in (spec.notes.get("occluded_frames") or []))
         order = _geom.actors(spec)
         primary = self._primary(spec)

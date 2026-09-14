@@ -498,9 +498,16 @@ class Fission(Injector):
         # happens where nobody can see it, and the clip reads as two objects
         # emerging from behind a screen one object went into. Which is
         # `permanence`'s picture, not this one's.
+        #
+        # With room to SEE it, too: twice the evidence span the worker requires
+        # after an event (`_geom.EVIDENCE_SECONDS`). A quarter-second lead was
+        # exactly that span, and the halves -- each smaller than the ball the
+        # occlusion was declared for -- slipped behind the screen a frame early,
+        # so on `occluder_pass` every seed's split was declined as unseen.
         occ_run = spec.notes.get("occluded_frames") or []
         if len(occ_run) >= 3:
-            t0 = max(1, int(occ_run[0]) - self._frames_for(spec, 0.25))
+            lead = self._frames_for(spec, 2.0 * _geom.EVIDENCE_SECONDS)
+            t0 = max(1, int(occ_run[0]) - lead)
         else:
             # And with room for the halves to actually part. Splitting on the
             # frame the body lands pins both halves under friction before they

@@ -13,6 +13,7 @@ object, same renderer, same seed -- only the replayed keyframes differ.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import sys
@@ -30,12 +31,27 @@ from kubric.simulator import PyBullet
 from physloc import injectors
 from physloc import taxonomy
 from physloc import scenarios
+from physloc.injectors import _geom
 from physloc.render import stepper
-from physloc.scenarios.base import SceneSpec, Tier
+from physloc.scenarios.base import FRAMING_ATTEMPTS, SceneSpec, Tier
 from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
 
 PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
           "normal", "object_coordinates")
+
+#: How many event moments a family is offered before a variant is given up
+#: because its culprit will not stay on screen after the event. Simulation is
+#: free at this scale, so a retry costs a rollout and nothing else.
+EVENT_ATTEMPTS = 4
+
+#: Families whose violation is the culprit going OUT OF SIGHT: it vanishes
+#: (`permanence`), fades (`dissolve`), sinks into the floor or through a wall
+#: (`solidity`), or is absorbed into another body (`fusion`). Their culprit
+#: leaves the picture on purpose, so whether it would have been on screen is
+#: asked of the lawful rollout instead of the invalid one. Measured on mock
+#: rollouts, asking the invalid one declined every seed of `barrier_pass` and
+#: `pyramid_impact` x solidity and of `collision` and `pour` x fusion.
+ABSENCE_FAMILIES = frozenset({"permanence", "dissolve", "solidity", "fusion"})
 
 
 # --------------------------------------------------------------------------
@@ -183,7 +199,15 @@ def _render_backend(renderer) -> dict:
     return chosen
 
 
-def build_scene(spec: SceneSpec, scratch):
+def build_scene(spec: SceneSpec, scratch, render: bool = True):
+    """The Kubric scene, its simulator and -- unless `render` is False -- its
+    renderer.
+
+    `render=False` builds the physics alone, for asking a question of the
+    lawful rollout before committing to a scene: the framing check. Blender is
+    brought up once per worker, for the scene that is actually rendered, rather
+    than once per candidate scene.
+    """
     scene = kb.Scene(
         resolution=(spec.tier.resolution, spec.tier.resolution),
         frame_start=0, frame_end=spec.tier.num_frames - 1,
@@ -191,16 +215,18 @@ def build_scene(spec: SceneSpec, scratch):
         gravity=spec.gravity,
     )
     simulator = PyBullet(scene, scratch)
-    renderer = Blender(scene, scratch, use_denoising=True,
-                       samples_per_pixel=spec.tier.samples_per_pixel,
-                       background_transparency=False)
-    spec.notes["render_backend"] = _render_backend(renderer)
+    renderer = None
+    if render:
+        renderer = Blender(scene, scratch, use_denoising=True,
+                           samples_per_pixel=spec.tier.samples_per_pixel,
+                           background_transparency=False)
+        spec.notes["render_backend"] = _render_backend(renderer)
     scene.background = kb.Color(*spec.background_color)
     scene.ambient_illumination = kb.Color(0.04, 0.04, 0.05)
 
     # --- complexity L1+: photographic environment lighting + a dome backdrop
     hdri_tex = None
-    if spec.hdri_id:
+    if spec.hdri_id and renderer is not None:
         hdri_src = kb.AssetSource.from_manifest(HDRI)
         hdri_tex = hdri_src.create(asset_id=spec.hdri_id)
         renderer._set_ambient_light_hdri(hdri_tex.filename)
@@ -299,7 +325,8 @@ def build_scene(spec: SceneSpec, scratch):
                 obj.material = kb.PrincipledBSDFMaterial(
                     color=kb.Color(*b.color), roughness=1.0, metallic=0.0,
                     specular=0.0)
-            _set_visibility(renderer, obj, b)
+            if renderer is not None:
+                _set_visibility(renderer, obj, b)
             objs[b.name] = obj
             continue
         else:
@@ -313,7 +340,8 @@ def build_scene(spec: SceneSpec, scratch):
             # uniform collision scale it was given. Only the renderer observes
             # `scale`, so this changes what is drawn and nothing else.
             obj.scale = tuple(float(x) for x in b.render_scale)
-        _set_visibility(renderer, obj, b)
+        if renderer is not None:
+            _set_visibility(renderer, obj, b)
         objs[b.name] = obj
 
     _disable_collisions(simulator, objs, spec)
@@ -788,6 +816,101 @@ def _announce(kind: str, tag: str) -> None:
 
 
 # --------------------------------------------------------------------------
+def _invalid_variant(spec, scenario, inj, sev, rng, traj_valid, simulator,
+                     scene, objs, scen_hooks) -> dict:
+    """Plan one variant, produce its invalid rollout, and check it can be seen.
+
+    Returns `{"ok": False, "error": ...}` when there is no clip to make, and
+    otherwise `{"ok": True, "plan", "traj", "visible"}` -- `visible` being
+    whether the culprits stay on screen after the event, which the caller uses
+    to decide whether to try another moment. Nothing is written here.
+    """
+    try:
+        plan = inj.plan(spec, traj_valid, rng, sev)
+    except Exception as exc:                               # noqa: BLE001
+        return {"ok": False, "error": "plan raised: %r" % (exc,)}
+    if plan is None:
+        return {"ok": False, "error": "injector produced no plan"}
+    # A SCRIPTED body is pinned in the simulator -- `sim_static`, mass
+    # zero -- and its motion arrives from the trajectory instead. So a
+    # staged intervention on one cannot move it: the world is reset to
+    # `t_event`, PyBullet is run forward, and the body simply sits
+    # there. Every `simulated` family on `pendulum_swing` shipped that
+    # way -- continuity, deformation, global_gravity, immutability and
+    # phantom_impulse all froze the bob mid-swing, which is five
+    # different labels on one picture of a stopped pendulum.
+    #
+    # The rule is the one CLAUDE.md already states: a family stages
+    # itself only where something in the simulator corresponds to what
+    # it changes. Nothing does, for a body the simulator does not move.
+    # Checked here rather than in each injector because it is a fact
+    # about the SCENE, and no injector should have to learn it.
+    # ...unless the injector says it will bring that body to life. See
+    # `Injector.revives`: `fission`'s understudy is scripted on purpose
+    # and its `stage` stands a dynamic proxy in its place, so the guard
+    # was disqualifying the one family built to pass it.
+    scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
+    scripted -= {int(i) for i in inj.revives(spec, plan)}
+    staged = (inj.simulates(plan)
+              and not scripted.intersection(plan.causal_body_ids))
+    if staged:
+        # Real physics from t_event: reset the world to the valid state,
+        # stage the intervention as something PyBullet honours, run
+        # forward, then undo the staging so the next variant starts
+        # clean. Frames before t_event come from the valid rollout
+        # verbatim, so prefix identity holds by construction.
+        try:
+            stepper.reset_to(spec, objs, traj_valid, plan.t_event)
+            hooks = tuple(inj.stage(spec, simulator, objs, plan)
+                          or ()) + scen_hooks
+            tail = stepper.run_from(simulator, scene, spec, objs,
+                                    plan.t_event, spec.tier.num_frames - 1,
+                                    hooks)
+            traj_invalid = stepper.splice(traj_valid, tail, plan.t_event)
+        finally:
+            inj.unstage(spec, simulator, objs, plan)
+            stepper.reset_to(spec, objs, traj_valid,
+                             spec.tier.num_frames - 1)
+        traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, plan)
+    else:
+        traj_invalid = inj.apply(spec, traj_valid, plan)
+
+    # The scenario's own driven bodies, re-derived from the trajectory
+    # the intervention actually produced. `shadow_track`'s cast shadow
+    # is a projection of the actor, so every family that moves, resizes
+    # or removes the actor moves, resizes or removes the shadow too --
+    # and before this ran, none of them did. See `Scenario.rescript`.
+    scenario.rescript(spec, traj_invalid, plan)
+
+    ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
+    if not ok:
+        return {"ok": False, "error": "trajectory prefix differs: %s" % why}
+
+    # Windows that can only be known from the finished trajectory --
+    # `solidity` ends when the bodies stop overlapping, not after a
+    # fixed number of frames. Runs before plan.json is written.
+    inj.refine_windows(spec, traj_valid, traj_invalid, plan)
+    return {"ok": True, "plan": plan, "traj": traj_invalid,
+            "visible": culprits_stay_visible(spec, inj.family, plan,
+                                             traj_valid, traj_invalid)}
+
+
+def culprits_stay_visible(spec, family, plan, traj_valid, traj_invalid) -> bool:
+    """Whether the plan's moving culprits stay on screen after its event.
+
+    Asked of the invalid rollout, so an intervention that throws its culprit out
+    of shot is caught -- except for `ABSENCE_FAMILIES`, whose culprit is meant
+    to disappear and is judged on where it would have been.
+    """
+    ids = {int(i) for i in plan.causal_body_ids}
+    bodies = [b for b in spec.bodies
+              if int(b.segmentation_id) in ids and not b.static]
+    if not bodies:
+        return True
+    traj = traj_valid if family in ABSENCE_FAMILIES else traj_invalid
+    return _geom.culprits_visible(spec, traj, bodies, plan.t_event)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="drop")
@@ -837,10 +960,6 @@ def main() -> int:
         from physloc import params as _params
 
         _params.apply(_params.read(a.params))
-    spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity,
-                                           variant=a.variant,
-                                           n_variants=a.n_variants)
-
     pair_uid = "%s/%04d" % (a.scenario, a.seed)
     outdir = os.path.join(a.outdir, a.scenario, "%04d" % a.seed)
     scratch = os.path.join(outdir, "_scratch")
@@ -852,19 +971,51 @@ def main() -> int:
     # One scene build, one HDRI load, one valid rollout -- shared by every
     # variant. At complexity L1 the environment costs ~4.6x an L0 render, so
     # re-paying it per severity was most of the wall clock.
+    scenario = scenarios.get(a.scenario)
+    # FRAMING BEFORE RENDERING. A scene whose actors roll or bounce out of shot
+    # early leaves every violation staged on it nothing to be seen in, so it is
+    # resampled -- a new scene under the same identity, recorded as
+    # `framing_attempt` so the host rebuilds this one -- until the lawful
+    # rollout keeps them on screen. The last attempt is kept regardless and
+    # flagged, rather than losing the seed. See `Scenario.framing_ok`.
+    #
+    # Each candidate is simulated WITHOUT a renderer: bringing Blender up once
+    # per candidate in one process is the one thing here that is not free, and
+    # a worker that did it stopped after its second rebuild. The accepted scene
+    # is then built once, renderer and all, and simulated again -- PyBullet is
+    # deterministic for identical inputs, and a rollout costs nothing at this
+    # scale.
+    framed = False
+    for attempt in range(FRAMING_ATTEMPTS):
+        spec = scenario.sample(a.seed, tier, a.complexity, variant=a.variant,
+                               n_variants=a.n_variants, attempt=attempt)
+        probe_scene, probe_sim, _, probe_objs = build_scene(spec, scratch,
+                                                            render=False)
+        probe = simulate(spec, probe_scene, probe_sim, probe_objs,
+                         tuple(scenario.sim_hooks(spec, probe_sim, probe_objs)
+                               or ()))
+        scenario.script(spec, probe)
+        framed = scenario.framing_ok(spec, probe)
+        del probe_scene, probe_sim, probe_objs, probe
+        gc.collect()
+        if framed or attempt == FRAMING_ATTEMPTS - 1:
+            break
+        print("framing: attempt %d of %s/%d leaves its actors off screen; "
+              "resampling" % (attempt, a.scenario, a.seed), file=sys.stderr)
+    spec.notes["framing_ok"] = bool(framed)
+
     scene, simulator, renderer, objs = build_scene(spec, scratch)
     # The scenario's own constraints, which must hold on the valid rollout and
     # on every invalid one -- a rope that is only inextensible after `t_event`
     # is not a rope.
-    scen_hooks = tuple(scenarios.get(a.scenario).sim_hooks(spec, simulator, objs)
-                       or ())
+    scen_hooks = tuple(scenario.sim_hooks(spec, simulator, objs) or ())
     traj_valid = simulate(spec, scene, simulator, objs, scen_hooks)
     # Bodies whose pose is drawn rather than solved -- `shadow_track`'s cast
     # shadow, which is not an object and has no dynamics to get right. A
     # CONSTRAINED scenario no longer comes through here: a pendulum is a real
     # body held by a real constraint (`sim_hooks`), so the simulator produces
     # its arc like any other.
-    scenarios.get(a.scenario).script(spec, traj_valid)
+    scenario.script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
     replay(spec, objs, traj_valid, renderer, scene)
@@ -882,7 +1033,12 @@ def main() -> int:
         bins = severities
         if meta is not None and not getattr(meta, "graded", True):
             bins = [severities[-1]] if severities else []
-        for sev in bins:
+        # STRONGEST BIN FIRST. It is the bin most likely to throw a culprit out
+        # of shot, so it decides which event moment this family uses; the other
+        # bins then reuse that moment, and the three magnitudes keep describing
+        # one violation.
+        attempt_used = None
+        for sev in bins[-1:] + bins[:-1]:
             tag = "%s/%s" % (family, sev)
             # The rng is seeded per (family, severity), not per run, so adding
             # a family to the list cannot change the clips the others produce.
@@ -892,8 +1048,7 @@ def main() -> int:
             # so `hash(tag)` made the same (scenario, seed, family, severity)
             # render a *different clip on every run*. Nothing in the test suite
             # noticed, because every check ran against a single generation.
-            rng = np.random.RandomState(
-                (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1))
+            rng_seed = (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1)
             # A LEVEL CAN REMOVE WHAT A FAMILY ACTS ON, and that is not a
             # failure. `colour_shift` has nothing to shift once actors are
             # scanned GSO assets: it declines here rather than producing a
@@ -907,81 +1062,36 @@ def main() -> int:
                                           % spec.complexity})
                 _announce("NOT_RENDERED", tag)
                 continue
-            try:
-                plan = inj.plan(spec, traj_valid, rng, sev)
-            except Exception as exc:                       # noqa: BLE001
-                variants.append({"family": family, "severity": sev, "ok": False,
-                                 "error": "plan raised: %r" % (exc,)})
-                _announce("NOT_RENDERED", tag)
-                continue
-            if plan is None:
-                variants.append({"family": family, "severity": sev, "ok": False,
-                                 "error": "injector produced no plan"})
-                _announce("NOT_RENDERED", tag)
-                continue
-            # A SCRIPTED body is pinned in the simulator -- `sim_static`, mass
-            # zero -- and its motion arrives from the trajectory instead. So a
-            # staged intervention on one cannot move it: the world is reset to
-            # `t_event`, PyBullet is run forward, and the body simply sits
-            # there. Every `simulated` family on `pendulum_swing` shipped that
-            # way -- continuity, deformation, global_gravity, immutability and
-            # phantom_impulse all froze the bob mid-swing, which is five
-            # different labels on one picture of a stopped pendulum.
-            #
-            # The rule is the one CLAUDE.md already states: a family stages
-            # itself only where something in the simulator corresponds to what
-            # it changes. Nothing does, for a body the simulator does not move.
-            # Checked here rather than in each injector because it is a fact
-            # about the SCENE, and no injector should have to learn it.
-            # ...unless the injector says it will bring that body to life. See
-            # `Injector.revives`: `fission`'s understudy is scripted on purpose
-            # and its `stage` stands a dynamic proxy in its place, so the guard
-            # was disqualifying the one family built to pass it.
-            scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
-            scripted -= {int(i) for i in inj.revives(spec, plan)}
-            staged = (inj.simulates(plan)
-                      and not scripted.intersection(plan.causal_body_ids))
-            if staged:
-                # Real physics from t_event: reset the world to the valid state,
-                # stage the intervention as something PyBullet honours, run
-                # forward, then undo the staging so the next variant starts
-                # clean. Frames before t_event come from the valid rollout
-                # verbatim, so prefix identity holds by construction.
+            # A VIOLATION NOBODY CAN SEE IS NOT RENDERED. Each event moment the
+            # family is offered is planned, simulated and checked for whether
+            # its culprits stay on screen after the event; the first that does
+            # is kept. The other bins take the strongest bin's moment directly.
+            tries = (range(EVENT_ATTEMPTS) if attempt_used is None
+                     else (attempt_used,))
+            made, any_ok, attempt = {}, False, 0
+            for attempt in tries:
+                inj.event_attempt = int(attempt)
                 try:
-                    stepper.reset_to(spec, objs, traj_valid, plan.t_event)
-                    hooks = tuple(inj.stage(spec, simulator, objs, plan)
-                                  or ()) + scen_hooks
-                    tail = stepper.run_from(simulator, scene, spec, objs,
-                                            plan.t_event, spec.tier.num_frames - 1,
-                                            hooks)
-                    traj_invalid = stepper.splice(traj_valid, tail, plan.t_event)
+                    made = _invalid_variant(spec, scenario, inj, sev,
+                                            np.random.RandomState(rng_seed),
+                                            traj_valid, simulator, scene, objs,
+                                            scen_hooks)
                 finally:
-                    inj.unstage(spec, simulator, objs, plan)
-                    stepper.reset_to(spec, objs, traj_valid,
-                                     spec.tier.num_frames - 1)
-                traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid,
-                                                 plan)
-            else:
-                traj_invalid = inj.apply(spec, traj_valid, plan)
-
-            # The scenario's own driven bodies, re-derived from the trajectory
-            # the intervention actually produced. `shadow_track`'s cast shadow
-            # is a projection of the actor, so every family that moves, resizes
-            # or removes the actor moves, resizes or removes the shadow too --
-            # and before this ran, none of them did. See `Scenario.rescript`.
-            scenarios.get(a.scenario).rescript(spec, traj_invalid, plan)
-
-            ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
-            if not ok:
+                    inj.event_attempt = 0
+                any_ok = any_ok or bool(made.get("ok"))
+                if made.get("visible"):
+                    break
+            if not made.get("visible"):
+                error = (made.get("error") if not any_ok else
+                         "culprit leaves the frame after t_event at every one "
+                         "of %d event moments" % len(tries))
                 variants.append({"family": family, "severity": sev, "ok": False,
-                                 "error": "trajectory prefix differs: %s" % why})
+                                 "error": error})
                 _announce("NOT_RENDERED", tag)
                 continue
-
-            # Windows that can only be known from the finished trajectory --
-            # `solidity` ends when the bodies stop overlapping, not after a
-            # fixed number of frames. Runs before plan.json is written.
-            inj.refine_windows(spec, traj_valid, traj_invalid, plan)
+            attempt_used = int(attempt)
+            plan, traj_invalid = made["plan"], made["traj"]
+            plan.notes["event_attempt"] = attempt_used
 
             vdir = os.path.join(outdir, "variants", "%s_%s" % (family, sev))
             os.makedirs(vdir, exist_ok=True)

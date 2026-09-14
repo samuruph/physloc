@@ -132,9 +132,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # variants, so re-sampling without it can reconstruct a static scene for a
     # clip that was rendered with a moving camera -- and every framing guard
     # and every camera field in `meta.json` would then describe the wrong shot.
+    # And the framing attempt: a scene the worker resampled because its actors
+    # left the frame is a different scene, and re-sampling attempt 0 here would
+    # annotate the one that was rejected.
     spec = scen_mod.get(scenario).sample(
         seed, tier, spec_d.get("complexity", {}).get("name", "L0"),
-        variant=int(spec_d.get("variant", 0)))
+        variant=int(spec_d.get("variant", 0)),
+        attempt=int((spec_d.get("notes") or {}).get("framing_attempt", 0)))
     inj = injectors.get(family)
 
     causal_ids: List[int] = [int(i) for i in plan_d["causal_body_ids"]]

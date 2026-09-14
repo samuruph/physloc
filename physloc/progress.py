@@ -146,7 +146,8 @@ class Progress:
     """
 
     def __init__(self, total: int, weights=None, desc="generate",
-                 stream=sys.stdout, use_bar=None, renders=None, log_path=None):
+                 stream=sys.stdout, use_bar=None, renders=None, log_path=None,
+                 frames_per_render=None):
         self.total = int(total)
         self.weights = list(weights) if weights else None
         self.total_weight = (float(sum(self.weights)) if self.weights
@@ -162,6 +163,14 @@ class Progress:
         self.renders_total = int(sum(self.renders)) if self.renders else 0
         self.renders_done = 0
         self._seen = defaultdict(int)       # renders done or dropped, per job
+        # FRAME MODE. A render is 61 frames and minutes of wall clock, so a bar
+        # counting renders sat still between them. Given the frames per render,
+        # the bar counts frames: finished renders in full, plus the frames of
+        # each render still in progress (`set_inflight`).
+        self.frames_per_render = (int(frames_per_render)
+                                  if frames_per_render and self.renders is not None
+                                  else None)
+        self._inflight = {}                 # frames of each job's current render
         self.running = set()
         self.waiting = set()                # queued, e.g. for memory
 
@@ -180,7 +189,8 @@ class Progress:
             try:
                 from tqdm import tqdm
                 self._bar = tqdm(total=self._bar_total(), desc=desc,
-                                 unit="render" if self.renders else "job",
+                                 unit=("frame" if self.frames_per_render
+                                       else "render" if self.renders else "job"),
                                  dynamic_ncols=True, file=stream,
                                  bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
                                             "[{elapsed}<{postfix}]")
@@ -193,7 +203,31 @@ class Progress:
 
     # ------------------------------------------------------------ internals
     def _bar_total(self) -> int:
+        if self.frames_per_render:
+            return self.renders_total * self.frames_per_render
         return self.renders_total if self.renders is not None else self.total
+
+    def frames_done(self) -> int:
+        """Frames of finished renders, plus frames of renders in progress."""
+        if not self.frames_per_render:
+            return 0
+        return (self.renders_done * self.frames_per_render
+                + sum(self._inflight.values()))
+
+    def _inflight_weight(self) -> float:
+        """The predicted cost already spent on renders still in progress."""
+        if not self.frames_per_render:
+            return 0.0
+        return sum(frames / float(self.frames_per_render)
+                   * self._weight_for(i) / self._renders_for(i)
+                   for i, frames in self._inflight.items())
+
+    def _postfix(self) -> str:
+        if self.frames_per_render:
+            return "renders %d/%d | eta %s" % (self.renders_done,
+                                               self.renders_total,
+                                               _fmt(self.eta()))
+        return "eta %s" % _fmt(self.eta())
 
     def _weight_for(self, i: int) -> float:
         """The predicted cost of job `i`, with a sane answer past the end.
@@ -233,7 +267,9 @@ class Progress:
     def _refresh_bar(self) -> None:
         if self._bar is not None:
             self._bar.total = self._bar_total()
-            self._bar.set_postfix_str("eta %s" % _fmt(self.eta()), refresh=False)
+            if self.frames_per_render:
+                self._bar.n = self.frames_done()
+            self._bar.set_postfix_str(self._postfix(), refresh=False)
             self._bar.refresh()
 
     # ----------------------------------------------------------- the API
@@ -276,16 +312,33 @@ class Progress:
     def render_done(self, index: int) -> None:
         """One render of job `index` finished: its share of the job's cost is done."""
         with self._lock:
+            self._inflight.pop(index, None)
             self.done_weight += self._weight_for(index) / self._renders_for(index)
             self.renders_done += 1
             self._seen[index] += 1
             if self._bar is not None:
-                self._bar.set_postfix_str("eta %s" % _fmt(self.eta()), refresh=False)
-                self._bar.update(1)
+                if self.frames_per_render:
+                    self._refresh_bar()
+                else:
+                    self._bar.set_postfix_str(self._postfix(), refresh=False)
+                    self._bar.update(1)
+
+    def set_inflight(self, index: int, frames: int) -> None:
+        """Job `index` has rendered `frames` frames of its current render so far."""
+        if not self.frames_per_render:
+            return
+        with self._lock:
+            frames = max(0, min(int(frames), self.frames_per_render))
+            if frames:
+                self._inflight[index] = frames
+            else:
+                self._inflight.pop(index, None)
+            self._refresh_bar()
 
     def render_dropped(self, index: int) -> None:
         """A planned render of job `index` will not happen: it leaves the total."""
         with self._lock:
+            self._inflight.pop(index, None)
             self._drop(index, 1)
             self._refresh_bar()
 
@@ -301,14 +354,17 @@ class Progress:
     def eta(self) -> float:
         """Seconds remaining, by predicted work rather than by count."""
         elapsed = time.perf_counter() - self.t0
-        if self.done_weight <= 0 or elapsed <= 0:
+        done = self.done_weight + self._inflight_weight()
+        if done <= 0 or elapsed <= 0:
             return float("nan")
-        rate = self.done_weight / elapsed          # predicted-seconds per second
-        return max(0.0, self.total_weight - self.done_weight) / rate
+        rate = done / elapsed                      # predicted-seconds per second
+        return max(0.0, self.total_weight - done) / rate
 
     def status_line(self) -> str:
         with self._lock:
             parts = []
+            if self.frames_per_render:
+                parts.append("frames %d/%d" % (self.frames_done(), self._bar_total()))
             if self.renders is not None:
                 parts.append("renders %d/%d" % (self.renders_done, self.renders_total))
             jobs = "jobs %d/%d done, %d running" % (self.n, self.total,
@@ -334,6 +390,7 @@ class Progress:
                 index = self.n - 1
             self.running.discard(index)
             self.waiting.discard(index)
+            self._inflight.pop(index, None)
             if self.renders is not None:
                 # Renders the worker never reported -- it died, or declined
                 # without saying -- are not coming.
@@ -346,6 +403,8 @@ class Progress:
             line = ("  [%d/%d] %-46s %s  elapsed %s  eta %s"
                     % (self.n, self.total, label, "ok" if ok else "FAILED",
                        _fmt(elapsed), _fmt(eta)))
+            if self.frames_per_render:
+                line += "  frames %d/%d" % (self.frames_done(), self._bar_total())
             if self.renders is not None:
                 line += "  renders %d/%d" % (self.renders_done, self.renders_total)
             self._log_line(line)

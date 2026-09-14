@@ -176,6 +176,34 @@ def _longest_first(jobs, tier, n_bins):
     return sorted(jobs, key=key)
 
 
+#: How often `generate` counts the frames of the renders in progress.
+FRAME_POLL_SECONDS = 5.0
+
+
+def _frames_since(exr_dir, since) -> int:
+    """Frames the render in progress has written: EXRs modified since `since`.
+
+    Kubric writes one EXR per finished frame into the job's scratch folder, and
+    the job's next render overwrites the same names -- so a file older than the
+    moment the current render began belongs to a render already counted.
+    """
+    try:
+        entries = os.scandir(exr_dir)
+    except OSError:
+        return 0
+    n = 0
+    with entries:
+        for entry in entries:
+            if not entry.name.endswith(".exr"):
+                continue
+            try:
+                if entry.stat().st_mtime >= since:
+                    n += 1
+            except OSError:
+                continue                    # replaced mid-scan by the next frame
+    return n
+
+
 def _kill_run_containers(run_id) -> int:
     """Kill every render container a run started; they carry its label."""
     try:
@@ -744,11 +772,16 @@ def cmd_generate(a) -> int:
     def run_one(job, index=0):
         seed, scenario, families, variant, level, n_v = job
 
-        # Each render the worker announces moves the bar the moment it lands.
+        # Each render the worker announces moves the bar the moment it lands,
+        # and starts the clock for counting the next render's frames. The clock
+        # moves BEFORE the bar does, so a frame count taken for the render that
+        # just finished can no longer be applied on top of it.
         def on_line(line):
             if line.startswith("PHYSLOC_RENDERED "):
+                _mark_render_boundary(index)
                 progress.render_done(index)
             elif line.startswith("PHYSLOC_NOT_RENDERED "):
+                _mark_render_boundary(index)
                 progress.render_dropped(index)
 
         # A level of its own in the work tree when the ladder is walked. Not
@@ -778,6 +811,10 @@ def cmd_generate(a) -> int:
         if workers > 1 and "PHYSLOC_CPUSET" not in env:
             launch_env = dict(env, PHYSLOC_THREADS=str(
                 _threads_for(progress.running_count(), n_cores)))
+        # Where this job's frames appear, for the frame count on the bar.
+        with frame_watch_lock:
+            frame_watch[index] = [os.path.join(here, scenario, "%04d" % seed,
+                                               "_scratch", "exr"), time.time()]
         try:
             with prof.timer("worker"):
                 rc, info = _run_worker(scenario, seed, tier, ",".join(families),
@@ -791,6 +828,8 @@ def cmd_generate(a) -> int:
                                        env=dict(launch_env, **container_cap),
                                        on_line=on_line)
         finally:
+            with frame_watch_lock:
+                frame_watch.pop(index, None)
             slots.put(env)
             memory.release(held)
         # The worker reports what Blender itself spent, per render. Recording
@@ -834,10 +873,41 @@ def cmd_generate(a) -> int:
     progress_log = os.path.join(rel, "progress.log")
     progress = Progress(len(jobs), weights=weights, renders=renders,
                         desc="generate %s" % (a.complexity or "L0"),
-                        log_path=progress_log)
+                        log_path=progress_log,
+                        frames_per_render=tier_obj.num_frames)
     print("  progress log: %s  (tail -f it from anywhere)" % progress_log,
           flush=True)
     progress.start_heartbeat(HEARTBEAT_SECONDS)
+
+    # FRAMES ON THE BAR. A render is a whole clip and minutes of wall clock, so
+    # a bar counting renders sat still between them. Every few seconds, count
+    # the EXRs each running job's current render has written. Host-side and
+    # read-only: the container is not asked to report anything new.
+    import threading as _threading
+
+    frame_watch = {}                    # job index -> [exr dir, render began]
+    frame_watch_lock = _threading.Lock()
+    frame_watch_stop = _threading.Event()
+
+    def _mark_render_boundary(index):
+        with frame_watch_lock:
+            if index in frame_watch:
+                frame_watch[index][1] = time.time()
+
+    def _watch_frames():
+        while not frame_watch_stop.wait(FRAME_POLL_SECONDS):
+            with frame_watch_lock:
+                watched = [(i, d, t) for i, (d, t) in frame_watch.items()]
+            for index, exr_dir, since in watched:
+                frames = _frames_since(exr_dir, since)
+                with frame_watch_lock:
+                    current = frame_watch.get(index)
+                    if current is None or current[1] != since:
+                        continue            # that render finished meanwhile
+                progress.set_inflight(index, frames)
+
+    _threading.Thread(target=_watch_frames, name="frame-watch",
+                      daemon=True).start()
 
     def run_and_report(job, index):
         label = lambda o: "%-16s seed=%-6d %-3s" % (o["scenario"], o["seed"],
@@ -975,6 +1045,7 @@ def cmd_generate(a) -> int:
 
     # The bar owns the terminal until here; the ordered summary below must not
     # be interleaved with a redraw, so close it before anything else prints.
+    frame_watch_stop.set()
     progress.close()
     prof.report(workers=workers)
     restore_signals()

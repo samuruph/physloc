@@ -7,6 +7,7 @@ property that makes that possible: a ladder's cheap levels must not be
 extrapolated onto its expensive ones.
 """
 import io
+import os
 import time
 
 from physloc.progress import Profile, Progress, _fmt, job_weight
@@ -188,6 +189,56 @@ def test_a_job_waiting_for_memory_is_not_counted_as_running():
     p.render_done(0)
     p.update("job0", index=0)
     assert "0 running" in p.status_line()
+
+
+def test_the_bar_counts_frames_when_it_knows_the_clip_length():
+    p = Progress(2, weights=[10.0, 30.0], renders=[2, 3], stream=_sink(),
+                 use_bar=False, frames_per_render=61)
+    assert p._bar_total() == 5 * 61
+    p.set_inflight(0, 20)
+    assert p.frames_done() == 20
+    p.render_done(0)                         # the render's frames count in full,
+    assert p.frames_done() == 61             # and its in-progress count clears
+    p.set_inflight(1, 999)                   # never more than one clip's worth
+    assert p.frames_done() == 61 + 61
+
+
+def test_frames_in_progress_move_the_eta_before_any_render_finishes():
+    p = Progress(1, weights=[61.0], renders=[1], stream=_sink(), use_bar=False,
+                 frames_per_render=61)
+    p.t0 = p.t0 - 10.0
+    assert p.eta() != p.eta()                # nan: nothing done yet
+    p.set_inflight(0, 30)                    # 30 of 61 frames in ~10 s
+    assert 8.0 < p.eta() < 13.0
+
+
+def test_a_dropped_render_takes_its_frames_off_the_total():
+    p = Progress(1, weights=[30.0], renders=[3], stream=_sink(), use_bar=False,
+                 frames_per_render=61)
+    p.render_dropped(0)
+    assert p._bar_total() == 2 * 61
+
+
+def test_status_line_reports_frames_renders_and_jobs():
+    p = Progress(2, weights=[1.0, 1.0], renders=[2, 2], stream=_sink(),
+                 use_bar=False, frames_per_render=61)
+    p.job_started(0)
+    p.set_inflight(0, 7)
+    status = p.status_line()
+    assert "frames 7/244" in status and "renders 0/4" in status and "jobs 0/2" in status
+
+
+def test_frames_since_counts_only_the_current_render(tmp_path):
+    from physloc import cli
+
+    for i in range(5):
+        (tmp_path / ("frame_%04d.exr" % i)).write_bytes(b"x")
+    old = time.time() - 100
+    for i in range(3):                       # three left over from the last render
+        os.utime(tmp_path / ("frame_%04d.exr" % i), (old, old))
+    (tmp_path / "frame_0000.png").write_bytes(b"x")
+    assert cli._frames_since(str(tmp_path), time.time() - 50) == 2
+    assert cli._frames_since(str(tmp_path / "missing"), 0) == 0
 
 
 def test_heartbeat_prints_the_status_line():

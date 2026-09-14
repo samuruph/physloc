@@ -613,18 +613,22 @@ python -m physloc.cli taxonomy --config v0_release
 
 ### Following a run
 
-- **The progress bar** counts renders, so it moves every few seconds, and shows a weighted ETA
-  once the first renders finish:
+- **The progress bar** counts frames — every frame of every clip — so it moves steadily, and its
+  label keeps the finished clips (renders) and a weighted ETA:
 
   ```
-  generate all:  12%|███▏                      | 1227/10220 [5h 14m<eta 1d 14h]
+  generate all:  12%|███▏                  | 74847/623420 [5h 14m<renders 1227/10220 | eta 1d 14h]
   ```
 
-- **A status line every five minutes** appears above the bar:
+- **A status line every five minutes** appears above the bar, with frames, renders and jobs:
 
   ```
-    status: renders 1227/10220 | jobs 18/260 done, 96 running | elapsed 5h 14m | eta 1d 14h
+    status: frames 74847/623420 | renders 1227/10220 | jobs 18/260 done, 84 running, 12 waiting for memory | elapsed 5h 14m | eta 1d 14h
   ```
+
+  A *job* is one container rendering one scenario at one level and variant — its valid clip and
+  every family at every severity, one after another; a *render* is one clip; a frame is one of
+  its 61 images.
 
 - **`out/physloc_v0/progress.log`** records every finished job and every status line with a
   timestamp. Follow it from any terminal, whether or not the tmux session is attached:

@@ -31,7 +31,8 @@ from kubric.simulator import PyBullet
 from physloc import injectors
 from physloc import taxonomy
 from physloc import scenarios
-from physloc.injectors import _geom
+from physloc.injectors import _geom, multi
+from physloc.injectors.base import InterventionPlan
 from physloc.render import stepper
 from physloc.scenarios.base import FRAMING_ATTEMPTS, SceneSpec, Tier
 from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
@@ -816,7 +817,7 @@ def _announce(kind: str, tag: str) -> None:
 
 
 # --------------------------------------------------------------------------
-def _invalid_variant(spec, scenario, inj, sev, rng, traj_valid, simulator,
+def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
                      scene, objs, scen_hooks) -> dict:
     """Plan one variant, produce its invalid rollout, and check it can be seen.
 
@@ -824,9 +825,22 @@ def _invalid_variant(spec, scenario, inj, sev, rng, traj_valid, simulator,
     otherwise `{"ok": True, "plan", "traj", "visible"}` -- `visible` being
     whether the culprits stay on screen after the event, which the caller uses
     to decide whether to try another moment. Nothing is written here.
+
+    A `multi` clip may plan each culprit on its own clock (`injectors.multi`);
+    those culprits are then staged at their own frames in one simulation
+    (`stepper.run_segments`) and the plans merged, so `plan.culprits` says when
+    each one broke the law.
     """
+    def is_staged(p) -> bool:
+        scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
+        scripted -= {int(i) for i in inj.revives(spec, p)}
+        return bool(inj.simulates(p)
+                    and not scripted.intersection(p.causal_body_ids))
+
     try:
-        plan = inj.plan(spec, traj_valid, rng, sev)
+        plan, subs = multi.culprit_plans(
+            inj, spec, traj_valid, lambda: np.random.RandomState(rng_seed), sev,
+            is_staged)
     except Exception as exc:                               # noqa: BLE001
         return {"ok": False, "error": "plan raised: %r" % (exc,)}
     if plan is None:
@@ -849,11 +863,27 @@ def _invalid_variant(spec, scenario, inj, sev, rng, traj_valid, simulator,
     # `Injector.revives`: `fission`'s understudy is scripted on purpose
     # and its `stage` stands a dynamic proxy in its place, so the guard
     # was disqualifying the one family built to pass it.
-    scripted = {int(b.segmentation_id) for b in spec.bodies if b.scripted}
-    scripted -= {int(i) for i in inj.revives(spec, plan)}
-    staged = (inj.simulates(plan)
-              and not scripted.intersection(plan.causal_body_ids))
-    if staged:
+    staged = is_staged(plan)
+    if subs:
+        # EACH CULPRIT AT ITS OWN FRAME, in one simulation: the world is reset
+        # to the valid state at the earliest moment, and every later culprit's
+        # intervention is staged on the world as the earlier ones left it.
+        ordered = multi.by_moment(subs)
+        T = spec.tier.num_frames
+        try:
+            first, tail = stepper.run_segments(
+                simulator, scene, spec, objs, traj_valid,
+                [(s.t_event, (lambda s=s: inj.stage(spec, simulator, objs, s)))
+                 for s in ordered],
+                T - 1, scen_hooks)
+            traj_invalid = stepper.splice(traj_valid, tail, first)
+        finally:
+            for s in reversed(ordered):
+                inj.unstage(spec, simulator, objs, s)
+            stepper.reset_to(spec, objs, traj_valid, T - 1)
+        for s in ordered:
+            traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, s)
+    elif staged:
         # Real physics from t_event: reset the world to the valid state,
         # stage the intervention as something PyBullet honours, run
         # forward, then undo the staging so the next variant starts
@@ -889,7 +919,14 @@ def _invalid_variant(spec, scenario, inj, sev, rng, traj_valid, simulator,
     # Windows that can only be known from the finished trajectory --
     # `solidity` ends when the bodies stop overlapping, not after a
     # fixed number of frames. Runs before plan.json is written.
-    inj.refine_windows(spec, traj_valid, traj_invalid, plan)
+    if subs:
+        for s in subs:
+            inj.refine_windows(spec, traj_valid, traj_invalid, s)
+        timing = plan.notes.get("culprit_timing")
+        plan = InterventionPlan.merge(subs, [c.body_id for c in plan.culprits])
+        plan.notes["culprit_timing"] = timing
+    else:
+        inj.refine_windows(spec, traj_valid, traj_invalid, plan)
     return {"ok": True, "plan": plan, "traj": traj_invalid,
             "visible": culprits_stay_visible(spec, inj.family, plan,
                                              traj_valid, traj_invalid)}
@@ -902,12 +939,20 @@ def culprits_stay_visible(spec, family, plan, traj_valid, traj_invalid) -> bool:
     of shot is caught -- except for `ABSENCE_FAMILIES`, whose culprit is meant
     to disappear and is judged on where it would have been.
     """
+    traj = traj_valid if family in ABSENCE_FAMILIES else traj_invalid
+    by_id = {int(b.segmentation_id): b for b in spec.bodies}
+    if plan.culprits:
+        # Each culprit from ITS OWN moment: a culprit that fires late must not
+        # be judged on the frames before it did anything.
+        return all(_geom.culprits_visible(spec, traj, [by_id[c.body_id]],
+                                          c.t_event)
+                   for c in plan.culprits
+                   if c.body_id in by_id and not by_id[c.body_id].static)
     ids = {int(i) for i in plan.causal_body_ids}
     bodies = [b for b in spec.bodies
               if int(b.segmentation_id) in ids and not b.static]
     if not bodies:
         return True
-    traj = traj_valid if family in ABSENCE_FAMILIES else traj_invalid
     return _geom.culprits_visible(spec, traj, bodies, plan.t_event)
 
 
@@ -1072,8 +1117,7 @@ def main() -> int:
             for attempt in tries:
                 inj.event_attempt = int(attempt)
                 try:
-                    made = _invalid_variant(spec, scenario, inj, sev,
-                                            np.random.RandomState(rng_seed),
+                    made = _invalid_variant(spec, scenario, inj, sev, rng_seed,
                                             traj_valid, simulator, scene, objs,
                                             scen_hooks)
                 finally:

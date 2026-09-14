@@ -199,6 +199,23 @@ def event_context(family: str, attempt: int = 0, traj=None):
         _EVENT_KEY.reset(token)
 
 
+#: The culprit the current event draw is for, when a `multi` clip plans each
+#: culprit separately (`injectors.multi`). Read by `event_fraction` whenever a
+#: helper does not name a body itself, so every draw inside that culprit's plan
+#: is its own.
+_CULPRIT = contextvars.ContextVar("physloc_event_culprit", default=None)
+
+
+@contextlib.contextmanager
+def culprit_context(body_id: Optional[int]):
+    """Key every event draw inside the block on `body_id` as well."""
+    token = _CULPRIT.set(None if body_id is None else int(body_id))
+    try:
+        yield
+    finally:
+        _CULPRIT.reset(token)
+
+
 def motion_limit(spec) -> Optional[int]:
     """The latest frame a MOTION family may fire on, or None for no limit.
 
@@ -246,6 +263,8 @@ def event_fraction(spec, body_id: Optional[int] = None) -> float:
     physics draw.
     """
     family, attempt, _ = _EVENT_KEY.get()
+    if body_id is None:
+        body_id = _CULPRIT.get()
     key = (int(spec.seed) * 2654435761 + 0x51ED
            + zlib.crc32(family.encode()) + 7919 * int(attempt)
            + (0 if body_id is None else 104729 * (int(body_id) + 1)))

@@ -56,6 +56,10 @@ DEFAULTS: Dict[str, Any] = {
         # left lawful, so there is something to contrast against.
         "multi_culprits_min": 2,
         "multi_lawful_min": 1,
+        # `multi`: the share of clips whose culprits all violate at ONE
+        # moment. The rest give each culprit a moment of its own, so both
+        # simultaneous and staggered violations are represented and countable.
+        "multi_sync_share": 0.25,
         # One multiplier per scene on every scenario's own size draw, so the
         # same scenario is staged small in one clip and large in the next.
         # `pour` is exempt: its grain radius is bounded by the residual laws.
@@ -202,6 +206,9 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     B.MULTI_ACTORS = B.EXTRA_OBJECTS
     B.MULTI_CULPRIT_RANGE = (int(o["multi_culprits_min"]),
                              int(o["multi_lawful_min"]))
+    from .injectors import multi as MU
+
+    MU.MULTI_SYNC_SHARE = float(o["multi_sync_share"])
     C.SIZE_SCALE = tuple(float(x) for x in o["size_scale"])
     C.DISTRACTOR_SIZE = tuple(o["distractor_size"])
     C.DISTRACTOR_SPEED = tuple(o["distractor_speed"])

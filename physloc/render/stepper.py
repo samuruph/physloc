@@ -123,7 +123,7 @@ def pybullet_index(simulator, objs, spec, seg_id: int):
 
 
 def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
-             hooks: Sequence[Hook] = ()) -> Dict[str, np.ndarray]:
+             hooks: Sequence[Hook] = (), fresh: bool = True) -> Dict[str, np.ndarray]:
     """Simulate frames `t0..t_end` inclusive from the client's current state.
 
     Returns per-frame poses and the contacts actually detected, with contact
@@ -131,6 +131,12 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
     same correction `worker.simulate` makes, and for the same reason: one row
     per substep collapsed onto one integer frame inflates a resting body's
     contact force twentyfold.
+
+    `fresh` says the world was just `reset_to` a frame, so the contact manifold
+    PyBullet holds belongs to some other run and step 0 must not read it. A
+    segment that continues the run before it (`run_segments`) passes False:
+    its manifold is its own previous substep, and skipping it would drop a
+    frame's worth of contacts at every culprit's moment.
     """
     # The INSTALLED Kubric (2022.4.1) keeps a bare connection id in
     # `physics_client` and calls the `pybullet` module directly; the newer
@@ -183,7 +189,7 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
         # on the floor, and `laws.angular_momentum` gates out every frame within
         # one of a contact -- which is exactly the frame the spin changes on. The
         # residual came out identically zero and the severity map with it.
-        for contact in (pc.getContactPoints() if step else ()):
+        for contact in (pc.getContactPoints() if (step or not fresh) else ()):
             (_flag, body_a, body_b, _la, _lb, _pa, position_b, normal_b,
              _dist, normal_force, *_rest) = contact
             if normal_force <= 1e-6:
@@ -226,6 +232,51 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
                            else np.zeros((0, 3), np.float32)),
         "contact_impulse": np.asarray(ci, np.float32),
     }
+
+
+def _offset_hook(hook: Hook, steps: int) -> Hook:
+    """`hook` as seen from a segment that starts `steps` substeps after the
+    hook was staged, so its own notion of elapsed time keeps counting."""
+    if not steps:
+        return hook
+    return lambda pc, step, frame: hook(pc, step + steps, frame)
+
+
+def run_segments(simulator, scene, spec, objs, traj_valid,
+                 stages: Sequence[Tuple[int, Callable[[], Sequence[Hook]]]],
+                 t_end: int, base_hooks: Sequence[Hook] = ()
+                 ) -> Tuple[int, Dict[str, np.ndarray]]:
+    """One simulation in which interventions start at DIFFERENT frames.
+
+    `stages` is `[(frame, stage_fn), ...]`; each `stage_fn()` applies one
+    intervention to the live world and returns its hooks, and is called with
+    the world at that frame. The world is reset to the valid state at the
+    earliest frame only -- later stages act on the world as the earlier ones
+    left it, which is the point: a culprit that fires second fires in a scene
+    the first one may already have changed.
+
+    Returns `(first_frame, tail)`, the tail being `run_from`'s dictionary for
+    `first_frame..t_end`, ready for `splice`. Undoing the stages is the
+    caller's, exactly as it is for a single staged plan.
+    """
+    if not stages:
+        raise ValueError("run_segments needs at least one stage")
+    spf = steps_per_frame(scene)
+    starts = sorted({int(t) for t, _ in stages})
+    first = starts[0]
+    reset_to(spec, objs, traj_valid, first)
+    live: List[Tuple[int, Hook]] = [(first, h) for h in base_hooks]
+    tails: List[Dict[str, np.ndarray]] = []
+    for k, t in enumerate(starts):
+        for when, stage_fn in stages:
+            if int(when) == t:
+                live.extend((t, h) for h in (stage_fn() or ()))
+        end = starts[k + 1] - 1 if k + 1 < len(starts) else int(t_end)
+        hooks = tuple(_offset_hook(h, (t - since) * spf) for since, h in live)
+        tails.append(run_from(simulator, scene, spec, objs, t, end, hooks,
+                              fresh=(k == 0)))
+    return first, {key: np.concatenate([tl[key] for tl in tails], axis=0)
+                   for key in tails[0]}
 
 
 def splice(traj_valid, tail: Dict[str, np.ndarray], t0: int):

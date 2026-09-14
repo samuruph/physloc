@@ -27,6 +27,46 @@ from ..sim.trajectory import Trajectory
 from . import _geom
 
 
+def _union_windows(windows) -> List[Tuple[int, int]]:
+    """Inclusive windows, sorted and merged where they overlap or touch."""
+    out: List[Tuple[int, int]] = []
+    for s, e in sorted((int(a), int(b)) for a, b in windows):
+        if out and s <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+@dataclass
+class CulpritTiming:
+    """One culprit's own moment, windows and magnitude, in a plan with several.
+
+    Only a `multi` clip whose culprits were planned separately carries these --
+    see `injectors.multi`. Everything else has one moment for all its culprits
+    and leaves `InterventionPlan.culprits` unset.
+    """
+
+    body_id: int
+    t_event: int
+    windows: List[Tuple[int, int]]
+    intervention_windows: List[Tuple[int, int]]
+    consequence_windows: List[Tuple[int, int]]
+    magnitude: float
+    notes: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "body_id": int(self.body_id),
+            "t_event_frame": int(self.t_event),
+            "violation_windows": [list(w) for w in self.windows],
+            "intervention_windows": [list(w) for w in self.intervention_windows],
+            "consequence_windows": [list(w) for w in self.consequence_windows],
+            "magnitude": float(self.magnitude),
+            "notes": self.notes,
+        }
+
+
 @dataclass
 class InterventionPlan:
     """What we are about to do, decided before we do it."""
@@ -49,6 +89,9 @@ class InterventionPlan:
     #: When the scene differs from lawful AS A RESULT. Runs on after the
     #: intervention finishes, and for `permanence` never ends.
     consequence_windows: Optional[List[Tuple[int, int]]] = None
+    #: Each culprit on its own clock, when the plan was merged from per-culprit
+    #: plans (`merge`). None means every culprit shares this plan's timing.
+    culprits: Optional[List[CulpritTiming]] = None
 
     def __post_init__(self) -> None:
         # A family that says nothing declares an intervention that lasts the
@@ -108,8 +151,50 @@ class InterventionPlan:
             a[max(0, s):min(num_frames, e + 1)] = True
         return a
 
+    @classmethod
+    def merge(cls, subs: List["InterventionPlan"],
+              body_ids: List[int]) -> "InterventionPlan":
+        """One plan from per-culprit plans of one family -- see `injectors.multi`.
+
+        `body_ids[i]` is the culprit `subs[i]` acts on. The merged plan fires at
+        the earliest culprit's moment, its windows are the union of theirs, its
+        causal bodies are all of theirs in order, and `culprits` keeps each
+        one's own moment, windows, magnitude and notes. The first plan speaks
+        for the rest where there can be only one answer -- kind, unit, bin.
+        """
+        first = subs[0]
+        causal: List[int] = []
+        for s in subs:
+            for i in s.causal_body_ids:
+                if int(i) not in causal:
+                    causal.append(int(i))
+        culprits = [CulpritTiming(
+            body_id=int(bid), t_event=int(s.t_event),
+            windows=[tuple(w) for w in s.windows],
+            intervention_windows=[tuple(w) for w in s.intervention_windows],
+            consequence_windows=[tuple(w) for w in s.consequence_windows],
+            magnitude=float(s.magnitude), notes=dict(s.notes))
+            for bid, s in zip(body_ids, subs)]
+        return cls(
+            family=first.family, kind=first.kind,
+            t_event=min(int(s.t_event) for s in subs),
+            windows=_union_windows(w for s in subs for w in s.windows),
+            causal_body_ids=causal,
+            params=dict(first.params, per_culprit=[dict(s.params) for s in subs]),
+            magnitude=float(first.magnitude), magnitude_unit=first.magnitude_unit,
+            severity_bin=first.severity_bin, spatial_extent=first.spatial_extent,
+            notes=dict(first.notes),
+            intervention_windows=_union_windows(
+                w for s in subs for w in s.intervention_windows),
+            consequence_windows=_union_windows(
+                w for s in subs for w in s.consequence_windows),
+            culprits=culprits)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "culprits": ([c.to_dict() for c in self.culprits]
+                         if self.culprits else None),
+            "culprit_timing": self.notes.get("culprit_timing"),
             "family": self.family, "kind": self.kind,
             "t_event_frame": self.t_event, "t_end_frame": self.t_end,
             "violation_windows": [list(w) for w in self.windows],

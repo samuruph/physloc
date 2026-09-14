@@ -37,20 +37,25 @@ class RollingRamp(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        # A LONGER RAMP, and a slightly gentler one. The block starts near the
-        # top now (see `start_along`), so the tilt comes down a little to keep
-        # the speed at the lip -- and with it the landing distance the camera
-        # has to take in -- close to what it was.
-        tilt = float(rng.uniform(0.36, 0.46))
+        # A LONGER RAMP, and a gentler one. The block starts near the top now
+        # (see `start_along`), so the tilt comes down to keep the speed at the
+        # lip -- and with it the landing distance the camera has to take in --
+        # close to what it was.
+        tilt = float(rng.uniform(0.30, 0.38))
         half_len, thick = 1.75, 0.08
         sin_t, cos_t = math.sin(tilt), math.cos(tilt)
         # The LIP height is the number that matters, so set it and derive the
-        # slab centre -- not the other way round. It fixes the drop off the end
-        # at ~5 frames at the debug tier (at 1.5 m the block was airborne for three, and
-        # the angular-momentum law excludes a frame either side of every
-        # contact, so the whole flight was gated away and the cell produced no
-        # plan at all) while keeping the ramp's top inside the shot.
-        lip_z = 1.15
+        # slab centre -- not the other way round. It sets how long the block is
+        # airborne after the lip, which is the only stretch `angular_momentum`
+        # can act in: its law excludes a frame either side of every contact.
+        #
+        # 1.15 m was enough while the block started a short way above the lip.
+        # Sliding the full longer ramp it leaves at ~3.9 m/s, already falling at
+        # ~2 m/s, and at 1.15 m it hit the floor within three frames at the
+        # debug tier -- every `rolling_ramp` x `angular_momentum` job declined,
+        # measured on seeds 777-781. A higher lip and the gentler tilt above
+        # (less of that speed pointing down) give the fall ~5-6 frames.
+        lip_z = 1.70
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
         half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.8))

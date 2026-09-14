@@ -939,8 +939,40 @@ def cmd_generate(a) -> int:
         progress.job_waiting(index)
         out = run_one(job, index)
         _ledger_save(job, out)
+        if out["rc"] != 0:
+            out["failure_log"] = _failure_save(job, out)
         progress.update(label(out), ok=out["rc"] == 0, index=index)
         return out
+
+    failure_dir = os.path.join(rel, "failures")
+
+    def _failure_save(job, outcome):
+        """Write why a job failed next to the release, and return the path.
+
+        The reason used to reach the terminal and nowhere else, capped at 400
+        characters in the end-of-run summary. The first v0 release run lost
+        every failure that way: its terminal went with the instance, and what
+        was left on disk was a progress log saying FAILED 176 times and nothing
+        about why. A job that fails now leaves its whole stderr tail -- or the
+        worker's own report, when it produced one -- in `failures/`, named like
+        its ledger entry, so a rerun of the same job overwrites it.
+        """
+        seed, scenario, families, variant, level, _n = job
+        path = os.path.join(failure_dir, "%s_%s_%d_v%d.log"
+                            % (level, scenario, seed, variant))
+        info = outcome.get("info")
+        body = (info.get("stderr") if isinstance(info, dict) and "stderr" in info
+                else json.dumps(info, indent=2, default=str))
+        try:
+            os.makedirs(failure_dir, exist_ok=True)
+            with open(path, "w") as fh:
+                fh.write("job: level=%s scenario=%s seed=%d variant=%d\n"
+                         "families: %s\nexit code: %s\nwhen: %s\n\n%s\n"
+                         % (level, scenario, seed, variant, ",".join(families),
+                            outcome.get("rc"), time.strftime("%F %T"), body))
+        except OSError:
+            return None
+        return path
 
     workers = _workers(getattr(a, "workers", 1) or 1)
     slots = _cpu_slots(workers)
@@ -1081,8 +1113,10 @@ def cmd_generate(a) -> int:
     for out in outcomes:
         scenario, seed = out["scenario"], out["seed"]
         if out["rc"] != 0:
-            print("worker failed for %s/%d: %s"
-                  % (scenario, seed, str(out["info"])[:400]), file=sys.stderr)
+            print("worker failed for %s/%d: %s%s"
+                  % (scenario, seed, str(out["info"])[:400],
+                     ("\n   full log: %s" % out["failure_log"])
+                     if out.get("failure_log") else ""), file=sys.stderr)
             failed.append((scenario, seed, "worker"))
             if not a.keep_going:
                 return out["rc"]
@@ -1404,8 +1438,10 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
         return (0, info) if info.get("ok") else (3, info)
     # Keep enough of the tail to contain the actual exception. 600 characters
     # cut the traceback off above the error line, which turned a diagnosable
-    # container failure into "something went wrong in a png reader".
-    return (proc.returncode or 4, {"stderr": "".join(err)[-4000:]})
+    # container failure into "something went wrong in a png reader" -- and
+    # Blender's own chatter after a crash can push the traceback out of 4000.
+    # The whole of it lands in `failures/`, so err on the side of keeping more.
+    return (proc.returncode or 4, {"stderr": "".join(err)[-40000:]})
 
 
 def _annotate(workdir, outroot, overlay=True, only=None):

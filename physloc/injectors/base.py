@@ -889,8 +889,42 @@ class Injector:
     #: strongest bin, which is what that looks like from the outside.
     FIT_LADDER = (1.0, 0.90, 0.80, 0.71, 0.63, 0.55, 0.48, 0.41, 0.34, 0.28)
 
+    #: Fits already made on this worker's scenes: {key: (result, spec, traj)}.
+    #: Class-level so every injector instance starts with its own on first
+    #: write -- see `_remember_fit`.
+    _fit_memo: Dict[tuple, tuple] = {}
+
+    #: How many fits a single injector keeps. One scene and one family need at
+    #: most a few (one per culprit of a `multi` clip), and the worker walks one
+    #: scene at a time.
+    FIT_MEMO_SIZE = 32
+
+    def _fit_key(self, kind, spec, traj, bodies, t0, tolerance, search, memo):
+        """The identity of a fit, or None when the caller did not name one.
+
+        The three severity bins of a cell all fit on the STRONGEST bin -- that
+        is what keeps them comparable -- so their fits are the same fit, and
+        each used to be recomputed from scratch. `memo` is the caller's name
+        for what `build` does (its knob and direction); the scene, trajectory,
+        bodies, frame, tolerance and search space complete the key. The spec
+        and trajectory are identified by object and kept alive in the entry,
+        so an id cannot be reused while its fit is remembered.
+        """
+        if memo is None:
+            return None
+        return (self.family, kind, id(spec), id(traj),
+                tuple(int(b.segmentation_id) for b in bodies), int(t0),
+                int(tolerance), tuple(search), _geom.event_attempt(), memo)
+
+    def _remember_fit(self, key, result, spec, traj) -> None:
+        if "_fit_memo" not in self.__dict__:
+            self._fit_memo = {}
+        if len(self._fit_memo) >= self.FIT_MEMO_SIZE:
+            self._fit_memo.pop(next(iter(self._fit_memo)))
+        self._fit_memo[key] = (result, spec, traj)
+
     def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
-                      build, tolerance: int = 1, ladder=None):
+                      build, tolerance: int = 1, ladder=None, memo=None):
         """Weaken `knob` until the culprit stays on screen, and return what stuck.
 
         The severity bins are chosen for visual legibility on a typical clip,
@@ -916,18 +950,47 @@ class Injector:
         # already lets the actor drift out of shot, weakening the intervention
         # cannot fix that, and clamping to the floor of the ladder would turn a
         # framing problem into a violation nobody can see.
-        ladder = self.FIT_LADDER if ladder is None else ladder
+        ladder = tuple(self.FIT_LADDER if ladder is None else ladder)
+        key = self._fit_key("scale", spec, traj, bodies, t0, tolerance,
+                            ladder, memo)
+        if key is not None and key in self._fit_memo:
+            return self._fit_memo[key][0]
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
-        candidate = None
-        for scale in ladder:
-            candidate = build(scale)
-            if self._offscreen_frames(spec, candidate, bodies, t0) <= budget:
-                return scale, candidate
-        return ladder[-1], candidate
+        built = {}
+
+        def fits(i: int) -> bool:
+            if i not in built:
+                built[i] = build(ladder[i])
+            return self._offscreen_frames(spec, built[i], bodies, t0) <= budget
+
+        # THE STRONGEST RUNG FIRST, then a bisection. Every rung is a full
+        # re-integration, and for a medium that is `_rewrite_group` over every
+        # grain: 175 s a rollout on `pour` at release geometry, so walking ten
+        # rungs for each of three bins was most of a job that never finished.
+        # A weaker push never carries a body further out of shot than a
+        # stronger one, so the first fitting rung is found in a handful of
+        # rollouts instead of up to ten.
+        if fits(0):
+            got = (ladder[0], built[0])
+        else:
+            lo, hi = 1, len(ladder) - 1          # the answer is in (0, hi]
+            if not fits(hi):
+                got = (ladder[hi], built[hi])
+            else:
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if fits(mid):
+                        hi = mid
+                    else:
+                        lo = mid + 1
+                got = (ladder[hi], built[hi])
+        if key is not None:
+            self._remember_fit(key, got, spec, traj)
+        return got
 
     def _fit_window_to_frame(self, spec, traj: Trajectory, bodies, t0: int,
                              n_win: int, build, tolerance: int = 1,
-                             floor: int = 3) -> int:
+                             floor: int = 3, memo=None) -> int:
         """Shorten a window until the culprit stays in shot, keeping its strength.
 
         The counterpart to `_fit_to_frame`, and the right one whenever the bin
@@ -942,11 +1005,39 @@ class Injector:
         degenerates into a step, losing the shape that makes `severity_map` a
         field rather than a flag.
         """
+        n_win, floor = int(n_win), int(floor)
+        key = self._fit_key("window", spec, traj, bodies, t0, tolerance,
+                            (n_win, floor), memo)
+        if key is not None and key in self._fit_memo:
+            return self._fit_memo[key][0]
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
-        for n in range(int(n_win), floor - 1, -1):
-            if self._offscreen_frames(spec, build(n), bodies, t0) <= budget:
-                return n
-        return floor
+
+        def fits(n: int) -> bool:
+            return self._offscreen_frames(spec, build(n), bodies, t0) <= budget
+
+        # THE REQUESTED WINDOW FIRST, then a bisection for the longest one that
+        # fits -- the same reasoning as `_fit_to_frame`. Walking down one frame
+        # at a time re-integrated `pour`'s 212 grains up to thirty times per
+        # bin, at 175 s each. A shorter pulse never carries a body further out
+        # of shot than a longer one, so bisection finds the same window.
+        if n_win <= floor:
+            got = floor
+        elif fits(n_win):
+            got = n_win
+        elif not fits(floor):
+            got = floor
+        else:
+            lo, hi = floor, n_win - 1              # lo fits, n_win does not
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if fits(mid):
+                    lo = mid
+                else:
+                    hi = mid - 1
+            got = lo
+        if key is not None:
+            self._remember_fit(key, got, spec, traj)
+        return got
 
     # ------------------------------------------------------------------ #
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
@@ -1069,6 +1160,20 @@ class Injector:
         h = traj.dt / float(substeps)
         pos = np.zeros((len(idx), n, 3), np.float64)
         vel = np.zeros((len(idx), n, 3), np.float64)
+        radii = np.asarray(rad, np.float64)
+        reach_all = radii[:, None] + radii[None, :]
+        # BROAD PHASE, vectorised. The pairwise pass below used to visit every
+        # pair on every substep in Python -- 22,366 pairs for `pour`'s 212
+        # grains, 24 substeps a frame, 33 million norm() calls and 175 s per
+        # rollout at release geometry, which a frustum fit then repeated tens
+        # of times per bin. Only pairs within a margin of touching can collide,
+        # so they are found with one distance matrix and resolved exactly as
+        # before, in the same (a, b) order. The margin is one of the largest
+        # radius: a pair apart by more than that cannot be pushed into contact
+        # by the pushes of earlier pairs in the same substep, each of which
+        # moves a body by at most half an overlap.
+        margin = float(radii.max()) if len(radii) else 0.0
+        upper = np.triu(np.ones((len(idx), len(idx)), bool), 1)
         for f in range(n):
             for k in range(substeps):
                 t = float(t0 - 1) + f + (k + 1) / float(substeps)
@@ -1082,23 +1187,28 @@ class Injector:
                         if abs(v[a][2]) < 0.05:
                             v[a][2] = 0.0
                     p[a], v[a] = obstacles.resolve(p[a], v[a], rad[a], rest[a], t)
-                for a in range(len(idx)):
-                    for b in range(a + 1, len(idx)):
-                        d = p[b] - p[a]
-                        dist = float(np.linalg.norm(d))
-                        reach = rad[a] + rad[b]
-                        if dist >= reach or dist < 1e-9:
-                            continue
-                        nrm = d / dist
-                        push = 0.5 * (reach - dist)
-                        p[a] -= nrm * push
-                        p[b] += nrm * push
-                        rel = float(np.dot(v[b] - v[a], nrm))
-                        if rel < 0.0:
-                            e = 0.5 * (rest[a] + rest[b])
-                            imp = -(1.0 + e) * rel * 0.5
-                            v[a] -= nrm * imp
-                            v[b] += nrm * imp
+                if len(idx) < 2:
+                    continue
+                P = np.asarray(p, np.float64)
+                gap = np.linalg.norm(P[None, :, :] - P[:, None, :], axis=2)
+                near = np.argwhere(upper & (gap < reach_all + margin))
+                for a, b in near:
+                    a, b = int(a), int(b)
+                    d = p[b] - p[a]
+                    dist = float(np.linalg.norm(d))
+                    reach = rad[a] + rad[b]
+                    if dist >= reach or dist < 1e-9:
+                        continue
+                    nrm = d / dist
+                    push = 0.5 * (reach - dist)
+                    p[a] -= nrm * push
+                    p[b] += nrm * push
+                    rel = float(np.dot(v[b] - v[a], nrm))
+                    if rel < 0.0:
+                        e = 0.5 * (rest[a] + rest[b])
+                        imp = -(1.0 + e) * rel * 0.5
+                        v[a] -= nrm * imp
+                        v[b] += nrm * imp
             for a in range(len(idx)):
                 pos[a, f] = p[a]
                 vel[a, f] = v[a]

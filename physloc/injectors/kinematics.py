@@ -181,7 +181,8 @@ class _GravityScale(Injector):
             spec, traj, targets, t0, n_want,
             lambda n: self._rollout(spec, traj, t0,
                                     min(traj.num_frames - 1, t0 + n - 1),
-                                    strongest, targets))
+                                    strongest, targets),
+            memo=("gravity_pulse", float(strongest)))
         t1 = min(traj.num_frames - 1, t0 + n_win - 1)
 
         return InterventionPlan(
@@ -439,7 +440,8 @@ class Continuity(Injector):
         strongest = direction * self.JUMP_RADII["strong"] * radius
         scale, _ = self._fit_to_frame(
             spec, traj, [actor], t0, strongest,
-            lambda k: self._teleport(traj, actor, t0, strongest * k))
+            lambda k: self._teleport(traj, actor, t0, strongest * k),
+            memo=("teleport",) + tuple(round(float(x), 9) for x in strongest))
         delta = nominal * scale
         # LAND IT CLEAR. A teleport is a claim about position and nothing else,
         # so the body must not arrive inside something: on `collision` it

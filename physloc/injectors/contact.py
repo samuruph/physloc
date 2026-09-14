@@ -1164,7 +1164,10 @@ class SuperElastic(Injector):
             spec, traj, targets, t0, excess,
             lambda k: self._boosted(spec, traj, targets, t0,
                                     1.0 + excess * k, normal),
-            tolerance=self.FRAME_TOLERANCE)
+            tolerance=self.FRAME_TOLERANCE,
+            memo=("bounce_gain", round(float(excess), 9))
+            + (tuple(round(float(x), 9) for x in np.ravel(normal))
+               if normal is not None else ()))
         gain = 1.0 + (self.GAIN_BY_BIN[severity_bin] - 1.0) * fit
         # Roll the boosted trajectory forward here so the windows can be the
         # frames energy is *actually* gained on, rather than a guess. `apply`

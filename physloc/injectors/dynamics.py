@@ -166,7 +166,9 @@ class PhantomImpulse(Injector):
             fit_bodies = [actor]
         scale, _ = self._fit_to_frame(
             spec, traj, fit_bodies, t0, strongest, build,
-            tolerance=self.FRAME_TOLERANCE)
+            tolerance=self.FRAME_TOLERANCE,
+            memo=("impulse", len(targets) > 1)
+            + tuple(round(float(x), 9) for x in np.ravel(strongest)))
         push = unit * self.DV_BY_BIN[severity_bin] * scale
         dv = float(np.linalg.norm(push))
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt

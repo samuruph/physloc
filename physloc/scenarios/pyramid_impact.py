@@ -33,7 +33,8 @@ class PyramidImpact(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        r = float(rng.uniform(0.26, 0.32))
+        size = C.size_scale(seed, self.name)
+        r = float(rng.uniform(0.26, 0.32)) * size
         hue = float(rng.uniform(0, 1))
         # Three spheres on an equilateral base, one nested in the dimple above.
         s = r * 1.02
@@ -54,7 +55,7 @@ class PyramidImpact(Scenario):
                               color=C.hue_rgb((hue + 0.39) % 1.0),
                               segmentation_id=self.SEG_BALLS[3], role="prop"))
 
-        half = float(rng.uniform(0.24, 0.30))
+        half = float(rng.uniform(0.24, 0.30)) * size
         drop = apex_z + r + half + float(rng.uniform(0.9, 1.4))
         cube = BodySpec(
             name="cube", kind="cube", position=(0.0, 0.0, drop),

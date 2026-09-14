@@ -56,6 +56,10 @@ DEFAULTS: Dict[str, Any] = {
         # left lawful, so there is something to contrast against.
         "multi_culprits_min": 2,
         "multi_lawful_min": 1,
+        # One multiplier per scene on every scenario's own size draw, so the
+        # same scenario is staged small in one clip and large in the next.
+        # `pour` is exempt: its grain radius is bounded by the residual laws.
+        "size_scale": [0.80, 1.35],
         # A distractor's size as a fraction of the actor's, how fast a MOVING
         # one goes as a fraction of the actor's speed, what share move at all,
         # and what share start airborne.
@@ -198,6 +202,7 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     B.MULTI_ACTORS = B.EXTRA_OBJECTS
     B.MULTI_CULPRIT_RANGE = (int(o["multi_culprits_min"]),
                              int(o["multi_lawful_min"]))
+    C.SIZE_SCALE = tuple(float(x) for x in o["size_scale"])
     C.DISTRACTOR_SIZE = tuple(o["distractor_size"])
     C.DISTRACTOR_SPEED = tuple(o["distractor_speed"])
     C.DISTRACTOR_MOVING = float(o["distractor_moving"])

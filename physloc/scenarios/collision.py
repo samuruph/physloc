@@ -52,7 +52,7 @@ class Collision(Scenario):
         # is that nothing in the image justifies that ratio. Give the balls
         # different sizes and "the big one is heavier" becomes a perfectly good
         # reading, and the family stops testing anything.
-        radius = float(rng.uniform(0.28, 0.36))
+        radius = float(rng.uniform(0.28, 0.36)) * C.size_scale(seed, self.name)
         r_a = r_b = radius
         hue = float(rng.uniform(0, 1))
         # One shared draw, not one each -- see the IDENTICAL comment above:

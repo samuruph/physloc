@@ -25,7 +25,7 @@ class StackTopple(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        half = float(rng.uniform(0.24, 0.30))
+        half = float(rng.uniform(0.24, 0.30)) * C.size_scale(seed, self.name)
         # Each block overhangs the one below by a fraction of its width. The
         # stack falls once the combined centre of mass of everything above the
         # base clears the base's support polygon, which for three blocks means

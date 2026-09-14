@@ -41,7 +41,7 @@ class ShadowTrack(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        r = float(rng.uniform(0.30, 0.40))
+        r = float(rng.uniform(0.30, 0.40)) * C.size_scale(seed, self.name)
         height = float(rng.uniform(1.0, 1.35))
         flight = tier.num_frames / float(tier.fps)
 

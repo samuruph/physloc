@@ -43,9 +43,13 @@ class RestingTable(Scenario):
                         segmentation_id=self.SEG_POST, role="prop")
 
         hue = float(rng.uniform(0, 1))
-        xs = [-0.85, 0.0, 0.85]
+        size = C.size_scale(seed, self.name)
+        # Spacing grows with the objects, or two large neighbours -- a box
+        # stretched by `vary_dims` next to another -- start interpenetrating.
+        gap = 0.85 * max(1.0, size)
+        xs = [-gap, 0.0, gap]
         rng.shuffle(xs)
-        r0 = float(rng.uniform(0.20, 0.26))
+        r0 = float(rng.uniform(0.20, 0.26)) * size
         actor_kind = "sphere" if rng.rand() < 0.6 else "cube"
         actor = BodySpec(name="mug", kind=actor_kind,
                          position=(xs[0], float(rng.uniform(-0.2, 0.2)), top_z + r0),
@@ -54,7 +58,7 @@ class RestingTable(Scenario):
                          role="actor")
         props = []
         for i in range(2):
-            h = float(rng.uniform(0.17, 0.23))
+            h = float(rng.uniform(0.17, 0.23)) * size
             kind = "cube" if i == 0 else "sphere"
             props.append(BodySpec(
                 name="prop_%d" % i, kind=kind,

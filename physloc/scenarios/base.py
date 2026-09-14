@@ -1662,7 +1662,16 @@ class Scenario:
         # metadata all need it, and deriving it separately in each was how the
         # scene and its label could have disagreed.
         spec.condition = condition_for(spec.variant, spec.n_variants, complexity)
+        if self.scales_size:
+            from . import _common as C
+
+            spec.notes["size_scale"] = C.size_scale(seed, self.name)
         return _vary(spec, seed)
+
+    #: Whether this scenario's own size draws are multiplied by
+    #: `_common.size_scale`. False only where size is bounded by something
+    #: other than taste -- `pour`'s grains, by the residual ladders.
+    scales_size: bool = True
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:

@@ -26,6 +26,9 @@ SEG_GRAIN_BASE = 16
 
 class Pour(Scenario):
     name = "pour"
+    # Grain radius is bounded by the residual ladders, not by taste -- see the
+    # `pour` notes in CLAUDE.md -- so the per-scene size knob leaves it alone.
+    scales_size = False
     SEG_FLOOR = 1
     SEG_WALLS = (3, 4, 5, 6)
 

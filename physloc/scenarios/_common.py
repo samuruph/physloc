@@ -196,6 +196,34 @@ def on_ramp(center, tilt: float, along: float, half_size: float,
     return tuple(float(center[i] + along * d[i] + lift * n[i]) for i in range(3))
 
 
+#: The band `size_scale` draws from. Set from `params.objects.size_scale`.
+SIZE_SCALE = (0.80, 1.35)
+
+
+def size_scale(seed: int, scenario: str) -> float:
+    """One multiplier on a scenario's own size draws, per SCENE.
+
+    Every scenario draws its actor's size from a narrow hand-tuned band, so
+    two clips of one scenario never differed by much more than a tenth in how
+    big the object was. This widens that without touching thirteen bands: the
+    scenario keeps its draw, and multiplies it by this.
+
+    Salted off the seed and the scenario name rather than drawn from the
+    physics stream, so the stream advances exactly as before and every other
+    physics value a scenario draws is unchanged. The same number is recorded in
+    `spec.notes["size_scale"]` by `Scenario.sample`.
+    """
+    import zlib
+
+    import numpy as np
+
+    lo, hi = (float(v) for v in SIZE_SCALE)
+    rng = np.random.RandomState(
+        (int(seed) * 2654435761 + 0x5123 + zlib.crc32(scenario.encode()))
+        % (2 ** 31 - 1))
+    return float(rng.uniform(lo, hi)) if hi > lo else lo
+
+
 def understudy(actor: BodySpec, seg_id: int) -> BodySpec:
     """A dormant duplicate of `actor`, parked out of the render until summoned.
 

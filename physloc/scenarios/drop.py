@@ -29,7 +29,7 @@ class Drop(Scenario):
         # out identical across every scenario on a given seed. Threading one
         # stream lets the draws advance.
         arng = C.appearance_rng(seed, self.name)
-        radius = float(rng.uniform(0.35, 0.55))
+        radius = float(rng.uniform(0.35, 0.55)) * C.size_scale(seed, self.name)
         drop_height = float(rng.uniform(2.4, 3.4))
         restitution = float(rng.uniform(0.55, 0.75))
         # A little lateral drift so the contact is not perfectly axis-aligned.

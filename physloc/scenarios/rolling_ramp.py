@@ -48,7 +48,7 @@ class RollingRamp(Scenario):
         # plan at all) while keeping the ramp's top inside the shot.
         lip_z = 1.15
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
-        half = float(rng.uniform(0.17, 0.22))
+        half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(1.9, 2.4))
         d, _ = C.ramp_axes(tilt)
         # Start close to the lip so the body leaves the slab a third of the way

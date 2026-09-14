@@ -39,7 +39,11 @@ class Toss(Scenario):
         # Airborne from the first frame to the last: the arc's duration is the
         # clip's, and everything else about the shot follows from it.
         flight = tier.num_frames / float(tier.fps)
-        f = cam.frame_flight(flight, angular_radius=float(rng.uniform(0.100, 0.120)))
+        # The size knob acts on the actor's share of the FRAME here, because
+        # the camera is derived from the arc and a bigger radius alone would
+        # just be framed from further away.
+        f = cam.frame_flight(flight, angular_radius=float(rng.uniform(0.100, 0.120))
+                             * C.size_scale(seed, self.name))
         camera_position, camera_look_at = cam.flight_camera(f)
 
         radius = f.radius

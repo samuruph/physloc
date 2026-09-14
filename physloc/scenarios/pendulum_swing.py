@@ -43,7 +43,7 @@ class PendulumSwing(Scenario):
         theta0 = float(rng.uniform(0.75, 1.0)) * float(rng.choice([-1.0, 1.0]))
         pivot = (0.0, 0.0, arm + float(rng.uniform(0.85, 1.05)))
         omega = math.sqrt(9.81 / arm)
-        r_bob = float(rng.uniform(0.20, 0.26))
+        r_bob = float(rng.uniform(0.20, 0.26)) * C.size_scale(seed, self.name)
 
         post = BodySpec(name="post", kind="cube",
                         position=(0.0, 0.28, pivot[2] / 2.0),

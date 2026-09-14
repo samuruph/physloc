@@ -42,7 +42,7 @@ class RampSlide(Scenario):
 
         half_len, thick = 1.35, 0.07
         centre = (0.0, 0.0, 0.95)
-        half = float(rng.uniform(0.18, 0.24))
+        half = float(rng.uniform(0.18, 0.24)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.7))
         d, _ = C.ramp_axes(tilt)
 

@@ -44,7 +44,8 @@ class OccluderPass(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        radius = float(rng.uniform(0.26, 0.36))
+        size = C.size_scale(seed, self.name)
+        radius = float(rng.uniform(0.26, 0.36)) * size
         # Derived from the frame -- see `collision`. This also fixes the
         # occluded *fraction* of the clip, which used to shrink as the tiers got
         # longer: the screen is a fixed width, so a ball that travels further
@@ -54,7 +55,9 @@ class OccluderPass(Scenario):
             CAMERA, LOOK_AT, tier.num_frames / float(tier.fps),
             fraction=float(rng.uniform(0.62, 0.74))))
         y_path = 0.55
-        half_w = float(rng.uniform(0.78, 1.02))
+        # The screen grows with the ball, so a larger ball is still FULLY
+        # hidden for as much of the pass as a small one.
+        half_w = float(rng.uniform(0.78, 1.02)) * max(1.0, size)
         screen_h = float(rng.uniform(1.05, 1.35))
         eye = CAMERA
 

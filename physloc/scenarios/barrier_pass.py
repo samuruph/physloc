@@ -55,7 +55,7 @@ class BarrierPass(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        radius = float(rng.uniform(0.24, 0.32))
+        radius = float(rng.uniform(0.24, 0.32)) * C.size_scale(seed, self.name)
         thickness = float(rng.uniform(0.07, 0.11))
         wall_x = float(rng.uniform(1.05, 1.35))
         wall_h = float(rng.uniform(0.62, 0.85))

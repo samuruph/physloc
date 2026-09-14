@@ -32,6 +32,12 @@ PANEL = 288                      # each panel is rendered at this size
 HEADER = 34
 TIMELINE = 84
 PAD = 6
+#: Height of one extra timeline row per culprit, when culprits keep their own
+#: clocks.
+CULPRIT_ROW = 9
+#: One colour per culprit row, cycled.
+C_CULPRITS = ((255, 120, 200), (120, 230, 255), (200, 255, 120),
+              (255, 200, 90), (180, 150, 255), (255, 150, 120))
 
 C_BG = (18, 18, 22)
 C_TEXT = (232, 232, 238)
@@ -79,6 +85,15 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     t_obs = int(v.get("t_observable_frame", -1))
     t_end = int(v.get("t_end_frame", -1))
     peak = (v.get("peak_residual") or {})
+    # ONE ROW PER CULPRIT when they broke the law at moments of their own. The
+    # clip's rows are the union, and a union of [7,7] and [9,9] drawn on one
+    # bar does not say which object did what when.
+    culprits = v.get("culprits") or []
+    culprit_rows = ([(int(c["instance_id"]),
+                      [tuple(w) for w in c.get("violation_windows", [])])
+                     for c in culprits]
+                    if v.get("culprit_timing") == "independent"
+                    and len(culprits) > 1 else [])
 
     # Order: what the renderer saw, then what we derived from it. RGB, energy
     # and the three geometry passes describe the scene; mask, severity, causal
@@ -104,7 +119,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD
-    H = HEADER + panel + 2 * PAD + TIMELINE
+    H = HEADER + panel + 2 * PAD + TIMELINE + CULPRIT_ROW * len(culprit_rows)
     out = np.zeros((T, H, W, 3), np.uint8)
 
     for t in range(T):
@@ -154,7 +169,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
         _header(f, W, meta, t, T, active, observable, occluded)
         _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
-                  float(tl["severity_t"][t]), peak, v, iwin, cwin)
+                  float(tl["severity_t"][t]), peak, v, iwin, cwin,
+                  culprit_rows)
         out[t] = f
 
     out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
@@ -391,9 +407,11 @@ C_INTERVENE = (120, 200, 255)
 
 
 def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
-              iwin=None, cwin=None):
+              iwin=None, cwin=None, culprit_rows=None):
     import cv2
-    y0 = H - TIMELINE + 4
+    culprit_rows = culprit_rows or []
+    extra = CULPRIT_ROW * len(culprit_rows)
+    y0 = H - TIMELINE - extra + 4
     x0, x1 = PAD + 2, W - PAD - 2
     span = x1 - x0
 
@@ -435,8 +453,20 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
             cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
                           color, -1)
 
+    # Each culprit's own violation windows, below the clip's three rows, named
+    # by the instance id that `violation_ids.npz` and `causal_ids.npz` use.
+    for k, (cid, wins) in enumerate(culprit_rows):
+        ry = y0 + 16 + (len(rows) + k) * CULPRIT_ROW
+        color = C_CULPRITS[k % len(C_CULPRITS)]
+        cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
+        for s, e in wins:
+            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
+                          color, -1)
+        _text(f, "id %d" % cid, (x1 - _w("id %d" % cid, 0.30) - 2, ry + 7),
+              color, 0.30, 1)
+
     # frame ticks every frame, labelled every 4
-    ty = y0 + 45
+    ty = y0 + 45 + extra
     for i in range(T):
         cv2.line(f, (fx(i), ty), (fx(i), ty + 4), (90, 90, 100), 1)
         if i % 4 == 0:

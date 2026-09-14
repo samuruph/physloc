@@ -780,6 +780,12 @@ def cmd_generate(a) -> int:
             if line.startswith("PHYSLOC_RENDERED "):
                 _mark_render_boundary(index)
                 progress.render_done(index)
+                # A finished invalid render is a finished clip: annotate it now
+                # rather than when the whole job ends.
+                tag = line.split(" ", 1)[1].strip()
+                if tag != "valid":
+                    annotator.submit(os.path.join(job_dir, "variants",
+                                                  tag.replace("/", "_")))
             elif line.startswith("PHYSLOC_NOT_RENDERED "):
                 _mark_render_boundary(index)
                 progress.render_dropped(index)
@@ -812,9 +818,12 @@ def cmd_generate(a) -> int:
             launch_env = dict(env, PHYSLOC_THREADS=str(
                 _threads_for(progress.running_count(), n_cores)))
         # Where this job's frames appear, for the frame count on the bar.
+        job_dir = os.path.join(here, scenario, "%04d" % seed)
         with frame_watch_lock:
-            frame_watch[index] = [os.path.join(here, scenario, "%04d" % seed,
-                                               "_scratch", "exr"), time.time()]
+            frame_watch[index] = [os.path.join(job_dir, "_scratch", "exr"),
+                                  time.time()]
+        annotator = _ClipAnnotator(job_dir, rel, overlay=not a.no_overlay,
+                                   prof=prof)
         try:
             with prof.timer("worker"):
                 rc, info = _run_worker(scenario, seed, tier, ",".join(families),
@@ -832,6 +841,7 @@ def cmd_generate(a) -> int:
                 frame_watch.pop(index, None)
             slots.put(env)
             memory.release(held)
+        annotated = annotator.finish()          # clips annotated as they rendered
         # The worker reports what Blender itself spent, per render. Recording
         # it beside the container round trip is what separates "the renderer is
         # slow" from "everything around the renderer is slow" -- and the
@@ -851,9 +861,16 @@ def cmd_generate(a) -> int:
                if not x.get("ok") and not x.get("skipped")]
         skipped = [x for x in info.get("variants", []) if x.get("skipped")]
         produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
-        with prof.timer("annotate+overlay" if not a.no_overlay else "annotate"):
-            results = list(_annotate(info["outdir"], rel,
-                                     overlay=not a.no_overlay, only=produced))
+        # Only what was not already annotated as it rendered. Never call
+        # `_annotate` with an empty list: `only=[]` means "every variant".
+        left = [d for d in produced if os.path.normpath(d) not in annotated]
+        late = []
+        if left:
+            with prof.timer("annotate+overlay" if not a.no_overlay else "annotate"):
+                late = list(_annotate(info["outdir"], rel,
+                                      overlay=not a.no_overlay, only=left))
+        results = [annotated[os.path.normpath(d)] for d in produced
+                   if os.path.normpath(d) in annotated] + late
         return {"scenario": scenario, "seed": seed, "level": level,
                 "variant": variant, "rc": 0,
                 "info": info, "results": results, "bad": bad,
@@ -1403,6 +1420,61 @@ def _annotate(workdir, outroot, overlay=True, only=None):
         for r in results:
             r["overlay"] = build(r["clips"]["invalid"])["path"]
     return results
+
+
+class _ClipAnnotator:
+    """Annotates a job's clips one at a time, as each of its renders finishes.
+
+    Videos used to appear only when a whole job ended: a job renders its valid
+    twin and then every family at every severity -- about fifty clips, fifteen
+    to twenty hours into a release run on a busy machine -- and only then was
+    anything annotated. The worker announces each finished render, and its clip
+    is annotated here the moment it lands.
+
+    On a thread of its own, so a slow annotation never stalls reading the
+    container's output; one clip at a time, because a job's clips share its
+    valid twin's output. A clip that fails here is retried when the job ends.
+    """
+
+    def __init__(self, job_dir, outroot, overlay=True, prof=None):
+        import queue
+        import threading
+
+        self.job_dir, self.outroot = job_dir, outroot
+        self.overlay, self.prof = overlay, prof
+        self.done = {}                          # normalised variant dir -> result
+        self._queue = queue.Queue()
+        self._thread = threading.Thread(target=self._run, name="clip-annotator",
+                                        daemon=True)
+        self._thread.start()
+
+    def submit(self, vdir) -> None:
+        self._queue.put(vdir)
+
+    def _run(self) -> None:
+        stage = "annotate+overlay" if self.overlay else "annotate"
+        while True:
+            vdir = self._queue.get()
+            if vdir is None:
+                return
+            t0 = time.perf_counter()
+            try:
+                for result in _annotate(self.job_dir, self.outroot,
+                                        overlay=self.overlay, only=[vdir]):
+                    self.done[os.path.normpath(vdir)] = result
+            except Exception as exc:                       # noqa: BLE001
+                print("  !! annotating %s as it rendered failed (%r); "
+                      "retrying when its job ends" % (vdir, exc),
+                      file=sys.stderr, flush=True)
+            finally:
+                if self.prof is not None:
+                    self.prof.add(stage, time.perf_counter() - t0)
+
+    def finish(self):
+        """Wait for every submitted clip, and return {variant dir: result}."""
+        self._queue.put(None)
+        self._thread.join()
+        return self.done
 
 
 def cmd_annotate(a) -> int:

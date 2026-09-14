@@ -637,6 +637,11 @@ python -m physloc.cli taxonomy --config v0_release
   tail -f out/physloc_v0/progress.log
   ```
 
+- **Videos appear as clips finish.** Each clip is annotated — masks, `meta.json`, `rgb.mp4`,
+  `overlay.mp4` — the moment its render lands in `out/physloc_v0/clips/`, so the first ones show
+  up within the first hour, not when a whole job ends. Until then,
+  `out/work_v0/<level>/<scenario>/<seed>/_scratch/images/` holds the frames of each clip in
+  progress.
 - **At the end**, a stage profile reports where the time went. Its `occupancy` line says how many
   workers were busy on average; far below the worker count means jobs were waiting on memory or
   on a long straggler, not on cores.

@@ -679,11 +679,11 @@ rendering; a real run finishes roughly 10% over it.
 | `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | 8 | **9.4 h** |
 | `review` | L0 | 166 | 511 | 8 | **36 min** |
 | `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 32 | 80 h (**3.3 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 32 | **39.9 h** |
-| `v0_L2` | L2 | 166 | 1533 | 32 | 68 h (**2.8 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 32 | **45.0 h** |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 232 h (**9.7 days**) |
+| `v0_L0` | L0 | 166 | 5110 | 32 | 99 h (**4.1 days**) |
+| `v0_L1` | L1 | 166 | 2555 | 32 | 50 h (**2.1 days**) |
+| `v0_L2` | L2 | 166 | 1533 | 32 | 84 h (**3.5 days**) |
+| `v0_L3` | L3 | 166 | 1022 | 32 | 56 h (**2.3 days**) |
+| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 289 h (**12.0 days**) |
 <!-- /physloc:costs -->
 
 ### Where a release's time goes
@@ -691,11 +691,11 @@ rendering; a real run finishes roughly 10% over it.
 <!-- physloc:costs_ladder -->
 | level | variants | renders | per render | at 32 workers | share of the run |
 |---|---|---|---|---|---|
-| **L0** | 10 | 5110 | 164 s | 80 h (**3.3 days**) | 34% |
-| **L1** | 5 | 2555 | 164 s | **39.9 h** | 17% |
-| **L2** | 3 | 1533 | 372 s | 67 h (**2.8 days**) | 29% |
-| **L3** | 2 | 1022 | 372 s | **45.0 h** | 19% |
-| **all four** | -- | 10220 | -- | 232 h (**9.7 days**) | 100% |
+| **L0** | 10 | 5110 | 204 s | 99 h (**4.1 days**) | 34% |
+| **L1** | 5 | 2555 | 204 s | 50 h (**2.1 days**) | 17% |
+| **L2** | 3 | 1533 | 464 s | 84 h (**3.5 days**) | 29% |
+| **L3** | 2 | 1022 | 464 s | 56 h (**2.3 days**) | 19% |
+| **all four** | -- | 10220 | -- | 289 h (**12.0 days**) | 100% |
 <!-- /physloc:costs_ladder -->
 
 L0 and L1 are three quarters of the renders and about half the time; L2 and L3 cost more per

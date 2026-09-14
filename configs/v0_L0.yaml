@@ -49,7 +49,7 @@ defaults:
   # records it in its tier name (e.g. `release+f49`). frames must be 4k+1.
   resolution: 512      # square render size, pixels
   fps: 30              # frames per second
-  frames: 49           # clip length: 49 frames = 1.63 s (the tier's own is 89)
+  frames: 61           # clip length: 61 frames = 2.03 s (the tier's own is 89)
   spp: 64              # Cycles samples per pixel
   complexity: L0
   severity: all        # the full weak/medium/strong ladder

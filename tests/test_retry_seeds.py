@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
+import tempfile
 
 from physloc import cli
 
@@ -46,13 +48,18 @@ def _run(monkeypatch, argv, declines_while):
     monkeypatch.setattr(cli, "_run_worker", fake_worker)
     monkeypatch.setattr(cli, "_annotate", lambda *a, **k: iter(()))
     ap, _ = cli._build()
-    a = ap.parse_args(["generate", "--scenario", "toss,drop",
-                       "--variants", str(VARIANTS), "--seed", str(BASE),
-                       "--workdir", "w", "--outdir", "r",
-                       "--no-overlay", "--keep-going"] + argv)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-        a.fn(a)
+    # A THROWAWAY DIRECTORY, not bare `w` and `r`. Those were relative to the
+    # repository, so every run of this test left `r/` and `w/` -- and a growing
+    # resume ledger -- beside the source code.
+    with tempfile.TemporaryDirectory() as tmp:
+        a = ap.parse_args(["generate", "--scenario", "toss,drop",
+                           "--variants", str(VARIANTS), "--seed", str(BASE),
+                           "--workdir", os.path.join(tmp, "work"),
+                           "--outdir", os.path.join(tmp, "release"),
+                           "--no-overlay", "--keep-going"] + argv)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            a.fn(a)
     return seen, buf.getvalue()
 
 

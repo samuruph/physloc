@@ -87,7 +87,13 @@ class RollingRamp(Scenario):
         # out of frame. Solve the block's coefficient for the run-out budget,
         # then pick the slab's to leave the ramp exactly as slippery as before.
         floor_mu = 0.6
-        block_mu = min(1.2, max(0.20, vx_lip ** 2
+        # CAPPED AT 1.0, Kubric's own limit: `PhysicalObject` raises a
+        # TraitError for any friction above it, at scene build, in the
+        # container. The cap was 1.2 and nothing reached it until the longer
+        # ramp raised the speed at the lip -- then every `rolling_ramp` job of
+        # a debug sweep died before simulating. The run-out below grows to
+        # match whatever the cap costs.
+        block_mu = min(1.0, max(0.20, vx_lip ** 2
                                 / (2.0 * 9.81 * run_out * floor_mu)))
         # Where the cap binds, the block needs more floor than was budgeted,
         # and the camera must be framed for the run-out it will really have.

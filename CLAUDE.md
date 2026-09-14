@@ -6,7 +6,7 @@ A spatio-temporally annotated physics-violation video dataset: every invalid cli
 **Read [README.md](README.md) first** — it is the operational reference and the one kept
 current. [docs/PLAN.md](docs/PLAN.md) is the design document: its *reasoning* is sound, its
 *numbers* have drifted, so trust the code over any count you read there.
-[docs/schema.md](docs/schema.md) holds the `meta.json` reference. The IntPhys 2 and
+[docs/schema.md](docs/schema.md) holds the clip layout and `metadata.json` reference. The IntPhys 2 and
 LikePhys mapping is DATA, on each family in `physloc/taxonomy.py` — the prose copy of it was
 deleted because it drifted from the data it described.
 
@@ -32,8 +32,8 @@ publication. Nothing has been published yet.
   what actually separated them was complexity, which is its own axis and its own ladder. A
   tier that encodes a release number has to be renamed every release. So: the tier says how
   big and how long, the **complexity ladder (L0–L3)** says how hard, and `v0`/`v1` are what
-  a published dataset is CALLED — set by `--outdir`, recorded as `release` in every
-  `meta.json`. **Debug at the debug tier; a bug found there is fixed for both.**
+  a published dataset is CALLED — set by `--outdir`, recorded as `metadata.release` in every
+  `metadata.json`. **Debug at the debug tier; a bug found there is fixed for both.**
 - **The complexity ladder is SCENE REALISM, and nothing else.** Four levels -- L0 baseline,
   L1 materials, L2 HDRI, L3 GSO -- each with a declared `share` of a full generation
   (1.00/0.50/0.30/0.20). **Difficulty is FIVE NAMED CONDITIONS, one per clip**, applied
@@ -154,6 +154,31 @@ publication. Nothing has been published yet.
   first; three strengths of one cell is what you check second.
 - **Violations are windows, not onsets.** `violation_windows` is a *list* of intervals —
   `superelastic` fires once per bounce, and observability can be interrupted by re-occlusion.
+- **A violation nobody can see is not rendered.** Event moments are drawn per (scene,
+  family, culprit, attempt) -- never per severity bin -- inside `_geom.EVENT_BAND` (15-70% of
+  the clip), leaving `MIN_VISIBLE_AFTER` (35%, at least 0.8 s) for the effect; a motion
+  family (`kinematics`, `dynamics`, `global`) fires only before its actor comes to rest. The
+  worker checks the INVALID rollout and re-plans at another moment (`EVENT_ATTEMPTS`) when
+  the culprits leave the shot or go fully behind a screen; families whose culprit leaves the
+  picture by design (`ABSENCE_FAMILIES`) are judged on the valid one. Before anything renders,
+  a scene whose actors leave the frame early or whose camera dips towards the ground is
+  resampled (`Scenario.sample(attempt=k)`, recorded as `framing_attempt` and honoured by the
+  annotation pipeline). The camera's eye never goes below `CAMERA_MIN_HEIGHT`: an
+  `occluder_pass` clip was once rendered from under the floor.
+- **Each culprit of a `multi` clip has its own clock.** Where a family's culprits are its
+  group and the plan stages, `injectors/multi.py` plans each culprit on its own and merges the
+  plans (`InterventionPlan.culprits`); the worker stages every culprit at its own frame in one
+  simulation (`stepper.run_segments`), and `annotate_pair` scores, gates and masks each on its
+  own timeline. `params.objects.multi_sync_share` (25%) of such clips keep one moment on
+  purpose. Scene-wide families, granular media and edited families stay `shared`.
+- **The clip layout is MOVi's.** `metadata.json` has MOVi's `metadata`, `camera`,
+  `instances` and `events` plus PhysLoc's own blocks; dense passes use MOVi's names
+  (`segmentations`, `forward_flow`, `normal`, ...); per-frame instance tensors live in
+  `instances.npz`. File names are in `annotate/layout.py` and nowhere else. Instances keep
+  declaration order (not MOVi's visibility sort) so both twins agree on who is who.
+- **Object size varies per scene** (`params.objects.size_scale`, `pour` exempt), and an L3
+  scan is sized by bounding VOLUME, not its longest axis (`base.gso_scale_ladder`), stepping
+  back towards the longest-axis rule only where a larger scan would start inside a neighbour.
 - **`causal_mask` lasts as long as the consequences do, and that is MEASURED.** Level 1 is
   red (the culprit the plan names), level 2 is blue (a body it disturbed) — both drawn
   invalid-side only, both labelled in the overlay's causal panel. The gate is the declared

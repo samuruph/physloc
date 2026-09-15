@@ -1995,7 +1995,7 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_export)
 
     p = add_parser("stats",
-                   help="what a release contains: seven figures and stats.json")
+                   help="what a release contains: six figures and stats.json")
     p.add_argument("root", help="a release root, e.g. out/physloc_v0")
     p.add_argument("--outdir", help="default <root>/stats")
     p.set_defaults(fn=cmd_stats)

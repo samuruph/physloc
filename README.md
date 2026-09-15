@@ -575,14 +575,19 @@ with the release**, where the dataset card shows every figure:
 
 ```
 out/review_severity/stats/
-  composition.png         taxonomy donut (domain, family); complexity levels; difficulty x complexity
-  coverage.png            clips per scenario; the scenario x family lattice
-  difficulty.png          easy / moderate / hard, and which factor set each label
-  difficulty_factors.png  each factor's distribution against its easy / moderate / hard zones
-  distributions.png       when events fire, observability lag, measured severity per bin
-  structure.png           conditions against their declared shares; violator timing
-  stats.json              the numbers behind all six
+  1_overview.png              levels, conditions vs their declared shares, severity bins, violator timing
+  2_taxonomy.png              domain -> family sunburst; clips per scenario, grouped by medium
+  3_coverage.png              the scenario x family lattice under named domain bands, with totals
+  4_difficulty.png            easy / moderate / hard; per level; which factor set it; the rule table
+  5_difficulty_factors.png    every factor, one dot per clip, against its two cuts
+  6_timing_and_severity.png   when events fire, observability lag, measured severity per bin
+  stats.json                  the numbers behind all six; `stats.draw(json, dir)` redraws them
 ```
+
+**How a difficulty label is decided.** Each of the seven factors in `annotate/difficulty.py`
+has two cuts, which make three zones; a clip's label is its WORST zone. So a clip is easy only
+when every factor is easy, and one hard factor makes it hard. `4_difficulty.png` prints every
+cut and whether it was fitted to the review corpus or chosen from what the quantity means.
 
 `viz` re-reads finished clips — nothing is rendered again — and names its videos so the sort
 order is the reading order:

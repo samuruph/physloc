@@ -79,6 +79,9 @@ class Factor:
     #: value's own scale and both stated in the easier-is-better direction.
     easy: float
     moderate: float
+    #: "fitted" (cut at the review corpus's quantiles) or "chosen" (argued from
+    #: what the quantity means) -- see the note above `FACTORS`.
+    basis: str = ""
 
     def level(self, value: Optional[float]) -> int:
         """0, 1 or 2. A missing value is `moderate` -- never silently easy.
@@ -119,13 +122,13 @@ FACTORS: Sequence[Factor] = (
     # FITTED. p25 = 0.012, p50 = 0.029, p75 = 0.066 of the frame.
     Factor("violation_area",
            "how much of the frame does the violation cover, at its biggest?",
-           "fraction of frame", "high", 0.05, 0.012),
+           "fraction of frame", "high", 0.05, 0.012, "fitted"),
     # FITTED, on the 15% of clips that have any occlusion at all: their median
     # is 0.67. `easy` is 0.05 rather than 0 to allow a frame of slop at the
     # edge of a window -- exact zero would make one clipped frame a demotion.
     Factor("occlusion",
            "how much of the violation happens while the violator is hidden?",
-           "fraction of the violation window", "low", 0.05, 0.5),
+           "fraction of the violation window", "low", 0.05, 0.5, "fitted"),
     # CHOSEN. The corpus is concentrated at 0.68 -- one window setting across
     # every review config -- so its tertiles would encode the config rather
     # than the difficulty. Argued instead: on a 2.97 s release clip, under 15%
@@ -135,13 +138,13 @@ FACTORS: Sequence[Factor] = (
     # and re-occlusion shorten the window.
     Factor("duration",
            "how long is the violation observable?",
-           "fraction of the clip", "high", 0.35, 0.15),
+           "fraction of the clip", "high", 0.35, 0.15, "chosen"),
     # FITTED, rounded. p25 = 0.57, p50 = 0.94, and a third of the corpus sits
     # at exactly 1.0, so the easy boundary is 0.90 rather than the p67 of 1.0 --
     # a threshold AT the mode puts half the mode on each side of it.
     Factor("severity",
            "how far from lawful does the physics actually get?",
-           "bounded residual, 0-1", "high", 0.90, 0.40),
+           "bounded residual, 0-1", "high", 0.90, 0.40, "fitted"),
     # CHOSEN, against `EXTRA_OBJECTS` = 3-10 rather than against the corpus,
     # which is 60% `standard` and so mostly reports 1. A crowded clip draws
     # 3-10 extras, so these boundaries put the small draws in `moderate` and
@@ -149,17 +152,17 @@ FACTORS: Sequence[Factor] = (
     # create.
     Factor("object_count",
            "how many objects must a model consider?",
-           "count", "low", 2, 6),
+           "count", "low", 2, 6, "chosen"),
     # CHOSEN, likewise: `multi` violates 2..N-1 of N actors.
     Factor("violators",
            "how many of them are violating?",
-           "count", "low", 1, 3),
+           "count", "low", 1, 3, "chosen"),
     # FITTED on the 24 clips that move: p10 = 0.091, median 0.136, max 0.201.
     # `easy` is 0.02 rather than 0 so that a camera which is static in intent
     # is not demoted by floating-point drift in its own keyframes.
     Factor("camera_motion",
            "how far does the camera move?",
-           "path length / standoff", "low", 0.02, 0.12),
+           "path length / standoff", "low", 0.02, 0.12, "fitted"),
 )
 
 BY_NAME = {f.name: f for f in FACTORS}

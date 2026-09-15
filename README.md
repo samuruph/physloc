@@ -365,8 +365,8 @@ Every **invalid** clip carries one label (a valid twin has nothing to detect):
 ```json
 "difficulty": {
   "level": "hard", "rank": 2,
-  "binding_factors": ["footprint"],
-  "factors": {"footprint": {"value": 0.0041, "level": "hard"},
+  "binding_factors": ["violation_area"],
+  "factors": {"violation_area": {"value": 0.0041, "level": "hard"},
               "severity":  {"value": 0.98,   "level": "easy"}, "...": {}}
 }
 ```
@@ -376,13 +376,13 @@ Every **invalid** clip carries one label (a valid twin has nothing to detect):
 <!-- physloc:difficulty -->
 | factor | the question it asks | unit | easy | moderate | hard |
 |---|---|---|---|---|---|
-| `footprint` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.05 | &ge; 0.012 | &lt; 0.012 |
+| `violation_area` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.05 | &ge; 0.012 | &lt; 0.012 |
 | `occlusion` | how much of the violation happens while the violator is hidden? | fraction of the violation window | &le; 0.05 | &le; 0.5 | &gt; 0.5 |
 | `duration` | how long is the violation observable? | fraction of the clip | &ge; 0.35 | &ge; 0.15 | &lt; 0.15 |
 | `severity` | how far from lawful does the physics actually get? | bounded residual, 0-1 | &ge; 0.9 | &ge; 0.4 | &lt; 0.4 |
-| `clutter` | how many bodies must a model consider? | count | &le; 2 | &le; 6 | &gt; 6 |
+| `object_count` | how many objects must a model consider? | count | &le; 2 | &le; 6 | &gt; 6 |
 | `violators` | how many of them are violating? | count | &le; 1 | &le; 3 | &gt; 3 |
-| `camera` | how far does the camera travel? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
+| `camera_motion` | how far does the camera move? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
 <!-- /physloc:difficulty -->
 
 A clip is `easy` only when it is easy on **every** factor (KITTI's construction, not a weighted
@@ -400,7 +400,11 @@ df[df.difficulty == "hard"].binding_factors         # and what made them hard
 **Not factors, on purpose:** the complexity level (its own axis — report
 `difficulty × complexity` as a grid, which `physloc stats` plots), the family and scenario, and
 `magnitude` (the knob; `severity` is its measurement). `pour`'s grains count as **one** body for
-`clutter` and `violators`, unless a family targets a genuine subset of them.
+`object_count` and `violators`, unless a family targets a genuine subset of them.
+
+Three factors were renamed to say what they measure — `footprint` is now `violation_area`,
+`clutter` is `object_count` (every actor, peer and distractor in the scene), and `camera` is
+`camera_motion`. Clips and configs written under the old names still read.
 
 ### Thresholds
 
@@ -409,9 +413,9 @@ belongs to the factor, not the config:
 
 ```yaml
 difficulty:
-  footprint: [0.05, 0.012]     # easy at or ABOVE 0.05 of the frame
-  occlusion: [0.05, 0.5]       # easy at or BELOW 0.05 of the window
-  clutter:   [2, 6]
+  violation_area: [0.05, 0.012]   # easy at or ABOVE 0.05 of the frame
+  occlusion:      [0.05, 0.5]     # easy at or BELOW 0.05 of the window
+  object_count:   [2, 6]
 ```
 
 Four are fitted at the tertiles of a review corpus and three are chosen; which is which is recorded

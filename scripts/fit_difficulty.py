@@ -9,8 +9,9 @@ clip should be easy on EVERY axis.
     conda activate physloc
     python scripts/fit_difficulty.py out/review_L0 out/review_conditions ...
 
-Run it on a corpus that spans the conditions, or the clutter and camera columns
-are degenerate: `review_conditions` is the one config that contains all five.
+Run it on a corpus that spans the conditions, or the object_count and
+camera_motion columns are degenerate: `review_conditions` is the one config
+that contains all five.
 
 **The output is not applied automatically.** Paste the numbers into `FACTORS`
 and say in the commit what corpus they came from. A benchmark whose difficulty

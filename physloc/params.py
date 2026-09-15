@@ -110,13 +110,13 @@ DEFAULTS: Dict[str, Any] = {
         # recorded per factor in `annotate/difficulty.py`.
         # `scripts/fit_difficulty.py` prints the tertiles of a corpus so a
         # refit starts from data rather than from taste.
-        "footprint": [0.05, 0.012],
+        "violation_area": [0.05, 0.012],
         "occlusion": [0.05, 0.5],
         "duration": [0.35, 0.15],
         "severity": [0.90, 0.40],
-        "clutter": [2, 6],
+        "object_count": [2, 6],
         "violators": [1, 3],
-        "camera": [0.02, 0.12],
+        "camera_motion": [0.02, 0.12],
     },
     "materials": {
         # Divides every density. Anchors a median wooden actor near 1 kg, which
@@ -140,6 +140,11 @@ def _merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
                            % (section, ", ".join(sorted(out))))
         if not isinstance(values, dict):
             raise TypeError("params section %r must be a mapping" % section)
+        if section == "difficulty":
+            # Three factors were renamed; a config written before still sets
+            # their cuts under the old names.
+            from .annotate.difficulty import canonical
+            values = {canonical(k): v for k, v in values.items()}
         unknown = set(values) - set(out[section])
         if unknown:
             raise KeyError("unknown params key(s) in %r: %s"

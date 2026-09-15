@@ -34,7 +34,7 @@ def _meta(**over):
             "violation_windows": [[10, 89]],
             "observable_windows": [[10, 89]],
             "peak_residual": {"score": 1.0},
-            "difficulty_inputs": {"footprint": 0.2, "occlusion": 0.0},
+            "difficulty_inputs": {"violation_area": 0.2, "occlusion": 0.0},
         },
     }
     for key, value in over.items():
@@ -66,19 +66,19 @@ def test_any_single_factor_can_make_a_clip_hard(name):
     if f.easier == "high" and f.moderate == 0:
         bad = -1.0
 
-    if name == "footprint":
-        meta["violation"]["difficulty_inputs"]["footprint"] = bad
+    if name == "violation_area":
+        meta["violation"]["difficulty_inputs"]["violation_area"] = bad
     elif name == "occlusion":
         meta["violation"]["difficulty_inputs"]["occlusion"] = min(1.0, bad)
     elif name == "duration":
         meta["violation"]["observable_windows"] = [[10, 11]]
     elif name == "severity":
         meta["violation"]["peak_residual"] = {"score": bad}
-    elif name == "clutter":
+    elif name == "object_count":
         meta["metadata"]["n_actors"] = int(bad)
     elif name == "violators":
         meta["metadata"]["n_actors"] = meta["metadata"]["n_violators"] = int(bad)
-    elif name == "camera":
+    elif name == "camera_motion":
         meta["camera"] = {"positions": [[0.0, -6.0 + 0.1 * i, 2.0]
                                         for i in range(100)],
                           "look_at": [0.0, 0.0, 0.0]}
@@ -96,10 +96,10 @@ def test_the_worst_factor_wins_not_the_average():
     can see.
     """
     meta = _meta()
-    meta["violation"]["difficulty_inputs"]["footprint"] = 0.0001
+    meta["violation"]["difficulty_inputs"]["violation_area"] = 0.0001
     got = D.assess(meta)
     assert got["level"] == "hard"
-    assert got["binding_factors"] == ["footprint"]
+    assert got["binding_factors"] == ["violation_area"]
 
 
 def test_the_sets_nest():
@@ -111,7 +111,7 @@ def test_the_sets_nest():
     metas = []
     for foot in (0.3, 0.02, 0.001):
         m = _meta()
-        m["violation"]["difficulty_inputs"]["footprint"] = foot
+        m["violation"]["difficulty_inputs"]["violation_area"] = foot
         m["difficulty"] = D.assess(m)
         metas.append(m)
     sets = [D.evaluation_set(metas, lv) for lv in D.LEVELS]
@@ -138,9 +138,21 @@ def test_an_unmeasurable_factor_is_moderate_never_easy():
     meta = _meta()
     meta["violation"].pop("difficulty_inputs")
     got = D.assess(meta)
-    assert got["factors"]["footprint"]["level"] == "moderate"
+    assert got["factors"]["violation_area"]["level"] == "moderate"
     assert got["factors"]["occlusion"]["level"] == "moderate"
     assert got["level"] == "moderate"
+
+
+def test_a_clip_stored_under_the_old_factor_names_still_reads():
+    """`footprint`, `clutter` and `camera` were renamed; clips generated before
+    carry the old keys, and must be measured and counted the same."""
+    meta = _meta()
+    meta["violation"]["difficulty_inputs"] = {"footprint": 0.0001, "occlusion": 0.0}
+    got = D.assess(meta)
+    assert got["factors"]["violation_area"]["value"] == pytest.approx(0.0001)
+    assert got["binding_factors"] == ["violation_area"]
+    assert [D.canonical(n) for n in ("footprint", "clutter", "camera", "severity")] == [
+        "violation_area", "object_count", "camera_motion", "severity"]
 
 
 def test_every_factor_declares_a_direction_and_ordered_thresholds():
@@ -162,7 +174,7 @@ def test_a_granular_medium_counts_as_one_thing():
     """
     meta = _meta(physics_medium="granular", n_actors=80, n_violators=80)
     got = D.assess(meta)
-    assert got["factors"]["clutter"]["value"] == 1
+    assert got["factors"]["object_count"]["value"] == 1
     assert got["factors"]["violators"]["value"] == 1
     assert got["level"] == "easy"
 
@@ -203,13 +215,13 @@ def test_footprint_and_occlusion_come_from_the_arrays_when_given():
     meta["violation"]["observable_windows"] = [[5, 14]]
 
     got = D.measure(meta, vmask, seg)
-    assert got["footprint"] == pytest.approx(0.25)
+    assert got["violation_area"] == pytest.approx(0.25)
     assert got["occlusion"] == pytest.approx(0.5)
 
     stored = D.inputs_for_meta(vmask, seg, meta)
     meta["violation"]["difficulty_inputs"] = stored
     again = D.measure(meta)
-    assert again["footprint"] == pytest.approx(got["footprint"])
+    assert again["violation_area"] == pytest.approx(got["violation_area"])
     assert again["occlusion"] == pytest.approx(got["occlusion"])
 
 
@@ -226,11 +238,11 @@ def test_the_cuts_are_reachable_from_a_config():
     meta = _meta(n_actors=4)
     try:
         params.apply()
-        assert D.assess(meta)["factors"]["clutter"]["level"] == "moderate"
+        assert D.assess(meta)["factors"]["object_count"]["level"] == "moderate"
 
-        params.apply({"difficulty": {"clutter": [4, 12]}})
-        assert D.assess(meta)["factors"]["clutter"]["level"] == "easy"
-        assert D.BY_NAME["clutter"].easy == 4
+        params.apply({"difficulty": {"object_count": [4, 12]}})
+        assert D.assess(meta)["factors"]["object_count"]["level"] == "easy"
+        assert D.BY_NAME["object_count"].easy == 4
         # Untouched factors keep BOTH of their shipped values.
         assert (D.BY_NAME["severity"].easy,
                 D.BY_NAME["severity"].moderate) == (0.90, 0.40)

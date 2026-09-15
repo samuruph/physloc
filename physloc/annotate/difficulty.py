@@ -12,7 +12,7 @@ severity axis; this is the same refusal on the detection axis.
 
 Seven factors, each with two published thresholds, each mapping a clip to
 easy(0) / moderate(1) / hard(2). **The clip takes its WORST factor.** So a clip
-is `easy` only when it is easy on every axis, and one small footprint is enough
+is `easy` only when it is easy on every axis, and one small violation area is enough
 to make it hard however clean the rest of it is.
 
 That is KITTI's Easy/Moderate/Hard construction and it is chosen over a
@@ -20,13 +20,13 @@ weighted score for three reasons:
 
 * **It says WHY.** `binding_factors` names the axes that set the label, so
   "hard" is never a number nobody can act on -- a model that fails on
-  occlusion-bound clips and passes on footprint-bound ones has told you
+  occlusion-bound clips and passes on area-bound ones has told you
   something.
 * **The sets NEST.** easy is a subset of moderate is a subset of hard, so
   evaluating "at moderate" means every clip of rank <= 1 and the three numbers
   are comparable to each other. A weighted score gives three disjoint buckets
   whose union is the dataset and whose members share nothing.
-* **A weighted sum hides trade-offs.** Averaging a tiny footprint against a
+* **A weighted sum hides trade-offs.** Averaging a tiny violation area against a
   static camera says the two cancel. They do not.
 
 ## What is NOT a factor, deliberately
@@ -46,7 +46,7 @@ and is the one that belongs here.
 
 ## The factors
 
-Five of the seven read straight off `metadata.json`; `footprint` and `occlusion`
+Five of the seven read straight off `metadata.json`; `violation_area` and `occlusion`
 need the rendered masks, so `annotate` measures them where the arrays are in
 hand and writes the raw values into `metadata.json` beside the label. A consumer
 re-deriving a difficulty never has to open an `.npz`.
@@ -117,7 +117,7 @@ class Factor:
 #: one is a claim about detection, and the two age differently.
 FACTORS: Sequence[Factor] = (
     # FITTED. p25 = 0.012, p50 = 0.029, p75 = 0.066 of the frame.
-    Factor("footprint",
+    Factor("violation_area",
            "how much of the frame does the violation cover, at its biggest?",
            "fraction of frame", "high", 0.05, 0.012),
     # FITTED, on the 15% of clips that have any occlusion at all: their median
@@ -147,8 +147,8 @@ FACTORS: Sequence[Factor] = (
     # 3-10 extras, so these boundaries put the small draws in `moderate` and
     # the big ones in `hard`, which is the distinction the condition exists to
     # create.
-    Factor("clutter",
-           "how many bodies must a model consider?",
+    Factor("object_count",
+           "how many objects must a model consider?",
            "count", "low", 2, 6),
     # CHOSEN, likewise: `multi` violates 2..N-1 of N actors.
     Factor("violators",
@@ -157,12 +157,26 @@ FACTORS: Sequence[Factor] = (
     # FITTED on the 24 clips that move: p10 = 0.091, median 0.136, max 0.201.
     # `easy` is 0.02 rather than 0 so that a camera which is static in intent
     # is not demoted by floating-point drift in its own keyframes.
-    Factor("camera",
-           "how far does the camera travel?",
+    Factor("camera_motion",
+           "how far does the camera move?",
            "path length / standoff", "low", 0.02, 0.12),
 )
 
 BY_NAME = {f.name: f for f in FACTORS}
+
+#: The names three factors shipped under before they were renamed to say what
+#: they measure. Clips generated earlier carry them in `difficulty.factors`,
+#: `difficulty.binding_factors` and `violation.difficulty_inputs`, and a config
+#: may still set their cuts under them; every reader maps through here.
+RENAMED = {"footprint": "violation_area", "clutter": "object_count",
+           "camera": "camera_motion",
+           # Before culprits were called violators.
+           "culprits": "violators"}
+
+
+def canonical(name: str) -> str:
+    """A factor's current name, given a current or a pre-rename one."""
+    return RENAMED.get(name, name)
 
 
 # --------------------------------------------------------------------- values
@@ -217,15 +231,15 @@ def measure(meta: Dict[str, object],
     pixels = float(int(res[0]) * int(res[1])) or 1.0
     stored = (violation.get("difficulty_inputs") or {})
 
-    # 1. FOOTPRINT -- the peak, not the mean. A violation that is briefly large
-    # is findable; one that is never large is not, and averaging over a window
-    # that includes frames before it becomes visible penalises a slow onset
-    # twice (the `duration` factor already prices that).
+    # 1. VIOLATION AREA -- the peak, not the mean. A violation that is briefly
+    # large is findable; one that is never large is not, and averaging over a
+    # window that includes frames before it becomes visible penalises a slow
+    # onset twice (the `duration` factor already prices that).
     if vmask is not None and vmask.size:
-        footprint = float(vmask.reshape(len(vmask), -1).sum(axis=1).max()
-                          / pixels)
+        violation_area = float(vmask.reshape(len(vmask), -1).sum(axis=1).max()
+                               / pixels)
     else:
-        footprint = stored.get("footprint")
+        violation_area = stored.get("violation_area", stored.get("footprint"))
 
     # 2. OCCLUSION -- FULLY hidden, per this project's rule that a few visible
     # actor pixels make a violation instantly observable. Measured over the
@@ -274,15 +288,16 @@ def measure(meta: Dict[str, object],
             n_violators = 1
     else:
         bodies = n_actors
-    clutter = float(bodies + int(md.get("n_distractors") or 0))
+    object_count = float(bodies + int(md.get("n_distractors") or 0))
     violators = float(n_violators)
 
-    # 7. CAMERA.
-    camera = camera_travel(meta.get("camera"))
+    # 7. CAMERA MOTION.
+    camera_motion = camera_travel(meta.get("camera"))
 
-    return {"footprint": footprint, "occlusion": occlusion,
-            "duration": duration, "severity": severity, "clutter": clutter,
-            "violators": violators, "camera": camera}
+    return {"violation_area": violation_area, "occlusion": occlusion,
+            "duration": duration, "severity": severity,
+            "object_count": object_count, "violators": violators,
+            "camera_motion": camera_motion}
 
 
 def assess(meta: Dict[str, object],
@@ -323,7 +338,7 @@ def inputs_for_meta(vmask: Optional[np.ndarray],
     clip was labelled with.
     """
     got = measure(dict(meta), vmask, seg_invalid)
-    return {"footprint": got["footprint"], "occlusion": got["occlusion"]}
+    return {"violation_area": got["violation_area"], "occlusion": got["occlusion"]}
 
 
 def evaluation_set(metas, level: str) -> List[Dict[str, object]]:

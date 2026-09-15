@@ -59,6 +59,17 @@ bash scripts/run.sh review_severity                       # generate, validate, 
 `run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
 tiled into one video.
 
+Load it and check every annotation by eye:
+
+```bash
+python test_dataset_loader.py out/review_severity          # what is in it, and every array's shape
+python test_dataset_loader.py out/review_severity --gui    # browser viewer, http://localhost:8765
+python test_dataset_loader.py out/review_severity --render 0 --layers violation,reference,bbox3d
+```
+
+From Python, `PhysLocDataset("out/review_severity")` in [`physloc/loader.py`](physloc/loader.py)
+gives every clip and pair — see [Loading the dataset](#loading-the-dataset).
+
 To generate the full dataset, see [Running the full release](#running-the-full-release).
 
 ---
@@ -544,6 +555,9 @@ python -m physloc.cli audit     out/review_severity      # cells whose violation
 python -m physloc.cli stats     out/review_severity      # the distributions, plotted
 python -m physloc.cli viz       out/review_severity      # every grid and sheet, one folder
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
+
+python test_dataset_loader.py out/review_severity        # load it: structure and shapes
+python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
 ```
 
 `stats` checks the run came out in the shape it declares; it reads only `metadata.json`, so it takes

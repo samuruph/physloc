@@ -3,11 +3,13 @@
 The human reference for one released clip. `physloc validate` enforces the cross-checks at the
 bottom. The annotation *design* — why each field exists — is [PLAN.md](PLAN.md) Part 3.
 
-**Schema version: 1.** Version 0 was a flat `meta.json` with PhysLoc-only file names.
-Version 1 follows Kubric's **MOVi** datasets
-([`refs/kubric/challenges/movi/README.md`](../refs/kubric/challenges/movi/README.md)) wherever
-MOVi has a name for a thing, so a MOVi reader finds the passes where it expects them, and adds
-PhysLoc's annotations beside MOVi's blocks. File names live in `physloc/annotate/layout.py`.
+**Schema version: 2.** Version 0 was a flat `meta.json` with PhysLoc-only file names. Version 1
+followed Kubric's **MOVi** datasets
+([`refs/kubric/challenges/movi/README.md`](../refs/kubric/challenges/movi/README.md)) wherever MOVi
+has a name for a thing, and shipped eleven annotation files per invalid clip. Version 2 keeps the
+MOVi layout and stores only the two annotation files that cannot be derived; everything else is
+computed by [`physloc/loader.py`](../physloc/loader.py). File names live in
+`physloc/annotate/layout.py`.
 
 ## One clip directory
 
@@ -16,7 +18,7 @@ PhysLoc's annotations beside MOVi's blocks. File names live in `physloc/annotate
 | file | MOVi | valid | invalid | contents |
 |---|---|---|---|---|
 | `metadata.json` | ✓ | ✓ | ✓ | everything below |
-| `video.mp4` | ✓ (`video`) | ✓ | ✓ | RGB |
+| `video.mp4` | ✓ (`video`) | ✓ | ✓ | RGB, `uint8 [T,H,W,3]` once decoded |
 | `segmentations.npz` | ✓ | ✓ | ✓ | `segmentations` uint16 `[T,H,W]`, declared instance ids, **0 = background** |
 | `depth.npz` | ✓ | ✓ | ✓ | `depth` float32 `[T,H,W,1]`, metres from the camera centre |
 | `forward_flow.npz` | ✓ | ✓ | ✓ | `forward_flow` float32 `[T,H,W,2]`, pixels, `(row, col)`, `t → t+1` |
@@ -26,21 +28,71 @@ PhysLoc's annotations beside MOVi's blocks. File names live in `physloc/annotate
 | `instances.npz` | ✓ (`instances[*]` tensors) | ✓ | ✓ | per-instance, per-frame arrays — see below |
 | `traj.npz` | | ✓ | ✓ | the simulator trajectory (the seam file) |
 | `bodies.npz`, `energy.npz`, `energy_map.npz` | | ✓ | ✓ | physical quantities and mechanical energy |
-| `reference_mask.npz` | | ✓ | ✓ | where the violators lawfully are |
-| `timelines.npz`, `residuals.npz` | | ✓ | ✓ | per-frame timelines and residuals (zeros on a valid clip) |
-| `violation_mask.npz`, `mask_invalid.npz`, `causal_mask.npz` | | | ✓ | the masks |
-| `violation_ids.npz`, `causal_ids.npz` | | | ✓ | which violator each masked pixel belongs to |
-| `severity_map.npz`, `divergence_map.npz`, `grids.npz` | | | ✓ | severity, divergence (not GT), latent grids |
-| `overlay.mp4` | | | optional | nine-panel review video |
+| **`masks.npz`** | | | ✓ | the dense annotations — see below |
+| **`objects.npz`** | | | ✓ | the per-violator table — see below |
+| `overlay.mp4` | | | optional | review video, `viz.overlay` |
 
 MOVi's raw data (`rgba`, `data_ranges.json`) is not shipped: depth and flow are stored as float32
 in real units, so no range table is needed.
+
+`T,H,W` is `25,128,128` at the debug tier and `89,512,512` at the release tier; `metadata`
+records `num_frames`, `resolution`, `latent_frames` and `latent_hw`.
+
+## `masks.npz` — invalid clips only
+
+| key | dtype | shape | |
+|---|---|---|---|
+| `violation` | uint16 | `[T,H,W]` | `0`, or the instance id of the violator whose footprint covers the pixel in **either** twin; the invalid-side footprint wins where two overlap |
+| `causal` | uint8 | `[T,H,W]` | `0` nothing, `1` a violator, `2` a body it affected — invalid side only |
+| `causal_source` | uint16 | `[T,H,W]` | the violator each `causal` pixel belongs to; non-zero exactly where `causal` is |
+
+`violation[t]` is, per violator, `footprint(invalid, t) ∪ footprint(valid, t)`, gated to that
+violator's own active **and** observable frames. Only *dynamic* violators contribute; a static
+participant (the floor a ball sinks through) appears in `causal` level 2 instead. `causal` level
+2 is measured: bodies whose trajectory provably departs from the valid twin *and* that a violator
+reached at or after its moment, gated on the consequence window unioned with the frames where
+behaviour still differs.
+
+## `objects.npz` — invalid clips only
+
+`K` violators, in the order of `metadata.violation.violators`.
+
+| key | dtype | shape | |
+|---|---|---|---|
+| `ids` | int32 | `[K]` | violator instance ids |
+| `severity` | float32 | `[K,T]` | how badly, in `[0,1]`: `score`, restricted to the frames where the violation is scored **and** visible (see *Three clocks*) |
+| `active` | bool | `[K,T]` | the violator's `violation_windows`, rasterised |
+| `intervening` | bool | `[K,T]` | its `intervention_windows` — something is being changed |
+| `consequence` | bool | `[K,T]` | its `consequence_windows` — the scene differs as a result |
+| `observable` | bool | `[K,T]` | a viewer could tell the twins apart on this body |
+| `occluded` | bool | `[K,T]` | the body has no pixels in the invalid render |
+| `residual` | float32 | `[K,T]` | the family's physical-law residual `r` on this body, in its own units (`violation.peak_residual.law`) |
+| `score` | float32 | `[K,T]` | `r` on `[0,1]`: `clip((r − μ) / (r_strong − μ), 0, 1)`, with `μ`, `σ` and `r_strong` in `metadata.noise_floor` |
+
+The z-score is `(residual − mu) / sigma_eff` from the same block, and is not stored.
+
+## Derived by the loader
+
+These are what v1 stored; v2 derives them, and `physloc/loader.py` is their definition. Each
+matched the v1 file exactly on all 372 invalid clips on disk when v2 was introduced.
+
+| annotation | shape | derived as |
+|---|---|---|
+| `violation_mask` | `bool [T,H,W]` | `violation > 0` — **the training target**; the only mask with pixels for a vanished body |
+| `visible_violation` | `bool [T,H,W]` | `(violation > 0) & (segmentations == violation)` — where the wrong thing is, in the video a model sees (v1 `mask_invalid`) |
+| `severity_map` | `float32 [T,H,W]` | `severity[k,t]` painted on violator k's visible pixels; on a frame where k has none, on `violation == k` (its lawful footprint once it vanished) |
+| `reference_mask` | `bool [T,H,W]` | `isin(valid twin's segmentations, objects.ids)` — where the violators should be, ungated in time |
+| `timeline` | `[T]` | `active`, `intervening`, `consequence`, `observable`: any over violators; `occluded`: the primary violator's row; `severity`: max over violators |
+| `latent_grid` | `[F,h,w]` | masks by max and severity by max and mean over `4x` temporal bins (`latent 0 ← frame 0`, `latent i ← frames 4i−3..4i`) and exact spatial blocks; time-major |
+| `divergence` | `float32 [T,H,W]` | `|valid − invalid|` over RGB, in `[0,1]`. Diverges everywhere downstream of the event. **Never a training target.** |
+
+A valid clip has no violation: the loader returns correctly shaped zeros and `K = 0`.
 
 ## `metadata.json`
 
 ```json
 {
-  "metadata":    { "schema_version": 1, "clip_uid": "...", "label": "invalid", ... },
+  "metadata":    { "schema_version": 2, "clip_uid": "...", "label": "invalid", ... },
   "camera":      { "focal_length": 50.0, "sensor_width": 36.0, "K": [[...]], "positions": [...], ... },
   "instances":   [ { "id": 2, "name": "ball", "asset_id": "sphere", "mass": 1.0, ... } ],
   "events":      { "collisions": [ { "instances": [1, 2], "frame": 9, "force": 12.3, ... } ] },
@@ -51,7 +103,7 @@ in real units, so no range table is needed.
   "noise_floor": { "position_continuity": {...} },
   "provenance":  { "prefix_identical_verified": true, ... },
   "real2sim":    null,
-  "files":       { "segmentations.npz": {"arrays": {"segmentations": {"dtype": "uint16", "shape": [25, 128, 128]}}}, ... }
+  "files":       { "masks.npz": {"arrays": {"violation": {"dtype": "uint16", "shape": [25, 128, 128]}, ...}}, ... }
 }
 ```
 
@@ -59,10 +111,11 @@ in real units, so no range table is needed.
 
 | field | notes |
 |---|---|
-| `schema_version` | `1`. Check it before trusting anything else. |
+| `schema_version` | `2`. Check it before trusting anything else. |
 | `clip_uid`, `pair_uid`, `twin_uid` | `twin_uid` is null on a valid clip, which is shared by every family on its scene. **Never split a pair across splits.** |
 | `label` | `valid` \| `invalid` |
 | `tier`, `release` | geometry (`debug` / `release`) and what the published dataset is called |
+| `latent_frames`, `latent_hw` | the token grid `loader.Clip.latent_grid` reduces to by default |
 | `domain`, `family` | null on a valid clip |
 | `scenario`, `seed`, `variant`, `condition` | `condition` is one of `standard`, `camera`, `distractors`, `multi`, `camera+multi` |
 | `n_distractors`, `n_actors`, `n_violators` | what landed in the scene |
@@ -83,7 +136,7 @@ in real units, so no range table is needed.
 |---|---|
 | `focal_length`, `sensor_width` | mm; Kubric's defaults, 50 and 36 |
 | `field_of_view` | horizontal, degrees |
-| `K` | 3×3, Kubric's **normalised** intrinsics (`PerspectiveCamera.intrinsics`); multiply by the resolution for pixels |
+| `K` | 3×3, Kubric's **normalised** intrinsics (`PerspectiveCamera.intrinsics`); projects to `(x, y)` in `[0,1]`, y down |
 | `positions` | `[s,3]` world, per frame |
 | `quaternions` | `[s,4]` `(w,x,y,z)`, camera-to-world, looking down −Z (`look_at_quat`) |
 | `motion` | `static`, `track`, `orbit` or `dolly` |
@@ -114,10 +167,12 @@ family targets), `shadow` (the scripted stand-in on `shadow_track`, carrying no 
 | `ids` | `[k]` | the instance ids, in order |
 | `positions`, `quaternions` | `[k,s,3]`, `[k,s,4]` | world; `(w,x,y,z)` |
 | `velocities`, `angular_velocities` | `[k,s,3]` | |
-| `bboxes_3d` | `[k,s,8,3]` | world corners, Kubric's corner order, following any resize |
+| `bboxes_3d` | `[k,s,8,3]` | world corners, Kubric's corner order (`product(x, y, z)`), following any resize |
 | `image_positions` | `[k,s,2]` | `(x, y)` in `[0,1]`, y down (`Camera.project_point`) |
 | `bboxes` | `[k,s,4]` | `(ymin, xmin, ymax, xmax)` in `[0,1]` from the segmentation; **NaN** where not visible |
 | `visibility` | `[k,s]` | pixels per frame |
+
+A body that vanished keeps a pose here; `traj.npz` `present` says whether it exists.
 
 ### `events.collisions`
 
@@ -141,7 +196,7 @@ point; the events group them.
 | `intervention` | `type`, `params`, `magnitude`, `magnitude_unit`, `severity_bin` |
 | `peak_residual` | `law`, `value`, `z_vs_valid`, `score`, `frame` |
 | **`violator_timing`** | `independent`, `sync` or `shared` — see below |
-| **`violators`** | one record per dynamic violator, below |
+| **`violators`** | one record per dynamic violator, below; row `k` of `objects.npz` |
 | `difficulty_inputs` | the two array-derived difficulty values |
 
 **Each violator on its own clock.** In a `multi` clip whose family acts on each body separately,
@@ -169,7 +224,7 @@ max across windows.
 `consequence_windows` is when the scene differs as a result (and may run past the evidence);
 `violation_windows` is **where the evidence is** — the intervention window for a family whose
 evidence is the change itself (`detectable == "event"`), the consequence window otherwise. So
-`intervention_windows ⊆ violation_windows`.
+`intervention_windows ⊆ violation_windows`. `severity` is scored on the same window.
 
 `magnitude` is the knob turned (exact); `peak_residual.value` is the measured consequence.
 
@@ -179,77 +234,50 @@ evidence is the change itself (`detectable == "event"`), the consequence window 
 - `difficulty` (invalid only): `level`, `rank`, `binding_factors`, `factors` — seven factors,
   worst one wins; thresholds in `configs/common.yaml`, frozen per release.
 - `energy`: `E0`, `E_end`, dissipation and the three anomaly peaks, as fractions of `E0`.
+- `noise_floor`: per law, `mu`, `sigma`, `sigma_eff`, `n_samples` and `r_strong` — the
+  calibration `objects.score` was computed with.
 - `provenance`: `generator_commit`, `kubric_image_digest`, `blender_version`, `render_seed`,
   `prefix_identical_verified` (**measured** pixel by pixel over `[0, t_event)`),
   `prefix_differing_pixels`, `prefix_identical_upto_frame`.
 - `files`: every file beside the metadata, with each array's key, dtype and shape.
 
-## Masks — which side of the twin each one lives on
+## `traj.npz`, `bodies.npz`, `energy.npz`
 
-| array | side | |
-|---|---|---|
-| `violation_mask` | **union** of both twins | the training target; the only mask with pixels for a vanished body |
-| `mask_invalid` | invalid only | where the wrong thing is, in the video a model sees |
-| `reference_mask` | valid only | where the violators should have been; ungated in time |
-| `severity_map` | invalid only | how badly, per pixel; each violator painted with its own score |
-| `causal_mask` | invalid only | uint8: `1` a violator, `2` a body it measurably disturbed |
-| `violation_ids` | as `violation_mask` | uint16 violator id per masked pixel; the invalid-side footprint wins on overlap |
-| `causal_ids` | as `causal_mask` | uint16: the violator whose violation or consequence the pixel is |
-
-`violation_mask[t] = footprint(violator, invalid, t) ∪ footprint(violator, valid, t)`, per
-violator gated to that violator's own active **and** observable frames, then combined. A body that
-vanished has no invalid footprint, so its severity falls back to its lawful footprint on those
-frames only. `causal_mask` level 2 is measured: bodies that provably depart from the valid twin
-*and* that a violator reached at or after its moment.
-
-`divergence_map` is `|valid − invalid|` and diverges everywhere downstream of the event. **Never
-a training target.**
-
-## `timelines.npz` and `residuals.npz`
-
-| key | shape | |
-|---|---|---|
-| `active`, `intervening`, `consequence`, `observable`, `occluded` | `[T]` bool | clip-level |
-| `severity_t` | `[T]` f32 | `severity_map[t].max()` |
-| `violator_ids` | `[K]` | violator instance ids, in `violation.violators` order |
-| `violator_active`, `violator_intervening`, `violator_consequence`, `violator_observable`, `violator_occluded` | `[K,T]` bool | each violator's own timelines |
-| `violator_severity_t` | `[K,T]` f32 | each violator's peak severity per frame |
-
-`residuals.npz`: `r`, `z`, `s` `[T]` for the primary violator and `law`; plus `violator_ids`,
-`violator_r`, `violator_s` `[K,T]`.
-
-## `grids.npz`, `traj.npz`, `bodies.npz`, `energy.npz`
-
-- `grids.npz`: masks and severity reduced to the latent token grid, time-major
-  `[F_lat, H_lat, W_lat]`, `F_lat = (T - 1) / 4 + 1`.
-- `traj.npz`: the seam — `pos`, `quat`, `lin_vel`, `ang_vel`, `present`, `scale_mul`,
-  `colour`, `opacity`, contacts, `fps`, `gravity`, and the spec as JSON.
+- `traj.npz`: the seam, **time-major** — `pos [T,B,3]`, `quat`, `lin_vel`, `ang_vel`, `present`,
+  `scale_mul`, `colour`, `opacity`, contacts, `fps`, `gravity`, and the spec as JSON.
 - `bodies.npz`: the quantities the energy was computed from; `mass [T,B]` follows volume.
 - `energy.npz` / `energy_map.npz`: the trace and the per-pixel map. See [energy.md](energy.md).
 
-**Two encodings that bite:** depth's background is a sentinel (~`1.1e10`), so mask with
-`segmentations > 0`; flow is `(row, col)`, not `(x, y)`.
+**Encodings that bite:** depth's background is a sentinel (~`1.1e10`), so mask with
+`segmentations > 0`; flow is `(row, col)`, not `(x, y)`; `instances.npz` is instance-major
+`[k,T]` while `traj.npz` is time-major `[T,B]`.
 
 ## Cross-checks enforced by `physloc validate`
 
-0. `metadata.schema_version == 1`
+Checks on annotations read through the loader, so they validate what a consumer receives.
+
+0. `metadata.schema_version == 2`
 1. every instance carries a non-empty `license` (both twins)
 2. `t_event_frame ≤ t_observable_frame` and `t_event_frame ≤ t_end_frame`
 3. `violation_windows` sorted, non-overlapping, within `[0, num_frames)`; `t_event_frame` and
    `t_end_frame` equal their extremes
-4. `timelines.active` is exactly the rasterisation of `violation_windows`; likewise `observable`
+4. the clip timeline's `active` is exactly the rasterisation of `violation_windows`; likewise
+   `observable`
 5. `violation_mask` is non-empty on every `active ∧ observable` frame, and empty on
    `active ∧ ¬observable` frames
-6. `severity_t[t] == severity_map[t].max()`
+6. `severity_map` has no pixels outside `violation_mask`
 7. every `causal_body_id` is an instance; `newton3_reaction` has ≥ 2
 8. `spatial_extent == "global"` iff `family == "global_gravity"`
 9. `domain` matches `family`; `(scenario, family)` is in the compatibility matrix;
    `physics_medium == "granular"` iff `scenario == "pour"`
-10. `intervention_windows ⊆ violation_windows`; `mask_invalid ⊆ violation_mask`
+10. `intervention_windows ⊆ violation_windows`; an invalid clip has `masks.npz` and `objects.npz`
 11. `provenance.prefix_identical_verified` is true
 12. `violation` is null iff `label == "valid"`
 13. every pair has one valid and at least one invalid clip
 14. each violator is a causal body, with `t_event ≤ t_observable` and in-range windows; the
     earliest violator's moment is the clip's
-15. `violation_ids` covers exactly `violation_mask` and names only violators
+15. `masks.npz` `violation` and `causal_source` name only violators; `causal_source` covers
+    exactly `causal`
 16. `instances.npz` has `k` rows in instance order and `num_frames` columns
+17. `objects.npz` `ids` are `violation.violators` in order, every `[K,T]` array has that shape,
+    `severity` lies in `[0,1]`, and every `masks.npz` array is `[T,H,W]` like `segmentations`

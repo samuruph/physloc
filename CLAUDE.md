@@ -145,10 +145,10 @@ publication. Nothing has been published yet.
   annotating something else. The three optical families own the shadow and are left
   alone. **A shadow also carries no energy**: it is a picture of an absence, not matter,
   and `role == "shadow"` is skipped by `residuals.energy`.
-- **`reference_mask` ships on both twins** -- the violator's lawful footprint, taken from the
-  valid render and ungated in time. It is the counterfactual "where it should be", and for a
-  vanished body it is the only mask with any pixels. Visualisers draw it as a green outline
-  *on top of* the red violation mask (drawing it under lets the fill hide it).
+- **`reference_mask` comes from the valid twin** -- the violators' lawful footprint
+  (`loader.reference_mask`), ungated in time. It is the counterfactual "where it should be".
+  Visualisers draw it as a green outline *on top of* the red violation mask (drawing it under
+  lets the fill hide it).
 - **Debug generation defaults to one `strong` variant per cell**, with `--severity all` for
   the ladder and `--window N` for a uniform duration. Breadth of coverage is what you check
   first; three strengths of one cell is what you check second.
@@ -176,11 +176,20 @@ publication. Nothing has been published yet.
   (`segmentations`, `forward_flow`, `normal`, ...); per-frame instance tensors live in
   `instances.npz`. File names are in `annotate/layout.py` and nowhere else. Instances keep
   declaration order (not MOVi's visibility sort) so both twins agree on who is who.
+- **Schema v2 stores only what cannot be derived.** An invalid clip ships `masks.npz`
+  (`violation` id map, `causal`, `causal_source`) and `objects.npz` (per violator `[K,T]`:
+  `severity`, the five clocks, `residual`, `score`); a valid clip ships no annotation files.
+  `violation_mask`, `visible_violation`, `severity_map`, `reference_mask`, the clip timeline,
+  latent grids and divergence are computed by `physloc/loader.py`, the one implementation of
+  each -- validate, export, audit and viz all read through it. Every derivation matched the v1
+  files exactly on 372 clips. It imports nothing from `physloc`, so another environment can
+  import it by path; keep it that way. A new annotation becomes a stored array only if it
+  cannot be computed from these; otherwise it is a loader function.
 - **Object size varies per scene** (`params.objects.size_scale`, `pour` exempt), and an L3
   scan is sized by bounding VOLUME, not its longest axis (`base.gso_scale_ladder`), stepping
   back towards the longest-axis rule only where a larger scan would start inside a neighbour.
-- **`causal_mask` lasts as long as the consequences do, and that is MEASURED.** Level 1 is
-  red (the violator the plan names), level 2 is blue (a body it disturbed) — both drawn
+- **`causal` lasts as long as the consequences do, and that is MEASURED.** Level 1 is
+  red (the violator the plan names), level 2 is blue (a body it affected) — both drawn
   invalid-side only, both labelled in the overlay's causal panel. The gate is the declared
   consequence window *unioned with* the frames where the invalid trajectory provably
   departs from the valid one, so a two-frame `newton2_mass` exchange that leaves both balls
@@ -197,19 +206,21 @@ publication. Nothing has been published yet.
    before `t_event`. If that assert fails, every downstream annotation is suspect. Anything
    that perturbs the render path — resolution, `samples_per_pixel`, denoising, motion blur,
    seeds — must be identical across a twin pair.
-2. **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel
-   space and it diverges everywhere downstream of the event. Ship it, label it, never train
-   on it. The training targets are `violation_mask` and `severity_map`.
+2. **`divergence` is not the violation region.** It is `|valid − invalid|` in pixel
+   space and it diverges everywhere downstream of the event. It is computed from the two
+   videos for inspection, labelled, and never trained on. The training targets are
+   `violation_mask` and `severity_map`.
 3. **`violation_mask` is the union over BOTH twins**:
    `violation_mask[t] = footprint(violator, invalid, t) ∪ footprint(violator, valid, t)`.
    Without this, vanish and teleport violations produce empty or half-empty masks — the body
    has no pixels in the invalid render precisely because it vanished. Guarded by
    `test_mask_union.py`.
-   **`severity_map` and `causal_mask` are the invalid side only**, and `mask_invalid` ships
+   **`severity_map` and `causal` are the invalid side only**, and `visible_violation` is
    that footprint on its own. They answer "where is the thing that is wrong", and at
-   inference a model only has the invalid video. The cost is accepted and documented:
-   `permanence` and `dissolve` get an all-zero severity map, with `reference_mask` carrying
-   where the body should have been.
+   inference a model only has the invalid video. Once a body has vanished (`permanence`,
+   `dissolve`) its severity falls back to its lawful footprint; a body that is merely hidden
+   -- behind a screen, under the floor -- scores zero, with `reference_mask` carrying where
+   it should have been.
 4. **Injectors never touch the sim rng.** Otherwise the twin diverges from frame 0 and (1)
    breaks. A family may take either of two paths after `t_event`:
    - **staged** (`Injector.simulates(plan)`): the world is reset to the valid state at
@@ -259,7 +270,7 @@ publication. Nothing has been published yet.
 - **container** (pinned image): Kubric 2022.4.1, Blender 2.93.4, PyBullet, Python 3.9 —
   scene sampling, simulation, rendering. Writes `traj.npz` + raw passes.
 - **host** (`conda activate physloc`, Python 3.11): numpy/scipy/opencv/jsonschema —
-  residuals, annotation, masks, severity, grids, validation, viz.
+  residuals, annotation, masks, severity, the loader, validation, viz.
 
 Never install Kubric, Blender or PyBullet on the host. The trajectory seam is the boundary.
 
@@ -277,11 +288,20 @@ Never install Kubric, Blender or PyBullet on the host. The trajectory seam is th
 ## Visualisation
 
 `overlay.mp4` only -- **no image files anywhere**. The container has no ffmpeg, so it writes
-arrays and every mp4 comes from `physloc/viz/video.py`. Nine panels in one order everywhere -- RGB,
-energy, segmentation, depth, optical flow, mask, severity, causal, divergence: evidence
-first, then the annotation derived from it. A red dot while the violation is active, and a
-timeline with both window families and the three clocks. `grid`, `sheet` and `coverage` use
-the same nine and the same order.
+arrays and every mp4 comes from `physloc/viz/video.py`. One renderer, `viz.overlay.Renderer`,
+reads a clip through the loader and draws **layers** on the RGB panel (violation, visible,
+severity, causal, reference, 2D and 3D boxes, centres, velocity, labels, events) and
+**panels** beside it (valid twin, segmentation, depth, flows, normals, object coordinates,
+energy, mask, severity, causal, divergence, top-down camera). `overlay.mp4` keeps nine panels
+in one order -- RGB, energy, segmentation, depth, optical flow, mask, severity, causal,
+divergence: evidence first, then the annotation derived from it -- and `grid`, `sheet` and
+`coverage` use the same nine. A red dot while the violation is active, and a timeline with the
+three clocks, one row per violator and a severity lane. `test_dataset_loader.py --render`
+picks any layers and panels; `--gui` serves the same renderer to a browser (`viz/gui.py`,
+frames rendered in memory, never written).
+
+Boxes, centres, arrows and labels skip a body the trajectory marks absent: a vanished body
+keeps a pose, and a box drawn around nothing reads as a detection.
 
 When drawing text on frames, use `viz.overlay._text`: it draws a dark backing box rather
 than a thick outline, because OpenCV's Hershey glyph advance grows with stroke thickness, so

@@ -91,25 +91,38 @@ One valid twin is shared by every family and severity staged on that scene.
     invalid_<family>_<bin>/      one clip per cell per severity bin
 ```
 
-Every clip directory holds the same kind of files. The layout follows Kubric's
+Every clip directory holds the same files, except that only an invalid clip carries annotations.
+The layout follows Kubric's
 [MOVi](https://github.com/google-research/kubric/tree/main/challenges/movi#annotations-and-format)
 datasets — same file and key names — with PhysLoc's annotations added beside them.
 
-| file | contents |
-|---|---|
-| `video.mp4` | the RGB video |
-| `metadata.json` | everything about the clip (below) |
-| `segmentations.npz` | `uint16 [T,H,W]` instance ids — stable across frames, so each id is an object track |
-| `instances.npz` | per object, per frame: `positions`, `quaternions`, `velocities`, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
-| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | geometry passes, one `.npz` each |
-| **`violation_mask.npz`** | `bool [T,H,W]` — **where** the violation can be seen (invalid clips) |
-| **`severity_map.npz`** | `f16 [T,H,W]` — **how badly**, per pixel, in `[0,1]` |
-| `causal_mask.npz` | `uint8 [T,H,W]` — `1` a violator, `2` a body it disturbed |
-| `violation_ids.npz` · `causal_ids.npz` | `uint16 [T,H,W]` — **which** violator each masked pixel belongs to |
-| `reference_mask.npz` | `bool [T,H,W]` — where the violators lawfully are (from the valid twin) |
-| `timelines.npz` | **when**: per-frame flags for the clip, and `[K,T]` per violator |
-| `energy` · `bodies` · `residuals` · `traj` · `grids` | physics, raw residuals, latent-grid masks |
-| `overlay.mp4` | every annotation burned into one video, for review |
+| file | shape | contents |
+|---|---|---|
+| `video.mp4` | `uint8 [T,H,W,3]` | the RGB video |
+| `metadata.json` | | everything about the clip (below) |
+| `segmentations.npz` | `uint16 [T,H,W]` | instance ids, `0` = background — stable across frames, so each id is an object track |
+| `instances.npz` | `[k,T,…]` | per object, per frame: `positions`, `quaternions`, `velocities`, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
+| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | `[T,H,W,C]` | geometry passes, one `.npz` each |
+| `traj` · `bodies` · `energy` · `energy_map` | | the simulator trajectory, physical quantities, mechanical energy |
+| **`masks.npz`** *(invalid)* | `[T,H,W]` | `violation` uint16 — **where**: `0`, or the instance id of the violating object · `causal` uint8 — `1` a violator, `2` a body it affected · `causal_source` uint16 — which violator |
+| **`objects.npz`** *(invalid)* | `[K,T]` | per violating object, per frame: `severity` — **how badly**, in `[0,1]` · `active`, `intervening`, `consequence`, `observable`, `occluded` — **when** · `residual`, `score` — the raw physical residual and its `[0,1]` scaling |
+| `overlay.mp4` | | every annotation drawn on the video, for review |
+
+`T,H,W` is `25,128,128` at the debug tier and `89,512,512` at the release tier. `k` is the number
+of objects in the scene and `K` the number of violating objects; both vary from clip to clip.
+
+**Everything else is derived, not stored.** [`physloc/loader.py`](physloc/loader.py) computes it on
+load, and its functions are the definition:
+
+| annotation | shape | derived as |
+|---|---|---|
+| `violation_mask` | `bool [T,H,W]` | `violation > 0` — the localisation target, unioned over both twins so a vanished body keeps its pixels |
+| `visible_violation` | `bool [T,H,W]` | the part of `violation_mask` where the violator is rendered in *this* video |
+| `severity_map` | `float32 [T,H,W]` | each violator's `severity[k,t]` painted over its visible pixels — over its lawful footprint once it has vanished |
+| `reference_mask` | `bool [T,H,W]` | the violators' pixels in the valid twin: where they should be |
+| `timeline` | `[T]` | the per-object clocks OR-ed over violators (`occluded` is the primary violator's); `severity` is the per-frame max |
+| `latent_grid` | `[F,h,w]` | mask and severity reduced to the video-VAE token grid, `F = (T−1)/4 + 1` |
+| `divergence` | `float32 [T,H,W]` | `|valid − invalid|` — for inspection only, never a target |
 
 `metadata.json` keeps MOVi's four blocks and adds PhysLoc's:
 
@@ -124,47 +137,64 @@ datasets — same file and key names — with PhysLoc's annotations added beside
 
 The full field reference is [docs/schema.md](docs/schema.md).
 
-### Loading a clip
+### Loading the dataset
+
+`physloc/loader.py` needs only numpy (and imageio for the video), so another environment can import
+it by path. It reads a generated release (`clips/`) or an exported one (`shards/`, read in place):
 
 ```python
-import json
-import numpy as np
-import imageio.v2 as imageio
+from physloc.loader import PhysLocDataset, collate
 
-clip = "out/review/clips/review/L0/drop/0000_multi/invalid_continuity_strong"
+ds = PhysLocDataset("out/physloc_mini", label="invalid", family="permanence")  # filters optional
+clip = ds.clips[0]
 
-meta  = json.load(open(f"{clip}/metadata.json"))
-video = np.stack(imageio.mimread(f"{clip}/video.mp4", memtest=False))  # [T,H,W,3] uint8
-seg   = np.load(f"{clip}/segmentations.npz")["segmentations"]          # [T,H,W]
-mask  = np.load(f"{clip}/violation_mask.npz")["mask"]                  # [T,H,W] bool
-sev   = np.load(f"{clip}/severity_map.npz")["severity"]                # [T,H,W] float16
-ids   = np.load(f"{clip}/violation_ids.npz")["ids"]                    # [T,H,W] violator id
+clip.video                   # uint8   [T,H,W,3]
+clip.violation_mask          # bool    [T,H,W]   where
+clip.severity_map            # float32 [T,H,W]   how badly
+clip.objects["severity"]     # float32 [K,T]     per violating object
+clip.timeline["active"]      # bool    [T]       when
+clip.metadata["violation"]["violators"]          # each violator's moment and windows
 
-print(meta["metadata"]["label"], meta["metadata"]["family"])
-v = meta["violation"]                          # None on a valid clip
-for c in v["violators"]:                        # each violating object, on its own clock
-    print(c["instance_id"], c["t_event_frame"], c["violation_windows"])
-    violator_mask = ids == c["instance_id"]     # where THIS object's violation is
+for pair in ds.pairs():      # a valid clip and every invalid clip made from its scene
+    print(pair.prompt, pair.valid.uid, [c.family for c in pair.invalids])
+
+batch = collate([ds[i] for i in range(8)])       # stacks arrays, pads objects to the largest K
 ```
 
-A published release is sharded for streaming; every file above is one member of a sample:
+Filters are `label`, `family`, `scenario`, `level`, `condition`, `severity_bin` and, on an exported
+release, `split`. `ds[i]` returns the arrays named in `keys` (default: `video`, `violation_mask`,
+`severity_map`, `causal`, `timeline`, `objects`); dense passes are decoded only when asked for, and
+`torch_dataset(ds)` wraps the dataset for a `DataLoader`.
 
-```python
-import webdataset as wds
-for sample in wds.WebDataset("shards/main-000.tar"):
-    meta = json.loads(sample["metadata.json"])
+To check a dataset by eye:
+
+```bash
+python test_dataset_loader.py out/physloc_mini            # what is in it, every array's shape
+python test_dataset_loader.py out/physloc_mini --gui      # browser viewer, http://localhost:8765
+python test_dataset_loader.py out/physloc_mini --render 3 \
+    --layers violation,reference,bbox3d,labels --panels rgb,valid,segmentation,depth,camera
 ```
+
+Both draw the same things: **layers** on the RGB video — `violation`, `visible`, `severity`,
+`causal`, `reference`, `bbox2d`, `bbox3d`, `centers`, `velocity`, `labels`, `events` — and **panels**
+beside it — `valid`, `segmentation`, `depth`, `flow`, `backward_flow`, `normal`,
+`object_coordinates`, `energy`, `mask`, `severity`, `causal`, `divergence`, `camera` — above a
+timeline of every clock with one row per violating object.
 
 ### Before you train on it
 
-- **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel space and
+- **`divergence` is not the violation region.** It is `|valid − invalid|` in pixel space and
   diverges everywhere downstream of the event, so a model trained on it learns to find the edit,
   not the physics. Train on `violation_mask` and `severity_map`.
 - **`violation_mask` is gated on visibility.** It answers *where can this be seen*, so it is
-  empty while the violator is hidden. `timelines.active` is the unhedged truth about *when*; the
+  empty while the violator is hidden. `timeline["active"]` is the unhedged truth about *when*; the
   gap between them is the observability lag.
-- **`permanence` and `dissolve` have an all-zero severity map** — the body is gone, so it has no
-  pixels to score. `reference_mask` carries where it should have been.
+- **Severity needs a visible body.** Once a body has vanished (`permanence`, `dissolve`) its
+  severity is painted on its lawful footprint; a body that is merely hidden — behind a screen,
+  under the floor — scores zero. `reference_mask` carries where it should have been.
+- **Encodings that bite:** depth's background is a ~`1e10` sentinel, so mask with
+  `segmentations > 0`; flow is `(row, col)`, not `(x, y)`; `instances.npz` is object-first
+  `[k,T]` while `traj.npz` is time-first `[T,B]`.
 
 ### How much is generated
 
@@ -469,7 +499,7 @@ Group by `difficulty`; filter by `difficulty_rank`.
 - **Report per family, aggregate to domain,** and cross with severity, complexity and condition.
   Do not pool families into one number: cell counts per domain are very uneven (see
   [Taxonomy](#taxonomy)), so a pooled score mostly measures the largest domain.
-- **Use `timelines.active` for temporal metrics and `violation_mask` for spatial ones.** They
+- **Use `timeline["active"]` for temporal metrics and `violation_mask` for spatial ones.** They
   disagree on purpose.
 - **Some families are separable by residual, some only by situation.**
   `taxonomy.EXCLUSIVE_LAWS` names the ones with a clean tripwire (`tests/test_orthogonality.py`
@@ -857,9 +887,11 @@ physloc/injectors/    the violation families, one file per domain
 physloc/render/       the container worker, and probes for render cost
 physloc/sim/          trajectories and the simulation seam
 physloc/residuals/    the physical residuals severity is measured from
-physloc/annotate/     residuals -> masks, severity, timelines, difficulty, metadata.json
+physloc/annotate/     residuals -> masks, severity, clocks, difficulty, metadata.json
+physloc/loader.py     reads a release and derives every annotation (numpy only)
 physloc/release/      export, splits, dataset card
-physloc/viz/          overlays, grids, sheets; every mp4 is written here
+physloc/viz/          the overlay renderer, browser viewer, grids, sheets; every mp4
+test_dataset_loader.py  load a dataset, print its structure, look at it
 physloc/cli.py        the `physloc` command line
 configs/              common.yaml and one file per run
 scripts/              run.sh, run_fast.sh, probes and refresh tools

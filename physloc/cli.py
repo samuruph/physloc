@@ -1675,6 +1675,37 @@ def cmd_viz(a) -> int:
     return 0
 
 
+def cmd_compare(a) -> int:
+    """The dataset's structure, side by side -- see `viz/compare.py`.
+
+    One scenario x family with `--scenario` and `--family`; otherwise every
+    cell the roots can support, or `--limit` of them per kind spread over the
+    scenarios. Reads clips already on disk and renders nothing new.
+    """
+    from .viz import compare
+
+    kinds = compare.KINDS if a.kind == "all" else (a.kind,)
+    outdir = a.outdir or os.path.join(a.roots[0], "compare")
+    if a.scenario and a.family:
+        recs = compare.index(a.roots)
+        made = []
+        for kind in kinds:
+            path = os.path.join(outdir, kind,
+                                "%s__%s.mp4" % (a.scenario, a.family))
+            try:
+                made.append(compare.one(kind, recs, a.scenario, a.family, path,
+                                        severity=a.severity, level=a.level,
+                                        n=a.n))
+            except ValueError as exc:
+                print("  -- %s: %s" % (kind, exc), file=sys.stderr)
+        print(json.dumps({"made": made}))
+        return 0
+    print(json.dumps(compare.batch(a.roots, outdir, kinds, limit=a.limit or None,
+                                   severity=a.severity, level=a.level, n=a.n),
+                     default=str))
+    return 0
+
+
 def cmd_coverage(a) -> int:
     from .viz.grid import coverage
     print(json.dumps(coverage(a.root, a.out, severity=a.severity), default=str))
@@ -1909,6 +1940,26 @@ def _build(suppress: bool = False):
                    help="which bin to tile; one lattice per bin")
     p.set_defaults(fn=cmd_coverage)
 
+    p = add_parser("compare",
+                   help="dataset structure: levels, variants and conditions "
+                        "of one cell side by side")
+    p.add_argument("roots", nargs="+",
+                   help="release roots to draw from, e.g. out/review_L0 "
+                        "out/review_L3 out/review_conditions")
+    p.add_argument("--kind", default="all",
+                   choices=["all", "levels", "variants", "conditions"])
+    p.add_argument("--scenario", help="with --family: just this cell")
+    p.add_argument("--family")
+    p.add_argument("--severity", default="strong")
+    p.add_argument("--level", default="L0",
+                   help="the level variants and conditions are drawn at")
+    p.add_argument("-n", type=int, default=5, help="variants per video")
+    p.add_argument("--limit", type=int, default=0,
+                   help="at most this many cells per kind, spread over "
+                        "scenarios (0 = every cell)")
+    p.add_argument("--outdir", help="default <first root>/compare")
+    p.set_defaults(fn=cmd_compare)
+
     p = add_parser("config-path",
                    help="print the outdir a config resolves to")
     p.add_argument("--outdir")
@@ -1934,7 +1985,7 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_export)
 
     p = add_parser("stats",
-                   help="what a release contains: five figures and stats.json")
+                   help="what a release contains: seven figures and stats.json")
     p.add_argument("root", help="a release root, e.g. out/physloc_v0")
     p.add_argument("--outdir", help="default <root>/stats")
     p.set_defaults(fn=cmd_stats)

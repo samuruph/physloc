@@ -129,6 +129,13 @@ def main() -> None:
     a = ap.parse_args()
 
     root = a.root or download(a.repo, a.cache)
+    if (not a.generated and os.path.isdir(os.path.join(root, "clips"))
+            and not os.path.exists(os.path.join(root, "loader.py"))):
+        # A generator run: it has clips/ and no shipped loader. Say so and read
+        # it, rather than refuse a command whose intent is unambiguous.
+        print("%s is a generator run (clips/, no loader.py): reading it with "
+              "this repository's loader, as --generated would." % root)
+        a.generated = True
     if a.generated:
         from physloc import loader
     else:

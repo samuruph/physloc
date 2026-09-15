@@ -5,11 +5,30 @@
 #
 #   bash scripts/run_reviews.sh                    # the standard set
 #   bash scripts/run_reviews.sh review_L2 review   # or just these
+#   bash scripts/run_reviews.sh --frames 37        # every config, full length
+#
+# `--frames N` / `--fps N` override the render geometry of every config --
+# e.g. v0's 2.97 s at 12 fps is `--frames 37` (frames must be 4k+1) -- and
+# send each run to its own directories (`out/review_L0_f37`,
+# `out/work_review_L0_f37`), so a long sweep never resumes into, or overwrites,
+# the short one.
 #
 # `PHYSLOC_PUSH_OWNER` makes each run publish to <owner>/physloc-<config>;
 # leave it unset to keep everything local.
 set -u
 cd "$(dirname "$0")/.."
+
+DIALS=()
+SUFFIX=""
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --frames) DIALS+=(--frames "$2"); SUFFIX="${SUFFIX}_f$2"; shift 2 ;;
+    --fps)    DIALS+=(--fps "$2");    SUFFIX="${SUFFIX}_fps$2"; shift 2 ;;
+    *)        POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 CONFIGS=("$@")
 if [ ${#CONFIGS[@]} -eq 0 ]; then
@@ -24,7 +43,15 @@ for C in "${CONFIGS[@]}"; do
   echo "=== $C  $(date) ==="
   # NOT `set -e`: one config failing is a reason to look at that config, not a
   # reason to lose the six that would have run after it overnight.
-  bash scripts/run.sh "$C" 2>&1 | tee "out/logs/$C.txt"
+  EXTRA=()
+  if [ -n "$SUFFIX" ]; then
+    BASE=$(conda run --no-capture-output -n physloc python -m physloc.cli \
+           config-path --config "$C" 2>/dev/null || echo "out/$C")
+    NAME="$(basename "$BASE")$SUFFIX"
+    EXTRA=("${DIALS[@]}" --outdir "out/$NAME" --workdir "out/work_$NAME")
+  fi
+  bash scripts/run.sh "$C" "${EXTRA[@]+"${EXTRA[@]}"}" 2>&1 \
+    | tee "out/logs/$C$SUFFIX.txt"
   echo "=== $C exit ${PIPESTATUS[0]}  $(date) ==="
 done
 echo "ALL DONE $(date)"

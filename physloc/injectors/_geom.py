@@ -183,9 +183,30 @@ MOTION_DOMAINS = frozenset({"kinematics", "dynamics", "global"})
 #: Below this speed, in m/s, a body counts as at rest.
 REST_SPEED = 0.15
 
-#: Share of the clip a motion event must leave between itself and the moment
-#: the actor comes to rest, floored at two frames.
-MOTION_ROOM = 0.15
+#: ...and below this share of its own PEAK speed a body is no longer doing
+#: anything a motion violation could be seen on. Rest speed alone let a ball
+#: that landed at 6.5 m/s and then rolled at 0.4 count as moving to the last
+#: frame (drop 777, container), so on a long clip antigravity could fire
+#: seconds after the drop. 15% of peak keeps the visible bounces (1-1.5 m/s
+#: there) and drops the roll.
+MOTION_SHARE = 0.15
+
+#: Time, in SECONDS, a motion event must leave between itself and the moment
+#: the actor stops moving. It was a share of the clip, which grows with the
+#: clip while the motion does not: at 61 frames the room outgrew the motion,
+#: the limit fell before the band opened, and the limit was ignored -- events
+#: then landed on bodies at rest on `collision`, `ramp_slide` and
+#: `stack_topple`. Seconds are the same at every length and frame rate.
+MOTION_ROOM_SECONDS = 0.35
+
+#: The earliest a motion event may fire, in seconds, when its actor stops
+#: moving before `EVENT_BAND` opens. Firing inside the motion that exists beats
+#: firing on a body at rest.
+EVENT_EARLIEST_SECONDS = 0.3
+
+
+def _fps(spec) -> float:
+    return float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
 
 
 @contextlib.contextmanager
@@ -219,8 +240,10 @@ def culprit_context(body_id: Optional[int]):
 def motion_limit(spec) -> Optional[int]:
     """The latest frame a MOTION family may fire on, or None for no limit.
 
-    The frame the primary actor last moves, less `MOTION_ROOM` of the clip, on
-    the rollout the current event context carries. None when the family is not
+    The frame the primary actor last moves -- faster than `MOTION_SHARE` of its
+    peak speed, and than `REST_SPEED` -- less `MOTION_ROOM_SECONDS`, on the
+    rollout the current event context carries. Both in physical terms, so the
+    limit is the same moment of the motion whatever the clip's length or rate. None when the family is not
     in `MOTION_DOMAINS`, when there is no rollout to ask, or when the actor
     never moves -- `resting_table` and `stack_topple` stage bodies at rest on
     purpose, and there is no motion to protect.
@@ -241,11 +264,12 @@ def motion_limit(spec) -> Optional[int]:
     except Exception:                                         # noqa: BLE001
         return None
     speed = np.linalg.norm(np.asarray(traj.lin_vel[:, bi, :], np.float64), axis=1)
-    moving = np.flatnonzero(speed > REST_SPEED)
-    if moving.size == 0:
+    if speed.size == 0 or float(speed.max()) <= REST_SPEED:
         return None
-    T = int(traj.num_frames)
-    return int(moving[-1]) - max(2, int(round(MOTION_ROOM * T)))
+    moving = np.flatnonzero(speed > max(REST_SPEED,
+                                        MOTION_SHARE * float(speed.max())))
+    room = max(1, int(round(MOTION_ROOM_SECONDS * _fps(spec))))
+    return int(moving[-1]) - room
 
 
 def event_fraction(spec, body_id: Optional[int] = None) -> float:
@@ -314,12 +338,16 @@ def frame_in_band(spec, lo: int, hi: int) -> int:
     Interpolating instead means the choice survives however narrow the band is.
 
     A MOTION family's band also ends before its actor comes to rest -- see
-    `motion_limit` -- whenever that leaves any band at all.
+    `motion_limit`. Where the motion is over before the band opens, the band
+    opens earlier (`EVENT_EARLIEST_SECONDS`) rather than the limit being
+    dropped: dropping it is what put events on bodies at rest in long clips.
     """
     lo, hi = int(lo), int(hi)
     limit = motion_limit(spec)
-    if limit is not None and limit >= lo:
-        hi = min(hi, limit)
+    if limit is not None:
+        if limit < lo:
+            lo = min(lo, max(1, int(round(EVENT_EARLIEST_SECONDS * _fps(spec)))))
+        hi = min(hi, max(lo, limit))
     if hi <= lo:
         return lo
     return lo + int(round(scene_fraction(spec) * (hi - lo)))

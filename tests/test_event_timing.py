@@ -223,6 +223,31 @@ def test_motion_families_fire_before_the_actor_comes_to_rest():
     assert speed.size == T
 
 
+@pytest.mark.parametrize("fps,frames", [(12, 25), (12, 37), (12, 61), (30, 89)])
+def test_motion_events_land_before_rest_at_every_clip_length(fps, frames):
+    """The limit was a share of the clip, so it outgrew the motion on long
+    clips and was dropped: antigravity then fired seconds after the drop.
+
+    The ball here falls, bounces, and by one second is only ROLLING slowly --
+    which is not motion anything a gravity violation does could be seen on."""
+    base = TIERS["debug"] if fps == 12 else TIERS["release"]
+    tier = base.override(fps=fps, num_frames=frames)
+    sc = scenarios.get("drop")
+    spec = sc.sample(6, tier, "L0")
+    traj = mockroll.roll(spec, sc)
+    bi = traj.index_of(int(spec.body("ball").segmentation_id))
+    settle = int(round(1.0 * fps))
+    still = copy.deepcopy(traj)
+    still.lin_vel[:, bi, :] = 0.0
+    still.lin_vel[:settle, bi, 2] = -6.0              # the fall and bounces
+    still.lin_vel[settle:, bi, 0] = 0.4               # then a slow roll
+    for seed in range(40):
+        spec.seed = seed
+        with _geom.event_context("antigravity", traj=still):
+            t = _geom.band_frame(spec, frames)
+        assert t is not None and 1 <= t < settle, (fps, frames, seed, t)
+
+
 @pytest.mark.parametrize("name", ["drop", "collision", "rolling_ramp"])
 def test_default_event_frames_respect_the_clip(name):
     sc = scenarios.get(name)

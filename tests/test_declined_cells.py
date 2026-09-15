@@ -181,6 +181,26 @@ def test_a_peer_outside_the_shot_is_not_a_split_culprit():
     pytest.skip("no seed gave an independently timed multi plan of 3+ culprits")
 
 
+def test_continuity_retries_turn_the_jump():
+    """The same outward jump on every attempt left the frame four times over
+    (stack_topple L3 777); a retry must jump somewhere else."""
+    spec, traj = _roll("drop", 777)
+    inj = injectors.get("continuity")
+    unit = []
+    for attempt in range(4):
+        per_bin = []
+        for sev in ("weak", "strong"):
+            d = np.asarray(_plan(inj, spec, traj, sev, attempt).params["delta_m"])
+            per_bin.append(d / max(np.linalg.norm(d), 1e-9))
+        # Bins of one attempt share a heading...
+        assert np.allclose(per_bin[0], per_bin[1], atol=1e-6)
+        unit.append(per_bin[1])
+    # ...attempt 1 reverses attempt 0, and 2 and 3 are either side of it.
+    assert float(unit[0] @ unit[1]) < -0.99
+    assert abs(float(unit[0] @ unit[2])) < 0.05
+    assert abs(float(unit[0] @ unit[3])) < 0.05
+
+
 def test_non_parabolic_kicks_leave_every_body_at_rest():
     """The interior-only difference left each body drifting sideways."""
     inj = injectors.get("non_parabolic")

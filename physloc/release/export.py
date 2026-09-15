@@ -778,7 +778,11 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "```python",
         "from loader import PhysLocDataset",
         "",
-        'ds = PhysLocDataset(".", label="invalid", split="main")',
+        # A split THIS release has. `main` was hard-coded, and a small
+        # release that only fills `debug` answered the card's own example
+        # with zero clips -- measured on a fresh download of physloc-mini.
+        'ds = PhysLocDataset(".", label="invalid", split="%s")'
+        % (splits_present[0] if splits_present else "main"),
         "clip = ds.clips[0]",
         "clip.video             # uint8 [T,H,W,3]",
         "clip.violation_mask    # bool [T,H,W]   the localisation target",

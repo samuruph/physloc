@@ -1,10 +1,10 @@
 """When a violation fires, and whether it can be seen afterwards.
 
 Feedback: event moments barely varied -- one draw per scene, a quarter to 45%
-of the way in, shared by every family -- and nothing stopped a culprit leaving
+of the way in, shared by every family -- and nothing stopped a violator leaving
 the frame right after its event, so a clip could claim a violation whose
 effects nobody could see. These pin the replacement: a draw per (scene,
-family, culprit, attempt) inside `EVENT_BAND`, a visible-span requirement,
+family, violator, attempt) inside `EVENT_BAND`, a visible-span requirement,
 and a framing check on the lawful rollout.
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ def test_band_frame_stays_in_band_and_leaves_room_to_see_the_effect():
     assert len(frames) >= 6
 
 
-def test_event_draw_is_keyed_on_family_culprit_and_attempt():
+def test_event_draw_is_keyed_on_family_violator_and_attempt():
     _, spec = _spec(9)
     with _geom.event_context("permanence"):
         a = _geom.event_fraction(spec)
@@ -135,8 +135,8 @@ def test_eligible_frames_end_where_the_body_must_still_be_seen():
     lost = _thrown_out(traj, ball.segmentation_id, gone)
     ok = _geom.eligible_event_frames(spec, lost, [ball], 0, T - 1)
     assert ok.size and ok.max() <= gone - need
-    assert _geom.culprits_visible(spec, traj, [ball], 5)
-    assert not _geom.culprits_visible(spec, lost, [ball], gone - 2)
+    assert _geom.violators_visible(spec, traj, [ball], 5)
+    assert not _geom.violators_visible(spec, lost, [ball], gone - 2)
 
 
 def test_framing_rejects_a_scene_whose_actor_leaves_early():
@@ -175,15 +175,15 @@ def test_a_brief_exit_counts_as_visible_but_leaving_at_once_does_not():
     need = _geom.min_visible_frames(spec, traj.num_frames)
     head = max(1, int(round(_geom.EVIDENCE_SECONDS * TIER.fps)))
     t = 5
-    assert _geom.culprits_visible(spec, traj, [ball], t)
+    assert _geom.violators_visible(spec, traj, [ball], t)
     # Climbs out of shot after the evidence and comes back.
     wide = copy.deepcopy(traj)
     wide.pos[t + head + 1:t + head + 1 + int(0.3 * need), bi, :] = 500.0
-    assert _geom.culprits_visible(spec, wide, [ball], t)
+    assert _geom.violators_visible(spec, wide, [ball], t)
     # Gone the moment the violation happens: nothing to see.
     gone = copy.deepcopy(traj)
     gone.pos[t:t + head, bi, :] = 500.0
-    assert not _geom.culprits_visible(spec, gone, [ball], t)
+    assert not _geom.violators_visible(spec, gone, [ball], t)
 
 
 def test_framing_attempt_zero_is_the_scene_the_seed_always_made():

@@ -1,29 +1,29 @@
-"""Each culprit on its own clock, in clips with several.
+"""Each violator on its own clock, in clips with several.
 
 A `multi` clip makes two or more of its actors violate. They used to share one
 plan: one `t_event`, one window list, one severity timeline painted into every
-culprit -- so every culprit in the clip broke the law on the same frame, and a
+violator -- so every violator in the clip broke the law on the same frame, and a
 model could find all of them by finding one.
 
-Now, for most such clips, each culprit is planned on its own -- the family is
+Now, for most such clips, each violator is planned on its own -- the family is
 asked to act on that body alone, with an event draw keyed on it -- and the
-plans are merged into one whose `culprits` carry each body's own moment,
+plans are merged into one whose `violators` carry each body's own moment,
 windows and magnitude. A share of clips (`MULTI_SYNC_SHARE`) keeps the shared
 moment on purpose, so simultaneity is represented and countable rather than an
 accident of the draw.
 
 Only where splitting means something, and only where it can be honoured:
 
-* the family's culprits ARE its group (`Injector._group`), not a pair it
+* the family's violators ARE its group (`Injector._group`), not a pair it
   stages together -- `newton2_mass` exchanges momentum between two bodies and
   has no per-body version;
-* the plan STAGES, so the worker can apply each culprit's intervention at its
+* the plan STAGES, so the worker can apply each violator's intervention at its
   own frame in one simulation (`stepper.run_segments`);
 * the violation is not scene-wide (`spatial_extent == "global"`) and not a
   granular medium, where "each grain on its own clock" is not a picture anyone
   can read.
 
-Everything else keeps the shared plan, marked `culprit_timing: "shared"`.
+Everything else keeps the shared plan, marked `violator_timing: "shared"`.
 
 py3.9-compatible: runs inside the container.
 """
@@ -37,7 +37,7 @@ import numpy as np
 from . import _geom
 from .base import InterventionPlan
 
-#: Share of eligible `multi` clips whose culprits all fire at one moment.
+#: Share of eligible `multi` clips whose violators all fire at one moment.
 #: Set from `params.objects.multi_sync_share`.
 MULTI_SYNC_SHARE = 0.25
 
@@ -60,7 +60,7 @@ def _dynamic_ids(spec, ids) -> List[int]:
 def _seen_enough(spec, traj, body_id: int) -> bool:
     """Is this body on screen for enough of the clip to carry a violation?
 
-    The share the worker's gate asks of a culprit after its event
+    The share the worker's gate asks of a violator after its event
     (`_geom.VISIBLE_AFTER_SHARE`), over the whole stretch events are drawn from
     -- asked before any moment is drawn, so of the lawful rollout.
     """
@@ -70,12 +70,12 @@ def _seen_enough(spec, traj, body_id: int) -> bool:
         return False
     T = int(traj.num_frames)
     lo = max(1, int(round(_geom.EVENT_BAND[0] * T)))
-    on = _geom.culprits_on_screen(spec, traj, [body])[lo:]
+    on = _geom.violators_on_screen(spec, traj, [body])[lo:]
     return bool(on.size and on.mean() >= _geom.VISIBLE_AFTER_SHARE)
 
 
 def splittable(inj, spec, plan: InterventionPlan, staged: bool) -> bool:
-    """Can this plan's culprits be given moments of their own? See the module."""
+    """Can this plan's violators be given moments of their own? See the module."""
     if "multi" not in str(getattr(spec, "condition", "") or ""):
         return False
     if not staged or plan.spatial_extent == "global":
@@ -83,15 +83,15 @@ def splittable(inj, spec, plan: InterventionPlan, staged: bool) -> bool:
     if getattr(spec, "physics_medium", "rigid") == "granular":
         return False
     group = {int(b.segmentation_id) for b in inj._group(spec)}
-    culprits = set(_dynamic_ids(spec, plan.causal_body_ids))
-    return len(group) >= 2 and culprits == group
+    violators = set(_dynamic_ids(spec, plan.causal_body_ids))
+    return len(group) >= 2 and violators == group
 
 
-def culprit_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState],
+def violator_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState],
                   severity_bin: str,
                   is_staged: Callable[[InterventionPlan], bool]
                   ) -> Tuple[Optional[InterventionPlan], List[InterventionPlan]]:
-    """(plan, sub_plans). `sub_plans` is empty unless culprits got own moments.
+    """(plan, sub_plans). `sub_plans` is empty unless violators got own moments.
 
     `make_rng` returns a FRESH generator each call, seeded as the worker seeds
     this (family, severity), so every sub-plan draws exactly as a standalone
@@ -102,24 +102,24 @@ def culprit_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState]
     if plan is None:
         return None, []
     if not splittable(inj, spec, plan, bool(is_staged(plan))):
-        plan.notes.setdefault("culprit_timing", "shared")
+        plan.notes.setdefault("violator_timing", "shared")
         return plan, []
     if timing_mode(spec, inj.family) == "sync":
-        plan.notes["culprit_timing"] = "sync"
+        plan.notes["violator_timing"] = "sync"
         return plan, []
 
-    # A PEER NOBODY CAN SEE IS NOT A CULPRIT. The framing check lets a scene
+    # A PEER NOBODY CAN SEE IS NOT A VIOLATOR. The framing check lets a scene
     # keep a share of its actors out of shot, but a split plan is judged on
-    # EVERY culprit, so one peer spawned outside the frame declined the whole
+    # EVERY violator, so one peer spawned outside the frame declined the whole
     # clip at every event moment -- measured in the container on `drop` 786
     # (camera+multi) and `stack_topple` 785 (multi), each x solidity, where
-    # every other culprit was in plain view. Such a peer keeps its lawful
+    # every other violator was in plain view. Such a peer keeps its lawful
     # motion and simply is not asked to break the law. Too few left to split,
     # and the clip keeps its shared plan and the group's share rule.
     order = [bid for bid in _dynamic_ids(spec, plan.causal_body_ids)
              if _seen_enough(spec, traj, bid)]
     if len(order) < 2:
-        plan.notes["culprit_timing"] = "shared"
+        plan.notes["violator_timing"] = "shared"
         return plan, []
     had_targets = "family_targets" in spec.notes
     targets = spec.notes.setdefault("family_targets", {})
@@ -128,11 +128,11 @@ def culprit_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState]
     try:
         for bid in order:
             targets[inj.family] = [bid]
-            with _geom.culprit_context(bid):
+            with _geom.violator_context(bid):
                 sub = inj.plan(spec, traj, make_rng(), severity_bin)
             if (sub is None or not is_staged(sub)
                     or _dynamic_ids(spec, sub.causal_body_ids)[:1] != [bid]):
-                plan.notes["culprit_timing"] = "shared"
+                plan.notes["violator_timing"] = "shared"
                 return plan, []
             subs.append(sub)
     finally:
@@ -144,12 +144,12 @@ def culprit_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState]
             spec.notes.pop("family_targets", None)
 
     merged = InterventionPlan.merge(subs, [int(s.causal_body_ids[0]) for s in subs])
-    merged.notes["culprit_timing"] = "independent"
+    merged.notes["violator_timing"] = "independent"
     return merged, subs
 
 
 def by_moment(subs: List[InterventionPlan]) -> List[InterventionPlan]:
     """Sub-plans in the order the worker stages them: earliest moment first,
-    ties in the order the plan named its culprits."""
+    ties in the order the plan named its violators."""
     return [s for _, s in sorted(enumerate(subs),
                                  key=lambda p: (p[1].t_event, p[0]))]

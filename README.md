@@ -104,10 +104,10 @@ datasets — same file and key names — with PhysLoc's annotations added beside
 | `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | geometry passes, one `.npz` each |
 | **`violation_mask.npz`** | `bool [T,H,W]` — **where** the violation can be seen (invalid clips) |
 | **`severity_map.npz`** | `f16 [T,H,W]` — **how badly**, per pixel, in `[0,1]` |
-| `causal_mask.npz` | `uint8 [T,H,W]` — `1` a culprit, `2` a body it disturbed |
-| `violation_ids.npz` · `causal_ids.npz` | `uint16 [T,H,W]` — **which** culprit each masked pixel belongs to |
-| `reference_mask.npz` | `bool [T,H,W]` — where the culprits lawfully are (from the valid twin) |
-| `timelines.npz` | **when**: per-frame flags for the clip, and `[K,T]` per culprit |
+| `causal_mask.npz` | `uint8 [T,H,W]` — `1` a violator, `2` a body it disturbed |
+| `violation_ids.npz` · `causal_ids.npz` | `uint16 [T,H,W]` — **which** violator each masked pixel belongs to |
+| `reference_mask.npz` | `bool [T,H,W]` — where the violators lawfully are (from the valid twin) |
+| `timelines.npz` | **when**: per-frame flags for the clip, and `[K,T]` per violator |
 | `energy` · `bodies` · `residuals` · `traj` · `grids` | physics, raw residuals, latent-grid masks |
 | `overlay.mp4` | every annotation burned into one video, for review |
 
@@ -117,9 +117,9 @@ datasets — same file and key names — with PhysLoc's annotations added beside
 |---|---|
 | `metadata` | who the clip is: `label`, `scenario`, `family`, `condition`, `complexity`, `frame_rate`, `num_frames`, `resolution`, ... |
 | `camera` | `K` (normalised), `focal_length`, `positions` and `quaternions` per frame |
-| `instances` | one record per object: `id`, `name`, `role`, `asset_id`, `license`, `mass`, `is_culprit`, ... — row `i` matches row `i` of `instances.npz` |
+| `instances` | one record per object: `id`, `name`, `role`, `asset_id`, `license`, `mass`, `is_violator`, ... — row `i` matches row `i` of `instances.npz` |
 | `events` | `collisions`: frame, the two instance ids, force, position |
-| `violation` | **when and what**: `t_event_frame`, `violation_windows`, `intervention`, `severity_bin`, and `culprits` — one entry per violating object with its own moment and windows |
+| `violation` | **when and what**: `t_event_frame`, `violation_windows`, `intervention`, `severity_bin`, and `violators` — one entry per violating object with its own moment and windows |
 | `difficulty`, `energy`, `provenance`, `files` | detection difficulty, energy summary, integrity checks, and every array's shape |
 
 The full field reference is [docs/schema.md](docs/schema.md).
@@ -138,13 +138,13 @@ video = np.stack(imageio.mimread(f"{clip}/video.mp4", memtest=False))  # [T,H,W,
 seg   = np.load(f"{clip}/segmentations.npz")["segmentations"]          # [T,H,W]
 mask  = np.load(f"{clip}/violation_mask.npz")["mask"]                  # [T,H,W] bool
 sev   = np.load(f"{clip}/severity_map.npz")["severity"]                # [T,H,W] float16
-ids   = np.load(f"{clip}/violation_ids.npz")["ids"]                    # [T,H,W] culprit id
+ids   = np.load(f"{clip}/violation_ids.npz")["ids"]                    # [T,H,W] violator id
 
 print(meta["metadata"]["label"], meta["metadata"]["family"])
 v = meta["violation"]                          # None on a valid clip
-for c in v["culprits"]:                        # each violating object, on its own clock
+for c in v["violators"]:                        # each violating object, on its own clock
     print(c["instance_id"], c["t_event_frame"], c["violation_windows"])
-    culprit_mask = ids == c["instance_id"]     # where THIS object's violation is
+    violator_mask = ids == c["instance_id"]     # where THIS object's violation is
 ```
 
 A published release is sharded for streaming; every file above is one member of a sample:
@@ -161,7 +161,7 @@ for sample in wds.WebDataset("shards/main-000.tar"):
   diverges everywhere downstream of the event, so a model trained on it learns to find the edit,
   not the physics. Train on `violation_mask` and `severity_map`.
 - **`violation_mask` is gated on visibility.** It answers *where can this be seen*, so it is
-  empty while the culprit is hidden. `timelines.active` is the unhedged truth about *when*; the
+  empty while the violator is hidden. `timelines.active` is the unhedged truth about *when*; the
   gap between them is the observability lag.
 - **`permanence` and `dissolve` have an all-zero severity map** — the body is gone, so it has no
   pixels to score. `reference_mask` carries where it should have been.
@@ -288,8 +288,8 @@ Every clip carries **exactly one** condition:
 | `camera+multi` | 10% | **moves** | **3–10** | **2 … N−1** |
 <!-- /physloc:conditions -->
 
-The camera moves on 20% of clips, 10% carry distractors and 20% have multiple culprits. Fields:
-`condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`. One condition per clip,
+The camera moves on 20% of clips, 10% carry distractors and 20% have multiple violators. Fields:
+`condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_violators`. One condition per clip,
 rather than independent coin flips per axis, keeps every count exact and makes every comparison
 against `standard` isolate one change.
 
@@ -299,7 +299,7 @@ against `standard` isolate one change.
 |---|---|---|
 | extra objects | 3–10, some moving | 3–10, some moving |
 | **objects violating** | **exactly 1** | **2 … N−1** |
-| what the extras are | scenery no family can target (`role="distractor"`) | eligible culprits (`role="actor"`) |
+| what the extras are | scenery no family can target (`role="distractor"`) | eligible violators (`role="actor"`) |
 | the question it asks | *is anything wrong?* | ***which** of these is wrong?* |
 
 Only `multi` is a true localisation problem. The counts are drawn per clip so a model cannot learn
@@ -315,7 +315,7 @@ camera poses and intrinsics ship in `metadata.json`.
 ## Detection difficulty
 
 Conditions are the **knob** — what was asked for. `difficulty` is the **measurement** — what came
-out. A clip with eight distractors whose culprit fills a quarter of the frame is not hard; a
+out. A clip with eight distractors whose violator fills a quarter of the frame is not hard; a
 `standard` clip whose two-frame violation happens behind a screen is. `difficulty` is to
 `condition` what `peak_severity` is to `magnitude`.
 
@@ -336,11 +336,11 @@ Every **invalid** clip carries one label (a valid twin has nothing to detect):
 | factor | the question it asks | unit | easy | moderate | hard |
 |---|---|---|---|---|---|
 | `footprint` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.05 | &ge; 0.012 | &lt; 0.012 |
-| `occlusion` | how much of the violation happens while the culprit is hidden? | fraction of the violation window | &le; 0.05 | &le; 0.5 | &gt; 0.5 |
+| `occlusion` | how much of the violation happens while the violator is hidden? | fraction of the violation window | &le; 0.05 | &le; 0.5 | &gt; 0.5 |
 | `duration` | how long is the violation observable? | fraction of the clip | &ge; 0.35 | &ge; 0.15 | &lt; 0.15 |
 | `severity` | how far from lawful does the physics actually get? | bounded residual, 0-1 | &ge; 0.9 | &ge; 0.4 | &lt; 0.4 |
 | `clutter` | how many bodies must a model consider? | count | &le; 2 | &le; 6 | &gt; 6 |
-| `culprits` | how many of them are violating? | count | &le; 1 | &le; 3 | &gt; 3 |
+| `violators` | how many of them are violating? | count | &le; 1 | &le; 3 | &gt; 3 |
 | `camera` | how far does the camera travel? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
 <!-- /physloc:difficulty -->
 
@@ -359,7 +359,7 @@ df[df.difficulty == "hard"].binding_factors         # and what made them hard
 **Not factors, on purpose:** the complexity level (its own axis — report
 `difficulty × complexity` as a grid, which `physloc stats` plots), the family and scenario, and
 `magnitude` (the knob; `severity` is its measurement). `pour`'s grains count as **one** body for
-`clutter` and `culprits`, unless a family targets a genuine subset of them.
+`clutter` and `violators`, unless a family targets a genuine subset of them.
 
 ### Thresholds
 
@@ -415,7 +415,7 @@ The draw is weighted so the mean density stays where the scenarios' contact para
 | `copper` | 8900 | 4% | **metal**, rough 0.26, spec 0.60 |
 <!-- /physloc:materials -->
 
-- Glass and ice are **frosted** so a transparent culprit can still be pointed at, and the two
+- Glass and ice are **frosted** so a transparent violator can still be pointed at, and the two
   transmissive materials have different densities so *transparent* is not a cue for *heavy*.
 - Scenery draws from a narrower set — no glass ramp, no mirror floor — and the floor keeps its
   contrast-guarded colour, taking only the surface finish.
@@ -447,7 +447,7 @@ df = pd.read_parquet("index.parquet")
 df.groupby(["domain", "severity_bin"]).peak_severity.mean()
 df.groupby("condition").size()                       # standard / camera / multi / ...
 df[df.complexity == "L3"].groupby("family").size()
-df[df.n_culprits > 1]                                # the multi-object clips
+df[df.n_violators > 1]                                # the multi-object clips
 df.groupby(["complexity", "difficulty"]).size()      # the grid worth reporting
 df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_counts()
 ```
@@ -458,7 +458,7 @@ df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_count
 | taxonomy | `scenario`, `family`, `domain`, `medium` |
 | violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
 | difficulty | `difficulty`, `difficulty_rank`, `binding_factors` |
-| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_culprits`, `culprit_timing`, `actor_shape`, `actor_material`, `actor_mass` |
+| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_violators`, `violator_timing`, `actor_shape`, `actor_material`, `actor_mass` |
 | geometry | `tier`, `num_frames`, `frame_rate`, `seed`, `variant` |
 | media | `video`, `overlay` (embedded mp4) |
 
@@ -616,7 +616,7 @@ python -m physloc.cli params --config v0_mini   # ...for one run
 |---|---|
 | `ladder` | each level's share of a full generation |
 | `conditions` | the difficulty cycle — its length is the period, its contents the shares |
-| `objects` | extra-object counts, culprit counts, distractor size / speed / clearance |
+| `objects` | extra-object counts, violator counts, distractor size / speed / clearance |
 | `camera` | motion kinds and weights, travel and dolly ranges |
 | `materials` | the mass scale |
 | `difficulty` | the detection-difficulty thresholds |

@@ -73,7 +73,7 @@ VIEWS = [
 VIEW_NOTE = {
     "mask": "red = violation   green = should-be",
     "sev": "0..1, inferno, gamma for display",
-    "causal": "1 = culprit   2 = affected",
+    "causal": "1 = violator   2 = affected",
     "div": "|valid - invalid|  NOT ground truth",
     "energy": "per-body E, fraction of E0",
     "seg": "instance ids = tracks",

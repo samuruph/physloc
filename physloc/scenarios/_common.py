@@ -449,7 +449,7 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
 
     ONE PLACER, TWO CONDITIONS. With `role="distractor"` the extras are inert
     scenery that no family can target. With `role="actor"` the very same bodies
-    become lawful PEERS -- eligible culprits, which is what the `multi`
+    become lawful PEERS -- eligible violators, which is what the `multi`
     condition is made of. The placement problem is identical either way (extra
     bodies, clear of the action, inside the frame), and the only thing that
     differs is whether the physics is allowed to notice them, so writing it

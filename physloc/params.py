@@ -52,12 +52,12 @@ DEFAULTS: Dict[str, Any] = {
         # `distractors` and `multi` alike.
         "extra_min": 3,
         "extra_max": 10,
-        # `multi`: at least this many culprits, and always this many bodies
+        # `multi`: at least this many violators, and always this many bodies
         # left lawful, so there is something to contrast against.
-        "multi_culprits_min": 2,
+        "multi_violators_min": 2,
         "multi_lawful_min": 1,
-        # `multi`: the share of clips whose culprits all violate at ONE
-        # moment. The rest give each culprit a moment of its own, so both
+        # `multi`: the share of clips whose violators all violate at ONE
+        # moment. The rest give each violator a moment of its own, so both
         # simultaneous and staggered violations are represented and countable.
         "multi_sync_share": 0.25,
         # One multiplier per scene on every scenario's own size draw, so the
@@ -115,7 +115,7 @@ DEFAULTS: Dict[str, Any] = {
         "duration": [0.35, 0.15],
         "severity": [0.90, 0.40],
         "clutter": [2, 6],
-        "culprits": [1, 3],
+        "violators": [1, 3],
         "camera": [0.02, 0.12],
     },
     "materials": {
@@ -204,7 +204,7 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     o = v["objects"]
     B.EXTRA_OBJECTS = (int(o["extra_min"]), int(o["extra_max"]))
     B.MULTI_ACTORS = B.EXTRA_OBJECTS
-    B.MULTI_CULPRIT_RANGE = (int(o["multi_culprits_min"]),
+    B.MULTI_VIOLATOR_RANGE = (int(o["multi_violators_min"]),
                              int(o["multi_lawful_min"]))
     from .injectors import multi as MU
 

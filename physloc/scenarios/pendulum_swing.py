@@ -54,7 +54,7 @@ class PendulumSwing(Scenario):
         # the simulator and hung between the pivot and the bob every substep by
         # `_carry_rod` -- because a stick with no mass of its own contributes
         # nothing to the swing. It stays a body so that it has a segmentation
-        # id; a `prop` rather than an `actor` so it never becomes a culprit,
+        # id; a `prop` rather than an `actor` so it never becomes a violator,
         # and when the swing changes the rod's motion changes with it, which
         # `causal_mask` picks up as a measured consequence without anyone
         # declaring it.

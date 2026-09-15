@@ -136,7 +136,7 @@ def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],
 
     `seg` already resolves occlusion, so no depth reasoning is needed. Overlaps
     cannot occur (a pixel has one instance id), so `max` is implicit.
-    `global_value` handles the no-culprit case (`global_gravity`) by filling the
+    `global_value` handles the no-violator case (`global_gravity`) by filling the
     whole frame instead.
     """
     s = seg[..., 0] if seg.ndim == 4 else seg
@@ -182,7 +182,7 @@ def attribute_to_evidence(score: np.ndarray, active: np.ndarray,
       invalid clip that ships with an empty mask and a zero severity field:
       technically consistent, and useless to train on.
 
-    A window whose culprit is never observable at all -- removed while fully
+    A window whose violator is never observable at all -- removed while fully
     occluded -- correctly yields nothing. That is the case the observability lag
     exists to describe, and inventing a region for it would be a lie.
     """

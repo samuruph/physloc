@@ -143,7 +143,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     causal_ids: List[int] = [int(i) for i in plan_d["causal_body_ids"]]
     # Order is the injector's, not the scene's. `causal_body_ids[0]` is the
-    # culprit the plan is *about* -- the body that failed to react, the half
+    # violator the plan is *about* -- the body that failed to react, the half
     # that split off, the actor whose bounce gained energy -- and the residual,
     # the noise floor and `r_strong` are all measured on it. Re-deriving the
     # order by walking `spec.bodies` silently picked whichever participant the
@@ -224,7 +224,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     law = laws.get(law_name)
 
     def _score(body_id: int, notes: Dict) -> Dict[str, object]:
-        """Residual, noise floor and bounded score for one culprit body.
+        """Residual, noise floor and bounded score for one violator body.
 
         Scored against the twin frame by frame, not against a pooled floor --
         see the note in `bounded_score`. The valid arm is the control; using it
@@ -234,7 +234,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         Families whose effect depends on the rollout measure their own
         strong-bin reference at plan time and record it in the notes; the rest
         answer from the spec. Either way it is the *strong* bin's value even on
-        a weak clip, or the three bins would not be comparable. A culprit
+        a weak clip, or the three bins would not be comparable. A violator
         planned on its own clock brings its own notes, which is where its own
         reference lives.
         """
@@ -272,15 +272,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     t_ev = int((plan_d or {}).get("t_event_frame", 0))
     frames = np.arange(T)
 
-    # EACH CULPRIT ON ITS OWN CLOCK. A `multi` clip whose culprits were planned
-    # separately carries `culprits` in its plan -- each body's own moment,
+    # EACH VIOLATOR ON ITS OWN CLOCK. A `multi` clip whose violators were planned
+    # separately carries `violators` in its plan -- each body's own moment,
     # windows and plan notes -- and everything per body below is gated on that
     # body's timeline and scored on that body's residual. Any other plan has
-    # one clock: every dynamic culprit shares the plan's windows and, as it
-    # always has, the primary culprit's score. `global_gravity` acts on the
+    # one clock: every dynamic violator shares the plan's windows and, as it
+    # always has, the primary violator's score. `global_gravity` acts on the
     # whole scene and `fission` on both halves, and scoring each half alone
     # would describe a fraction of one violation.
-    independent = bool(plan_d.get("culprits"))
+    independent = bool(plan_d.get("violators"))
 
     # Observability is measured on the dynamic causal bodies only -- see the
     # note in windows.observable_frames -- and it gates the *spatial*
@@ -291,15 +291,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"])
     # A SECOND gate, for the annotations that are invalid-side only.
     # `observable` is a disagreement between the twins, so it is true on frames
-    # where the culprit is seen in the VALID render and not in the invalid one
+    # where the violator is seen in the VALID render and not in the invalid one
     # -- whenever an intervention leaves the body where the camera cannot see
     # it. `mask_invalid` and `severity_map` have no pixels to put anywhere on
     # such a frame, so their severity waits for a frame the body is seen on.
     seen_all = masks_mod.footprint(seg_i, dynamic_ids or causal_ids).any(axis=(1, 2))
 
-    clocks = ([(int(c["body_id"]), c) for c in plan_d["culprits"]] if independent
+    clocks = ([(int(c["body_id"]), c) for c in plan_d["violators"]] if independent
               else [(int(b), plan_d) for b in (dynamic_ids or [primary_id])])
-    culprits: List[Dict[str, object]] = []
+    violators: List[Dict[str, object]] = []
     for bid, clock in clocks:
         wins = [tuple(w) for w in clock["violation_windows"]]
         c_active = win_mod.rasterise(wins, T)
@@ -321,7 +321,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             scored_on["s_invalid"], scored, obs)
         visible_inv, s_inv_visible = sev_mod.attribute_to_evidence(
             scored_on["s_invalid"], scored, obs & seen)
-        culprits.append({
+        violators.append({
             "id": int(bid), "t_event": int(clock.get("t_event_frame", t_ev)),
             "windows": wins,
             "intervention_windows": [tuple(w) for w in
@@ -338,23 +338,23 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- 3.3 masks (the union rule) --------------------------------------
     #
-    # Per culprit, then combined. The union mask is gated on BOTH gates, not
+    # Per violator, then combined. The union mask is gated on BOTH gates, not
     # just the two-twin one: the invalid-side gate can spill severity to a
     # later frame than the two-twin gate does, and `mask_invalid` must stay a
     # subset of the union it is carved from.
     vmask = np.zeros(seg_i.shape, bool)
     imask = np.zeros(seg_i.shape, bool)
     vids = np.zeros(seg_i.shape, np.uint16)
-    for c in culprits:
+    for c in violators:
         c["vmask"] = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
                                               c["visible"] | c["visible_inv"])
         c["imask"] = masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
         vmask |= c["vmask"]
         imask |= c["imask"]
         vids[c["vmask"]] = c["id"]
-    # Where two culprits' footprints overlap, the body actually rendered there
+    # Where two violators' footprints overlap, the body actually rendered there
     # in the invalid clip owns the pixel.
-    for c in culprits:
+    for c in violators:
         vids[c["imask"]] = c["id"]
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
 
@@ -374,10 +374,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         b for b in _disturbed_bodies(traj_v, traj_i, causal_ids)
         if int(b) in touched]
     moving_affected = [int(b) for b in affected if int(b) not in static_ids]
-    # A disturbed body belongs to the culprit that reached it FIRST, from the
+    # A disturbed body belongs to the violator that reached it FIRST, from the
     # frame it was reached and began to behave differently.
     reach: Dict[int, tuple] = {}
-    for k, c in enumerate(culprits):
+    for k, c in enumerate(violators):
         own = (_causal_touch_frames((traj_i, traj_v), [c["id"]], c["t_event"],
                                     scene_static, driven)
                if independent else touched)
@@ -391,7 +391,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # differently because of the violation, the causal mask still says so.
     cmask = np.zeros(seg_i.shape, np.uint8)
     cids = np.zeros(seg_i.shape, np.uint16)
-    for k, c in enumerate(culprits):
+    for k, c in enumerate(violators):
         owned = [b for b in moving_affected if b in reach and reach[b][1] == k]
         c["disturbed"] = owned
         diverged = _diverged_frames(
@@ -409,21 +409,21 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
-    # Every dynamic culprit is painted, each with its own gated score. INVALID
+    # Every dynamic violator is painted, each with its own gated score. INVALID
     # SIDE ONLY: `paint` reads `seg_i`, because at inference a model only has
     # the invalid video and there is nothing wrong to see at a body's lawful
     # footprint. The cost, accepted deliberately: `permanence` and `dissolve`
     # get an all-zero map once the body is gone -- except below.
-    smap = sev_mod.paint(seg_i, {c["id"]: c["s_inv_visible"] for c in culprits})
+    smap = sev_mod.paint(seg_i, {c["id"]: c["s_inv_visible"] for c in violators})
 
     # ONE exception, and only where the invalid side has nothing at all for
-    # that culprit. A body that VANISHED has no invalid footprint anywhere, so
+    # that violator. A body that VANISHED has no invalid footprint anywhere, so
     # its lawful footprint is the only localisation there is. ABSENT, not
     # merely hidden -- a body behind a screen also has no pixels, and painting
     # its lawful footprint would put severity where the object is not. The
     # trajectory knows which case it is, so ask it rather than the pixels.
     smap = smap.astype(np.float32)
-    for c in culprits:
+    for c in violators:
         c["fallback"] = np.zeros(seg_i.shape, bool)
         try:
             j = traj_i.index_of(c["id"])
@@ -443,14 +443,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     sev_t = sev_mod.temporal_profile(smap)
 
     # The clip's observable timeline. With one clock it is the twins'
-    # disagreement about the culprits, as it always was. With several, a frame
-    # where culprit A is active but hidden and culprit B -- not active -- is
+    # disagreement about the violators, as it always was. With several, a frame
+    # where violator A is active but hidden and violator B -- not active -- is
     # merely moving is NOT evidence of anything, so on active frames only a
-    # culprit's own active, observable frames count, plus wherever a culprit's
+    # violator's own active, observable frames count, plus wherever a violator's
     # severity was carried to.
     if independent:
         observable = np.zeros((T,), bool)
-        for c in culprits:
+        for c in violators:
             observable |= c["own_obs"] & (c["active"] | ~active)
             observable |= c["visible"] | c["visible_inv"]
     else:
@@ -473,17 +473,17 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     tinfo["t_consequence_end_frame"] = int(
         max(e for _, e in tinfo["consequence_windows"]))
 
-    # ---- per-culprit records: metadata.json, timelines.npz, residuals.npz -----
+    # ---- per-violator records: metadata.json, timelines.npz, residuals.npz -----
     smap32 = smap.astype(np.float32)
-    culprit_meta = []
-    for c in culprits:
+    violator_meta = []
+    for c in violators:
         t = int(np.clip(c["t_event"], 0, T - 1))
         after = np.flatnonzero(c["own_obs"] & (frames >= t))
         t_obs = int(after[0]) if after.size else t
         rendered = masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2))
         where = masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"]
         c["severity_t"] = np.where(where, smap32, 0.0).reshape(T, -1).max(axis=1)
-        culprit_meta.append({
+        violator_meta.append({
             "instance_id": c["id"],
             "t_event_frame": t,
             "t_observable_frame": t_obs,
@@ -502,24 +502,24 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                                           c["score"]["s_invalid"],
                                           c["score"]["floor"], law_name),
             "peak_severity": float(c["severity_t"].max()) if T else 0.0,
-            "disturbed_instance_ids": sorted(int(b) for b in c["disturbed"]),
+            "affected_instance_ids": sorted(int(b) for b in c["disturbed"]),
         })
-    tinfo["culprits"] = culprit_meta
-    tinfo["culprit_timing"] = (plan_d.get("culprit_timing")
+    tinfo["violators"] = violator_meta
+    tinfo["violator_timing"] = (plan_d.get("violator_timing")
                                or ("independent" if independent else "shared"))
-    arrays["culprit_ids"] = np.asarray([c["id"] for c in culprits], np.int32)
+    arrays["violator_ids"] = np.asarray([c["id"] for c in violators], np.int32)
     for key in ("active", "intervening", "consequence"):
-        arrays["culprit_" + key] = np.stack([c[key] for c in culprits])
-    arrays["culprit_observable"] = np.stack([c["own_obs"] for c in culprits])
-    arrays["culprit_occluded"] = np.stack(
-        [win_mod.occluded_frames(seg_i, c["id"]) for c in culprits])
-    arrays["culprit_severity_t"] = np.stack(
-        [c["severity_t"] for c in culprits]).astype(np.float32)
-    culprit_residuals = {
-        "culprit_ids": arrays["culprit_ids"],
-        "culprit_r": np.stack([c["score"]["r_invalid"] for c in culprits]
+        arrays["violator_" + key] = np.stack([c[key] for c in violators])
+    arrays["violator_observable"] = np.stack([c["own_obs"] for c in violators])
+    arrays["violator_occluded"] = np.stack(
+        [win_mod.occluded_frames(seg_i, c["id"]) for c in violators])
+    arrays["violator_severity_t"] = np.stack(
+        [c["severity_t"] for c in violators]).astype(np.float32)
+    violator_residuals = {
+        "violator_ids": arrays["violator_ids"],
+        "violator_r": np.stack([c["score"]["r_invalid"] for c in violators]
                               ).astype(np.float32),
-        "culprit_s": np.stack([c["score"]["s_invalid"] for c in culprits]
+        "violator_s": np.stack([c["score"]["s_invalid"] for c in violators]
                               ).astype(np.float32),
     }
 
@@ -598,8 +598,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             np.savez_compressed(os.path.join(cdir, "violation_mask.npz"), mask=vmask)
             np.savez_compressed(os.path.join(cdir, "mask_invalid.npz"), mask=imask)
             np.savez_compressed(os.path.join(cdir, "causal_mask.npz"), mask=cmask)
-            # WHICH culprit, per pixel. The masks above say where; with several
-            # culprits on their own clocks a consumer also needs to know whose
+            # WHICH violator, per pixel. The masks above say where; with several
+            # violators on their own clocks a consumer also needs to know whose
             # violation, and whose consequence, each pixel belongs to.
             np.savez_compressed(os.path.join(cdir, "violation_ids.npz"), ids=vids)
             np.savez_compressed(os.path.join(cdir, "causal_ids.npz"), ids=cids)
@@ -613,7 +613,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                                 z=floor.z(r_invalid).astype(np.float32),
                                 s=s_invalid.astype(np.float32),
                                 law=np.array(law_name),
-                                **culprit_residuals)
+                                **violator_residuals)
         else:
             zeros_t = np.zeros((T,), np.float32)
             np.savez_compressed(
@@ -707,17 +707,17 @@ def _diverged_frames(traj_v, traj_i, body_ids, t_event: int, T: int,
 
 
 def _disturbed_bodies(traj_v, traj_i, causal_ids, tol: float = 1e-3) -> List[int]:
-    """Bodies that moved differently from the valid twin without being culprits.
+    """Bodies that moved differently from the valid twin without being violators.
 
     A collision the intervention prevented leaves the body that was going to be
     struck on a different path; a body shoved by a fissioned half likewise. Both
     are consequences of the violation and belong in `causal_mask` level 2, and
     neither is something a plan can enumerate in advance.
     """
-    culprits = {int(i) for i in causal_ids}
+    violators = {int(i) for i in causal_ids}
     out: List[int] = []
     for j, bid in enumerate(np.asarray(traj_v.body_ids, int)):
-        if int(bid) in culprits:
+        if int(bid) in violators:
             continue
         a = np.asarray(traj_v.pos[:, j, :], np.float64)
         b = np.asarray(traj_i.pos[:, j, :], np.float64)
@@ -726,14 +726,14 @@ def _disturbed_bodies(traj_v, traj_i, causal_ids, tol: float = 1e-3) -> List[int
     return out
 
 
-def _causal_touch_frames(trajs, culprit_ids, t_event: int,
+def _causal_touch_frames(trajs, violator_ids, t_event: int,
                          static_ids, driven_ids=()) -> Dict[int, int]:
-    """{body_id: the frame it first became causally connected to a culprit}.
+    """{body_id: the frame it first became causally connected to a violator}.
 
     **Touched, and touched AFTER the violation started.** `_disturbed_bodies`
     answers "did this body move differently", which is necessary and nowhere
     near sufficient: in a `multi` or `distractors` scene the solver's own
-    divergence moves bodies the culprit never came near, and they were painted
+    divergence moves bodies the violator never came near, and they were painted
     blue. Your rule, and it is the right one -- a body is a consequence only
     once something carrying the violation has actually reached it.
 
@@ -741,8 +741,8 @@ def _causal_touch_frames(trajs, culprit_ids, t_event: int,
     skipped, because a collision that already happened is a lawful collision
     and the body it struck is not a consequence of anything.
 
-    Causality travels through MOVING bodies only. A culprit resting on the
-    floor makes the floor a contact of a culprit, and if the floor could pass
+    Causality travels through MOVING bodies only. A violator resting on the
+    floor makes the floor a contact of a violator, and if the floor could pass
     causality on then every object standing on it would be a consequence --
     which is the whole scene. A static body can BE reached (that is how a
     surface being passed through gets its mask) and cannot relay.
@@ -761,7 +761,7 @@ def _causal_touch_frames(trajs, culprit_ids, t_event: int,
     itself reached.
     """
     stat = {int(i) for i in (static_ids or ())}
-    reached = {int(i): int(t_event) for i in culprit_ids}
+    reached = {int(i): int(t_event) for i in violator_ids}
     # A DRIVEN BODY IS A CONSEQUENCE BY CONSTRUCTION, not by contact.
     # `pendulum_swing`'s rod and `shadow_track`'s shadow have their pose
     # computed from the actor by `Scenario.rescript`, and both carry
@@ -850,8 +850,8 @@ def _instance_table(spec_d, plan_d, seg, spec=None) -> List[Dict[str, object]]:
             "static": bool(b.get("static", False)),
             "dormant": bool(b.get("dormant", False)),
             "collides": bool(getattr(body, "collides", True)),
-            "is_culprit": bid in causal,
-            "culprit_index": causal.index(bid) if bid in causal else None,
+            "is_violator": bid in causal,
+            "violator_index": causal.index(bid) if bid in causal else None,
             "mass": b.get("mass"),
             "friction": b.get("friction"),
             "restitution": b.get("restitution"),
@@ -1018,13 +1018,13 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             # and only the crowded conditions ask for any at all.
             "n_distractors": int(notes.get("n_distractors_placed") or 0),
             # How many actors are in shot, and how many of them the plan names
-            # as culprits. Under `multi` a lawful MAJORITY is the point -- the
+            # as violators. Under `multi` a lawful MAJORITY is the point -- the
             # clip asks which objects are wrong, not whether something is.
             "n_actors": int(notes.get("n_actors")
                             or len([b for b in (spec_d.get("bodies") or [])
                                     if b.get("role") == "actor"
                                     and not b.get("dormant")])),
-            "n_culprits": (0 if is_valid
+            "n_violators": (0 if is_valid
                            else len(plan_d.get("causal_body_ids") or [])),
             "physics_medium": SCENARIOS[scenario].physics_medium,
             "complexity": spec_d.get("complexity", {}),
@@ -1109,14 +1109,14 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "spatial_extent": plan_d["spatial_extent"],
             "intervention": plan_d["intervention"],
             "consequences": [],
-            # EACH CULPRIT'S OWN CLOCK. `independent` when a `multi` clip's
-            # culprits were planned on moments of their own, `sync` when such a
+            # EACH VIOLATOR'S OWN CLOCK. `independent` when a `multi` clip's
+            # violators were planned on moments of their own, `sync` when such a
             # clip drew one moment for all on purpose, `shared` for every plan
-            # whose culprits act together. The clip-level fields above are the
+            # whose violators act together. The clip-level fields above are the
             # union; these are per body, in `causal_body_ids` order, and the
             # per-pixel attribution is `violation_ids.npz` / `causal_ids.npz`.
-            "culprit_timing": tinfo.get("culprit_timing"),
-            "culprits": tinfo.get("culprits", []),
+            "violator_timing": tinfo.get("violator_timing"),
+            "violators": tinfo.get("violators", []),
             "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),
         }
     else:

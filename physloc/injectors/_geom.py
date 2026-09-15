@@ -154,12 +154,12 @@ EVENT_BAND = (0.15, 0.70)
 
 #: How much of the clip must remain AFTER an event for its effect to be seen,
 #: as a share of the clip, floored at `MIN_VISIBLE_SECONDS`. Also the span a
-#: culprit must stay on screen from its event -- see `eligible_event_frames`
-#: and `culprits_visible`.
+#: violator must stay on screen from its event -- see `eligible_event_frames`
+#: and `violators_visible`.
 MIN_VISIBLE_AFTER = 0.35
 MIN_VISIBLE_SECONDS = 0.8
 
-#: Share of a group of culprits that must be on screen for a frame to count as
+#: Share of a group of violators that must be on screen for a frame to count as
 #: showing them, so one grain of forty drifting out of a `pour` is not the same
 #: as the whole pour leaving. The same fraction `Injector._offscreen_frames`
 #: has always used.
@@ -220,21 +220,21 @@ def event_context(family: str, attempt: int = 0, traj=None):
         _EVENT_KEY.reset(token)
 
 
-#: The culprit the current event draw is for, when a `multi` clip plans each
-#: culprit separately (`injectors.multi`). Read by `event_fraction` whenever a
-#: helper does not name a body itself, so every draw inside that culprit's plan
+#: The violator the current event draw is for, when a `multi` clip plans each
+#: violator separately (`injectors.multi`). Read by `event_fraction` whenever a
+#: helper does not name a body itself, so every draw inside that violator's plan
 #: is its own.
-_CULPRIT = contextvars.ContextVar("physloc_event_culprit", default=None)
+_VIOLATOR = contextvars.ContextVar("physloc_event_violator", default=None)
 
 
 @contextlib.contextmanager
-def culprit_context(body_id: Optional[int]):
+def violator_context(body_id: Optional[int]):
     """Key every event draw inside the block on `body_id` as well."""
-    token = _CULPRIT.set(None if body_id is None else int(body_id))
+    token = _VIOLATOR.set(None if body_id is None else int(body_id))
     try:
         yield
     finally:
-        _CULPRIT.reset(token)
+        _VIOLATOR.reset(token)
 
 
 def motion_limit(spec) -> Optional[int]:
@@ -273,22 +273,22 @@ def motion_limit(spec) -> Optional[int]:
 
 
 def event_fraction(spec, body_id: Optional[int] = None) -> float:
-    """A number in [0, 1) keyed on (scene, family, culprit, attempt).
+    """A number in [0, 1) keyed on (scene, family, violator, attempt).
 
     NOT on the severity bin: the three severities of one cell must fire
     together or their magnitudes stop being comparable. But per FAMILY, where
     it used to be per scene -- two families on one scene firing at the same
     moment bought comparability nobody used, at the price of a release whose
-    event times clustered. `body_id` gives each culprit of a `multi` clip its
+    event times clustered. `body_id` gives each violator of a `multi` clip its
     own moment; `attempt` is how the worker asks for a different moment when a
-    culprit would leave the frame.
+    violator would leave the frame.
 
     Salted away from `Scenario.rng` so that consulting it cannot shift any
     physics draw.
     """
     family, attempt, _ = _EVENT_KEY.get()
     if body_id is None:
-        body_id = _CULPRIT.get()
+        body_id = _VIOLATOR.get()
     key = (int(spec.seed) * 2654435761 + 0x51ED
            + zlib.crc32(family.encode()) + 7919 * int(attempt)
            + (0 if body_id is None else 104729 * (int(body_id) + 1)))
@@ -296,7 +296,7 @@ def event_fraction(spec, body_id: Optional[int] = None) -> float:
 
 
 def scene_fraction(spec) -> float:
-    """The event draw with no culprit named. Kept under its old name because
+    """The event draw with no violator named. Kept under its old name because
     it is what every helper below calls; see `event_fraction`."""
     return event_fraction(spec)
 
@@ -307,7 +307,7 @@ def event_attempt() -> int:
 
 
 def min_visible_frames(spec, num_frames: int) -> int:
-    """Frames a culprit must stay on screen from its event -- see
+    """Frames a violator must stay on screen from its event -- see
     `MIN_VISIBLE_AFTER`."""
     fps = float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
     need = max(math.ceil(MIN_VISIBLE_AFTER * num_frames),
@@ -363,7 +363,7 @@ def default_event_frame(spec, num_frames: int) -> Optional[int]:
     The occlusion is preferred on the FIRST attempt only. It is a fixed frame,
     so a retry that preferred it again fired at exactly the moment that had just
     failed: measured on `occluder_pass` 22260826 `multi`, all four attempts of
-    `phantom_impulse` chose frame 13, where the push sends one culprit behind
+    `phantom_impulse` chose frame 13, where the push sends one violator behind
     the screen and another out of shot.
     """
     t0 = occluded_midpoint(spec) if event_attempt() == 0 else None
@@ -394,13 +394,13 @@ MEDIUM_VISIBLE_SHARE = 0.4
 
 
 def visible_share(spec) -> float:
-    """The share of a culprit group that must be in shot -- see above."""
+    """The share of a violator group that must be in shot -- see above."""
     if getattr(spec, "physics_medium", "rigid") == "granular":
         return MEDIUM_VISIBLE_SHARE
     return VISIBLE_SHARE
 
 
-def culprits_on_screen(spec, traj, bodies,
+def violators_on_screen(spec, traj, bodies,
                        share: Optional[float] = None) -> np.ndarray:
     """[T] bool: is at least `share` of `bodies` present, in frame and in sight?
 
@@ -465,7 +465,7 @@ def eligible_event_frames(spec, traj, bodies, lo: int, hi: int) -> np.ndarray:
     for `min_visible_frames` -- measured on the LAWFUL rollout `traj`."""
     T = int(traj.num_frames)
     need = min_visible_frames(spec, T)
-    on = culprits_on_screen(spec, traj, bodies).astype(np.int64)
+    on = violators_on_screen(spec, traj, bodies).astype(np.int64)
     csum = np.concatenate([[0], np.cumsum(on)])
     lo, hi = max(0, int(lo)), min(T - 1, int(hi))
     out = [t for t in range(lo, hi + 1)
@@ -483,7 +483,7 @@ def visible_band(spec, traj, bodies, lo: int, hi: int) -> Tuple[int, int]:
 
 
 #: Share of the `min_visible_frames` after an event that must show the
-#: culprits. Not all of them: a super-elastic ball that climbs out of the top
+#: violators. Not all of them: a super-elastic ball that climbs out of the top
 #: of the shot and falls back in, or a shoved pendulum bob that swings wide and
 #: returns, is a violation anyone can see.
 VISIBLE_AFTER_SHARE = 0.6
@@ -493,14 +493,14 @@ VISIBLE_AFTER_SHARE = 0.6
 EVIDENCE_SECONDS = 0.25
 
 
-def culprits_visible(spec, traj, bodies, t_event: int,
+def violators_visible(spec, traj, bodies, t_event: int,
                      tolerance: float = VISIBLE_AFTER_SHARE) -> bool:
     """Does the clip keep `bodies` on screen after `t_event`?
 
     Every frame of the first `EVIDENCE_SECONDS` after the event, and at least
     `tolerance` of the `min_visible_frames` from it, must show them. Asked of
     the INVALID trajectory by the worker, so an intervention that throws a
-    culprit out of shot is caught; a family whose violation is the body going
+    violator out of shot is caught; a family whose violation is the body going
     out of sight asks it of the valid one instead.
     """
     T = int(traj.num_frames)
@@ -508,7 +508,7 @@ def culprits_visible(spec, traj, bodies, t_event: int,
     span = min(min_visible_frames(spec, T), T - t)
     if span <= 0:
         return False
-    on = culprits_on_screen(spec, traj, bodies)[t:t + span]
+    on = violators_on_screen(spec, traj, bodies)[t:t + span]
     fps = float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
     head = max(1, min(span, int(round(EVIDENCE_SECONDS * fps))))
     return bool(on[:head].all() and on.mean() >= tolerance)

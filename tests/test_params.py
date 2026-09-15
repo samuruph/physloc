@@ -104,8 +104,8 @@ def test_the_defaults_are_internally_consistent():
     assert d["objects"]["extra_min"] >= 3, (
         "a multi scene needs three bodies to pose its question")
     assert d["objects"]["extra_min"] < d["objects"]["extra_max"]
-    assert d["objects"]["multi_culprits_min"] >= 2, (
-        "one culprit is what `standard` already is")
+    assert d["objects"]["multi_violators_min"] >= 2, (
+        "one violator is what `standard` already is")
     assert 0.0 <= d["objects"]["distractor_moving"] <= 1.0
     assert len(d["camera"]["kinds"]) == len(d["camera"]["weights"])
     assert sum(d["camera"]["weights"]) == pytest.approx(1.0)

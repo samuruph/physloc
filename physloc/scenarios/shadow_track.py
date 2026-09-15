@@ -49,7 +49,7 @@ class ShadowTrack(Scenario):
         light_dir = _unit(np.array([0.0, 0.0, 0.0]) - np.array(lamp))
 
         # Derived from the frame, and the shadow is what has to fit -- it is the
-        # culprit of every family staged here, and it does not sit under the
+        # violator of every family staged here, and it does not sit under the
         # actor. A low key light throws it `height/|Lz|` metres off to one side,
         # so the pair together span the actor's travel PLUS that offset, and
         # sizing the travel alone put the shadow past the edge on wide seeds.
@@ -134,7 +134,7 @@ class ShadowTrack(Scenario):
         detached shadow -- which is the `shadow` family, a violation in its own
         right -- while claiming and annotating something else entirely.
 
-        The three optical families are exactly the exception: their culprit IS
+        The three optical families are exactly the exception: their violator IS
         the shadow, and re-deriving it from a caster that never moved would
         simply undo them. So this stands aside whenever the shadow is named in
         the plan.

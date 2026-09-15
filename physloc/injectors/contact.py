@@ -57,7 +57,7 @@ def candidates_for(spec, family: str):
     """Bodies a family should prefer to act on, in order.
 
     A scenario may declare `notes["family_targets"][family]` when the obvious
-    culprit is the wrong one. `pyramid_impact` is the case that forced it: the
+    violator is the wrong one. `pyramid_impact` is the case that forced it: the
     actor is the falling cube, but the interesting solidity failure is a
     *struck ball* driven through the ground, which is what the same collision
     looks like when a video generator gets it wrong.
@@ -241,7 +241,7 @@ class Solidity(Injector):
     #: declare. The surface stops being solid without ceasing to be there: while
     #: the body is inside it, it is arrested and then held at `target_depth`.
     #: That also restores the one property the family cannot do without -- the
-    #: culprit stays VISIBLE. A body under an opaque floor has no pixels, so it
+    #: violator stays VISIBLE. A body under an opaque floor has no pixels, so it
     #: gets no `severity_map` and no `mask_invalid`; measured, all three bins
     #: painted 24 pixels on a single frame and nothing afterwards, which is the
     #: "severity is 0" you reported. Half-embedded, there is something to
@@ -1865,7 +1865,7 @@ class Newton2Mass(_CollisionEdit):
 
     @staticmethod
     def _causal_order(actor_id, other_id):
-        """The culprit ALONE, and it is the body whose mass is the lie.
+        """The violator ALONE, and it is the body whose mass is the lie.
 
         `_staged_masses` scales `other`, so `other` is the thing that is wrong;
         the striker merely rebounds off it. Both used to be listed, which made

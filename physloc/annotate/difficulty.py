@@ -3,7 +3,7 @@
 **`difficulty` is to `condition` what `peak_severity` is to `magnitude`.**
 `condition` is the knob -- we asked for a moving camera, or for clutter, and
 the sampler delivered it. `difficulty` is what came out: a clip built with
-eight distractors whose culprit still fills a quarter of the frame is not hard,
+eight distractors whose violator still fills a quarter of the frame is not hard,
 and a `standard` clip whose two-frame violation happens behind a screen is.
 The project already refuses to conflate the knob with the measurement on the
 severity axis; this is the same refusal on the detection axis.
@@ -124,7 +124,7 @@ FACTORS: Sequence[Factor] = (
     # is 0.67. `easy` is 0.05 rather than 0 to allow a frame of slop at the
     # edge of a window -- exact zero would make one clipped frame a demotion.
     Factor("occlusion",
-           "how much of the violation happens while the culprit is hidden?",
+           "how much of the violation happens while the violator is hidden?",
            "fraction of the violation window", "low", 0.05, 0.5),
     # CHOSEN. The corpus is concentrated at 0.68 -- one window setting across
     # every review config -- so its tertiles would encode the config rather
@@ -151,7 +151,7 @@ FACTORS: Sequence[Factor] = (
            "how many bodies must a model consider?",
            "count", "low", 2, 6),
     # CHOSEN, likewise: `multi` violates 2..N-1 of N actors.
-    Factor("culprits",
+    Factor("violators",
            "how many of them are violating?",
            "count", "low", 1, 3),
     # FITTED on the 24 clips that move: p10 = 0.091, median 0.136, max 0.201.
@@ -229,7 +229,7 @@ def measure(meta: Dict[str, object],
 
     # 2. OCCLUSION -- FULLY hidden, per this project's rule that a few visible
     # actor pixels make a violation instantly observable. Measured over the
-    # violation window rather than the whole clip: a culprit hidden for the
+    # violation window rather than the whole clip: a violator hidden for the
     # first two seconds and then in plain sight while it misbehaves is not an
     # occluded clip.
     if seg_invalid is not None and seg_invalid.size:
@@ -260,29 +260,29 @@ def measure(meta: Dict[str, object],
     # they are there precisely to be considered and rejected.
     #
     # A GRANULAR MEDIUM COUNTS ONCE. `pour` reports 80 actors and, for the
-    # families that act on the whole medium, 80 culprits -- which pinned every
+    # families that act on the whole medium, 80 violators -- which pinned every
     # granular clip to the top of both scales and made 63 of the corpus's 431
     # clips `hard` for a reason that has nothing to do with detection. Eighty
     # grains are one thing to attend to, not eighty candidates: nobody is asked
     # which grain is wrong. A family that picks a genuine SUBSET of the medium
     # keeps its count, because then the question really is "which ones".
     n_actors = int(md.get("n_actors") or 0)
-    n_culprits = int(md.get("n_culprits") or 0)
+    n_violators = int(md.get("n_violators") or 0)
     if str(md.get("physics_medium") or "") == "granular":
         bodies = 1
-        if n_culprits >= max(1, n_actors):
-            n_culprits = 1
+        if n_violators >= max(1, n_actors):
+            n_violators = 1
     else:
         bodies = n_actors
     clutter = float(bodies + int(md.get("n_distractors") or 0))
-    culprits = float(n_culprits)
+    violators = float(n_violators)
 
     # 7. CAMERA.
     camera = camera_travel(meta.get("camera"))
 
     return {"footprint": footprint, "occlusion": occlusion,
             "duration": duration, "severity": severity, "clutter": clutter,
-            "culprits": culprits, "camera": camera}
+            "violators": violators, "camera": camera}
 
 
 def assess(meta: Dict[str, object],

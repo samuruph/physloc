@@ -24,7 +24,7 @@ def _meta(**over):
             "resolution": [512, 512],
             "n_actors": 1,
             "n_distractors": 0,
-            "n_culprits": 1,
+            "n_violators": 1,
             "physics_medium": "rigid",
         },
         "camera": {"positions": [[0.0, -6.0, 2.0]] * 100,
@@ -76,8 +76,8 @@ def test_any_single_factor_can_make_a_clip_hard(name):
         meta["violation"]["peak_residual"] = {"score": bad}
     elif name == "clutter":
         meta["metadata"]["n_actors"] = int(bad)
-    elif name == "culprits":
-        meta["metadata"]["n_actors"] = meta["metadata"]["n_culprits"] = int(bad)
+    elif name == "violators":
+        meta["metadata"]["n_actors"] = meta["metadata"]["n_violators"] = int(bad)
     elif name == "camera":
         meta["camera"] = {"positions": [[0.0, -6.0 + 0.1 * i, 2.0]
                                         for i in range(100)],
@@ -160,17 +160,17 @@ def test_a_granular_medium_counts_as_one_thing():
     -- 63 of the review corpus's 431 clips -- for a reason that has nothing to
     do with how hard the violation is to see.
     """
-    meta = _meta(physics_medium="granular", n_actors=80, n_culprits=80)
+    meta = _meta(physics_medium="granular", n_actors=80, n_violators=80)
     got = D.assess(meta)
     assert got["factors"]["clutter"]["value"] == 1
-    assert got["factors"]["culprits"]["value"] == 1
+    assert got["factors"]["violators"]["value"] == 1
     assert got["level"] == "easy"
 
     # A genuine SUBSET keeps its count: then the question really is "which".
     part = D.assess(_meta(physics_medium="granular", n_actors=80,
-                          n_culprits=48))
-    assert part["factors"]["culprits"]["value"] == 48
-    assert part["factors"]["culprits"]["level"] == "hard"
+                          n_violators=48))
+    assert part["factors"]["violators"]["value"] == 48
+    assert part["factors"]["violators"]["level"] == "hard"
 
 
 def test_camera_travel_is_path_length_over_standoff():

@@ -1,6 +1,6 @@
 """Optical-domain injectors: shadows that lie about their caster.
 
-The only family whose culprit is not the object but its *shadow*. It relies on
+The only family whose violator is not the object but its *shadow*. It relies on
 `shadow_track` handing the cast shadow to a body of its own -- see that
 scenario's docstring for why a real Blender shadow cannot carry a mask.
 """
@@ -24,7 +24,7 @@ class Shadow(Injector):
     object being at a different height, which is a lawful reading and therefore
     a much weaker violation.
 
-    The culprit is the shadow body alone. Listing the caster too would put the
+    The violator is the shadow body alone. Listing the caster too would put the
     object's own pixels in `violation_mask`, and the object is not what is
     wrong.
     """
@@ -137,7 +137,7 @@ class ShadowInverted(Injector):
     **`t_event` is 0, and that is deliberate.** The identical prefix is empty,
     so this family alone ships a pair whose `divergence_map` is non-zero
     everywhere and whose "before" is nothing at all. `violation_mask` and
-    `severity_map` are unaffected -- they are computed from the culprit's
+    `severity_map` are unaffected -- they are computed from the violator's
     footprint and its residual, neither of which needs a lawful prefix -- and
     the valid twin is still exactly the counterfactual, still rendered from the
     same seed. What is lost is only the "spot the change" shortcut, which is

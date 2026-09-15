@@ -123,7 +123,7 @@ MATERIALS: Dict[str, Material] = {
     "ceramic": Material("ceramic", 2400.0, 0.15, 0.0, (0.02, 0.20),
                         (0.75, 0.95), specular=0.85),
     # FROSTED, not clear. Clear glass is the most visible material there is and
-    # also the least localisable -- a transparent culprit is hard to point at,
+    # also the least localisable -- a transparent violator is hard to point at,
     # and pointing at it is the task. At 0.92 transmission with roughness 0.22
     # it is unmistakably glass and still has a silhouette.
     "glass": Material("glass", 2500.0, 0.22, 0.0, (0.02, 0.18), (0.80, 0.98),

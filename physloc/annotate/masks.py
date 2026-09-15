@@ -3,11 +3,11 @@
 The primary annotation. Every mask is [T, H, W]: a value per pixel per frame, so
 "where" and "when" are answered by one array.
 
-**The union rule.** A naive "pixels of the culprit in the invalid render" is
+**The union rule.** A naive "pixels of the violator in the invalid render" is
 wrong for a sixth of the taxonomy -- a vanished body has *no* invalid-side
 pixels precisely because it vanished, and a teleported one is in two places. So
 
-    violation_mask[t] = footprint(culprit, invalid, t) | footprint(culprit, valid, t)
+    violation_mask[t] = footprint(violator, invalid, t) | footprint(violator, valid, t)
 
 which handles vanish (valid side only), spawn (invalid side only) and teleport
 (both, disjoint) with one rule. It is well-defined only because the twins are
@@ -41,7 +41,7 @@ def violation_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     that frame carries no visual evidence at all. Marking pixels there would ask
     a model to localise something the image does not contain -- and the three
     clocks already record that the violation began before it became visible.
-    Where the culprit is fully occluded the two gates agree, because the union
+    Where the violator is fully occluded the two gates agree, because the union
     of two hidden footprints is empty either way.
     """
     u = footprint(seg_valid, dynamic_causal_ids) | footprint(seg_invalid,
@@ -51,7 +51,7 @@ def violation_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
 
 def invalid_mask(seg_invalid: np.ndarray, dynamic_causal_ids: Sequence[int],
                  active: np.ndarray) -> np.ndarray:
-    """The culprit's footprint in the INVALID render alone, gated to `active`.
+    """The violator's footprint in the INVALID render alone, gated to `active`.
 
     The union in `violation_mask` exists so that a vanished body still has a
     mask, and it stays the documented training target. But it also marks pixels
@@ -73,7 +73,7 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                 active: np.ndarray, neighbourhood: int = 3,
                 static_ids: Sequence[int] = (),
                 secondary_active=None) -> np.ndarray:
-    """uint8 [T,H,W]: 0 = nothing, 1 = the culprit, 2 = a body it disturbed.
+    """uint8 [T,H,W]: 0 = nothing, 1 = the violator, 2 = a body it disturbed.
 
     **Invalid side only.** The question this array answers is "who did it, and
     what did it disturb", and both halves of that are about the clip in front of
@@ -83,7 +83,7 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     Level 2 is *measured*, not declared: `secondary_ids` are the bodies whose
     trajectory provably differs from the valid twin as a consequence, which is
     the same comparison `Injector._settle_bystanders` runs. Static participants
-    are included only near the culprit, so "the floor" is the bit of floor being
+    are included only near the violator, so "the floor" is the bit of floor being
     passed through rather than the whole plane.
     """
     prim = invalid_mask(seg_invalid, primary_ids, active)
@@ -94,7 +94,7 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
         static_near, moving = _split_participants(secondary_ids, static_ids)
         sec = np.zeros(prim.shape, bool)
         if static_near:
-            # A surface only counts where the culprit is passing through it:
+            # A surface only counts where the violator is passing through it:
             # otherwise "the floor" becomes the whole plane.
             sec |= (footprint(seg_invalid, static_near)
                     & _dilate(prim, neighbourhood) & gate)
@@ -105,7 +105,7 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
         # became a consequence; without it this falls back to the shared gate.
         for bid in moving:
             # A body that was knocked away is a consequence *wherever it went*.
-            # Restricting it to a neighbourhood of the culprit deleted it
+            # Restricting it to a neighbourhood of the violator deleted it
             # exactly when it mattered -- the further a struck ball travels, the
             # more clearly it is an effect, and the more certainly it fell
             # outside the box.
@@ -127,7 +127,7 @@ def _split_participants(secondary_ids, static_ids):
 
 def reference_mask(seg_valid: np.ndarray,
                    dynamic_causal_ids: Sequence[int]) -> np.ndarray:
-    """Where the culprit *should* be -- its footprint in the valid twin.
+    """Where the violator *should* be -- its footprint in the valid twin.
 
     Shipped on both clips of a pair and ungated in time, so a consumer always
     has the counterfactual: the lawful trajectory the invalid clip departed

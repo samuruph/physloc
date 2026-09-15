@@ -1,6 +1,6 @@
 """Cells the worker used to decline on every attempt, kept renderable.
 
-Each was "culprit leaves the frame after t_event at every one of 4 event
+Each was "violator leaves the frame after t_event at every one of 4 event
 moments": the keep-in-shot fits counted frames off screen against a budget the
 worker's gate does not use, could not weaken far enough, or did not move at all
 between attempts, and two staged families threw a medium out of its box.
@@ -30,7 +30,7 @@ def _plan(inj, spec, traj, severity="strong", attempt=0):
         inj.event_attempt = 0
 
 
-def _culprits(spec, plan):
+def _violators(spec, plan):
     by_id = {int(b.segmentation_id): b for b in spec.bodies}
     return [by_id[i] for i in plan.causal_body_ids
             if i in by_id and not by_id[i].static]
@@ -45,7 +45,7 @@ def test_superelastic_drop_bounce_stays_in_shot(seed):
     plan = _plan(inj, spec, traj)
     assert plan is not None
     out = inj.apply(spec, traj, plan)
-    assert _geom.culprits_visible(spec, out, _culprits(spec, plan), plan.t_event)
+    assert _geom.violators_visible(spec, out, _violators(spec, plan), plan.t_event)
     assert plan.params["speed_gain"] > 1.0
 
 
@@ -103,7 +103,7 @@ def test_support_hover_is_fitted_into_the_frame():
     inj = injectors.get("support")
     plan = _plan(inj, spec, traj)
     out = inj.apply(spec, traj, plan)
-    assert _geom.culprits_visible(spec, out, _culprits(spec, plan), plan.t_event)
+    assert _geom.violators_visible(spec, out, _violators(spec, plan), plan.t_event)
     assert 0.0 < plan.params["clearance_radii"] <= inj.CLEARANCE_RADII["strong"]
 
 
@@ -123,15 +123,15 @@ def test_one_body_of_a_pair_on_screen_counts_as_seen():
         "superelastic")._clone(traj)
     j = out.index_of(int(pair[0].segmentation_id))
     out.pos[:, j, :] = np.asarray([500.0, 500.0, 500.0], np.float32)
-    assert _geom.culprits_on_screen(spec, out, pair).all()
+    assert _geom.violators_on_screen(spec, out, pair).all()
     # ...but not when neither is.
     k = out.index_of(int(pair[1].segmentation_id))
     out.pos[:, k, :] = np.asarray([-500.0, 500.0, 500.0], np.float32)
-    assert not _geom.culprits_on_screen(spec, out, pair).any()
+    assert not _geom.violators_on_screen(spec, out, pair).any()
     # A medium still needs most of itself in shot.
     trio = [b for b in spec.bodies if not b.static and not b.dormant][:3]
     if len(trio) == 3:
-        assert not _geom.culprits_on_screen(spec, out, trio).any()
+        assert not _geom.violators_on_screen(spec, out, trio).any()
 
 
 def test_a_granular_medium_needs_less_of_itself_in_shot():
@@ -145,12 +145,12 @@ def test_a_granular_medium_needs_less_of_itself_in_shot():
     gone = int(len(grains) * 0.5)                 # half the pour leaves
     for b in grains[:gone]:
         out.pos[:, out.index_of(int(b.segmentation_id)), :] = 500.0
-    assert _geom.culprits_on_screen(spec, out, grains).all()
+    assert _geom.violators_on_screen(spec, out, grains).all()
 
 
-def test_a_peer_outside_the_shot_is_not_a_split_culprit():
+def test_a_peer_outside_the_shot_is_not_a_split_violator():
     """One peer spawned out of frame declined whole `multi` clips (drop 786,
-    stack_topple 785 x solidity); it must simply not be named a culprit."""
+    stack_topple 785 x solidity); it must simply not be named a violator."""
     from physloc.injectors import multi
     from physloc.scenarios.base import CONDITION_CYCLE
 
@@ -163,22 +163,22 @@ def test_a_peer_outside_the_shot_is_not_a_split_culprit():
         if multi.timing_mode(spec, inj.family) != "independent":
             continue
         traj = mockroll.roll(spec, sc)
-        base, subs = multi.culprit_plans(
+        base, subs = multi.violator_plans(
             inj, spec, traj, lambda: np.random.RandomState(1), "strong",
             lambda p: inj.simulates(p))
         if len(subs) < 3:
             continue
-        # Park one of the culprits far outside the shot for the whole clip.
+        # Park one of the violators far outside the shot for the whole clip.
         hidden = int(subs[-1].causal_body_ids[0])
         out = inj._clone(traj)
         out.pos[:, out.index_of(hidden), :] = np.float32(500.0)
-        plan, subs2 = multi.culprit_plans(
+        plan, subs2 = multi.violator_plans(
             inj, spec, out, lambda: np.random.RandomState(1), "strong",
             lambda p: inj.simulates(p))
         assert hidden not in {int(s.causal_body_ids[0]) for s in subs2}
         assert len(subs2) == len(subs) - 1
         return
-    pytest.skip("no seed gave an independently timed multi plan of 3+ culprits")
+    pytest.skip("no seed gave an independently timed multi plan of 3+ violators")
 
 
 def test_non_parabolic_kicks_leave_every_body_at_rest():

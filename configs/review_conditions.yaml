@@ -8,7 +8,7 @@
 # TEN VARIANTS, which is exactly one full turn of `CONDITION_CYCLE`, so this
 # run contains every condition at least once:
 #
-#   variants 0-5  standard       static camera, one culprit, nothing else
+#   variants 0-5  standard       static camera, one violator, nothing else
 #   variant  6    camera         the camera orbits, tracks or dollies
 #   variant  7    distractors    six inert bodies, clear of the action
 #   variant  8    multi          five actors, two of them violating
@@ -30,7 +30,7 @@
 #        object misbehaves the clip reads as a render fault, not as physics
 #   9    both at once
 #
-# `n_actors`, `n_culprits`, `n_distractors` and `condition` are in every
+# `n_actors`, `n_violators`, `n_distractors` and `condition` are in every
 # metadata.json and in the published index, so the check can be a query rather than
 # a viewing:
 #
@@ -40,7 +40,7 @@
 #   for f in glob.glob("out/review_conditions/clips/**/metadata.json", recursive=True):
 #       m = json.load(open(f))["metadata"]
 #       if m.get("label") == "invalid":
-#           c[(m["condition"], m["n_actors"], m["n_culprits"],
+#           c[(m["condition"], m["n_actors"], m["n_violators"],
 #              m["n_distractors"])] += 1
 #   for k, n in sorted(c.items()): print(k, n)
 #   PY

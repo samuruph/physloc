@@ -136,7 +136,7 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
     PyBullet holds belongs to some other run and step 0 must not read it. A
     segment that continues the run before it (`run_segments`) passes False:
     its manifold is its own previous substep, and skipping it would drop a
-    frame's worth of contacts at every culprit's moment.
+    frame's worth of contacts at every violator's moment.
     """
     # The INSTALLED Kubric (2022.4.1) keeps a bare connection id in
     # `physics_client` and calls the `pybullet` module directly; the newer
@@ -252,7 +252,7 @@ def run_segments(simulator, scene, spec, objs, traj_valid,
     intervention to the live world and returns its hooks, and is called with
     the world at that frame. The world is reset to the valid state at the
     earliest frame only -- later stages act on the world as the earlier ones
-    left it, which is the point: a culprit that fires second fires in a scene
+    left it, which is the point: a violator that fires second fires in a scene
     the first one may already have changed.
 
     Returns `(first_frame, tail)`, the tail being `run_from`'s dictionary for

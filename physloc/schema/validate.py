@@ -214,7 +214,7 @@ def validate_clip(cdir: str) -> List[str]:
     # 5. The mask must be non-empty on every frame that is active AND
     # observable -- that is the union-rule check.
     #
-    # Deliberately NOT "every active frame". When the culprit is fully occluded
+    # Deliberately NOT "every active frame". When the violator is fully occluded
     # the violation is active but has no visible extent anywhere: it is absent
     # from the invalid render *and* hidden in the valid twin, so the union of
     # both footprints is legitimately empty. An empty mask is the truthful
@@ -251,22 +251,22 @@ def validate_clip(cdir: str) -> List[str]:
             if int(cid) not in declared:
                 bad("causal_body_id %d is not a body in this scene" % cid)
 
-    # 14. each culprit's own clock is consistent, and its union is the clip's.
+    # 14. each violator's own clock is consistent, and its union is the clip's.
     causal = {int(i) for i in v.get("causal_body_ids", [])}
-    culprits = v.get("culprits") or []
-    for c in culprits:
+    violators = v.get("violators") or []
+    for c in violators:
         cid = int(c.get("instance_id", -1))
         if cid not in causal:
-            bad("culprit %d is not in causal_body_ids" % cid)
+            bad("violator %d is not in causal_body_ids" % cid)
         if int(c["t_observable_frame"]) < int(c["t_event_frame"]):
-            bad("culprit %d: t_observable precedes t_event" % cid)
+            bad("violator %d: t_observable precedes t_event" % cid)
         for s, e in c.get("violation_windows", []):
             if not (0 <= s <= e < T):
-                bad("culprit %d: window (%d,%d) out of range T=%d" % (cid, s, e, T))
-    if culprits and min(int(c["t_event_frame"]) for c in culprits) != te:
-        bad("t_event_frame is not the earliest culprit's moment")
+                bad("violator %d: window (%d,%d) out of range T=%d" % (cid, s, e, T))
+    if violators and min(int(c["t_event_frame"]) for c in violators) != te:
+        bad("t_event_frame is not the earliest violator's moment")
 
-    # 15. per-pixel attribution names only culprits, exactly where the mask is.
+    # 15. per-pixel attribution names only violators, exactly where the mask is.
     vid_p = os.path.join(cdir, "violation_ids.npz")
     if os.path.exists(vid_p):
         vids = np.load(vid_p)["ids"]
@@ -274,7 +274,7 @@ def validate_clip(cdir: str) -> List[str]:
             bad("violation_ids.npz does not cover exactly violation_mask")
         stray = set(np.unique(vids[vids > 0]).tolist()) - causal
         if stray:
-            bad("violation_ids.npz names non-culprits %s" % sorted(stray))
+            bad("violation_ids.npz names non-violators %s" % sorted(stray))
 
     # 16. MOVi's instance tensors line up with the instance list.
     inst_p = os.path.join(cdir, layout.INSTANCES)

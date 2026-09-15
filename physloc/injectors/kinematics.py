@@ -67,7 +67,7 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
 class _GravityScale(Injector):
     """Shared machinery for `antigravity` and `global_gravity`.
 
-    They differ in *extent*, not in mechanism: one bends gravity for the culprit,
+    They differ in *extent*, not in mechanism: one bends gravity for the violator,
     the other for everything that moves. Keeping one implementation means the
     trapezoid profile, the solid floor and the bounded window are identical
     across both, so the only thing the label distinguishes is what it claims to.
@@ -371,7 +371,7 @@ class GlobalGravity(_GravityScale):
     def _targets(self, spec):
         # Not the SCRIPTED ones. A kinematic prop -- `pendulum_swing`'s rod,
         # which is hung between the pivot and the bob rather than falling -- is
-        # not a body gravity acts on, and naming it as a culprit had a worse
+        # not a body gravity acts on, and naming it as a violator had a worse
         # consequence than a wrong mask: the worker will not stage an
         # intervention that touches a scripted body, so the whole family
         # dropped to the edited path and re-integrated the bob as a free body,
@@ -409,7 +409,7 @@ class Continuity(Injector):
                                               traj.num_frames))
         if t0 is None:
             return None
-        # A JUMP THE MEDIUM CAN SHOW. The distance is in radii of the culprit,
+        # A JUMP THE MEDIUM CAN SHOW. The distance is in radii of the violator,
         # which is right for one ball and far too small for forty grains: at
         # `pour`'s 0.078 m grain, weak came to 0.12 m -- less than the pile is
         # wide, and it scored 0.000. What a viewer resolves on a medium is the
@@ -691,7 +691,7 @@ class NonParabolic(Injector):
             # **The FIRST body keeps the full nominal amplitude**, and the rest
             # range down to half of it. The spread is what makes a medium snake
             # rather than slide, but which grain gets which amplitude cannot be
-            # arbitrary: the severity is read off the culprit the plan names
+            # arbitrary: the severity is read off the violator the plan names
             # first, and giving that one the SMALLEST amplitude made the peak
             # residual independent of the bin. Measured on `pour`, weak / medium
             # / strong came out at 6.96 / 4.96 / 7.07 -- the ladder gone, with

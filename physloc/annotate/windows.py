@@ -53,7 +53,7 @@ def observable_frames(seg_valid: np.ndarray, seg_invalid: np.ndarray,
 
     Two ways they can disagree, and for a long time only the first was checked:
 
-    * **occupancy** -- the culprit covers different pixels. Catches everything
+    * **occupancy** -- the violator covers different pixels. Catches everything
       that moves, vanishes or changes size.
     * **appearance** -- it covers the same pixels and they *look* different.
       Catches everything that does not move: a body changing colour, a shadow
@@ -80,7 +80,7 @@ def observable_frames(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     if rgb_valid is None or rgb_invalid is None:
         return diff
 
-    # Appearance, restricted to where the culprit is in either twin, so a
+    # Appearance, restricted to where the violator is in either twin, so a
     # shadow moving elsewhere in the frame is not mistaken for evidence about
     # this body. `level` is in 0-255; a few pixels' worth of path-tracing noise
     # should not count as a violation becoming visible.

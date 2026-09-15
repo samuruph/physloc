@@ -1,6 +1,6 @@
 """The difficulty conditions: which clips get harder, how, and in what share.
 
-Camera motion, distractors and multiple culprits are three ways to make a clip
+Camera motion, distractors and multiple violators are three ways to make a clip
 harder, and `CONDITION_CYCLE` says which combinations exist and how often.
 
 **Named cells, not independent coin flips.** Independent per-axis ratios were
@@ -17,7 +17,7 @@ from physloc import injectors, scenarios
 from physloc.scenarios import TIERS
 from physloc.scenarios.base import (CONDITION_CYCLE, EXTRA_OBJECTS,
                                     MULTI_ACTORS,
-                                    MULTI_CULPRIT_RANGE, condition_for,
+                                    MULTI_VIOLATOR_RANGE, condition_for,
                                     condition_share, has_distractors,
                                     has_moving_camera, has_multi)
 
@@ -72,12 +72,12 @@ def test_the_plain_clips_come_first():
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_the_two_crowded_conditions_differ_only_in_culprit_count(name):
+def test_the_two_crowded_conditions_differ_only_in_violator_count(name):
     """What actually separates `distractors` from `multi`.
 
     Both put N extra objects in the scene, both draw N from the same range, and
     both let some of them move. The ONE difference is how many bodies get
-    invalid physics: `distractors` has exactly one culprit -- the scenario's
+    invalid physics: `distractors` has exactly one violator -- the scenario's
     own actor -- and its extras are scenery no family can target, while `multi`
     makes the extras eligible and 2..N-1 of them violate.
 
@@ -92,10 +92,10 @@ def test_the_two_crowded_conditions_differ_only_in_culprit_count(name):
     d = _spec(name, d_v)
     extras = [b for b in d.bodies if b.role == "distractor"]
     assert lo <= len(extras) <= hi, (name, len(extras))
-    # A scenario may declare the WHOLE medium a culprit on purpose, whatever
+    # A scenario may declare the WHOLE medium a violator on purpose, whatever
     # the condition: `pour`'s families act on all forty grains, because one
     # hovering grain is perfectly annotated and impossible to see. The
-    # condition's one-culprit rule is about the bodies THIS code adds, and it
+    # condition's one-violator rule is about the bodies THIS code adds, and it
     # adds none that can be targeted.
     if not d.notes.get("group_fraction"):
         assert not any(b.role == "actor" and b.name.startswith("peer_")
@@ -109,7 +109,7 @@ def test_the_two_crowded_conditions_differ_only_in_culprit_count(name):
     assert peers or n >= lo, name          # already a crowd, e.g. `pour`
     assert m.notes.get("group_fraction"), name
     assert int(round(m.notes["group_fraction"] * n)) >= 2, (
-        "%s: the multi condition must have at least two culprits" % name)
+        "%s: the multi condition must have at least two violators" % name)
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -147,7 +147,7 @@ def test_a_distractor_is_either_moving_or_genuinely_still(name):
 def test_distractors_and_multi_are_never_combined():
     """They are the same placement machinery differing in whether the extras
     take part, so a scene with both asks the viewer to sort inert clutter from
-    lawful peers from culprits -- three distinctions where the family makes
+    lawful peers from violators -- three distinctions where the family makes
     one."""
     for v in range(PERIOD):
         assert not (has_distractors(condition_for(v)) and has_multi(condition_for(v))), condition_for(v)
@@ -187,11 +187,11 @@ def test_each_condition_builds_what_it_claims(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_multi_draws_both_of_its_counts(name):
-    """N actors and M culprits, both randomised, both inside their bounds.
+    """N actors and M violators, both randomised, both inside their bounds.
 
     The point of the condition, and of randomising it. A fixed count is a cue:
     a model that learns "five objects, two wrong" is reading the layout rather
-    than the physics. At least two culprits, because one is what `standard`
+    than the physics. At least two violators, because one is what `standard`
     already is, and at most N-1 so there is always a lawful body to contrast
     against -- which is the whole task.
     """
@@ -214,9 +214,9 @@ def test_multi_draws_both_of_its_counts(name):
                 continue
             assert lo_n <= n <= hi_n, "%s: %d actors outside %s" % (
                 name, n, MULTI_ACTORS)
-            assert m >= MULTI_CULPRIT_RANGE[0], (
-                "%s: %d culprit(s) is what `standard` already is" % (name, m))
-            assert m <= n - MULTI_CULPRIT_RANGE[1], (
+            assert m >= MULTI_VIOLATOR_RANGE[0], (
+                "%s: %d violator(s) is what `standard` already is" % (name, m))
+            assert m <= n - MULTI_VIOLATOR_RANGE[1], (
                 "%s: %d of %d leaves nothing lawful to compare against"
                 % (name, m, n))
             seen_n.add(n)
@@ -224,12 +224,12 @@ def test_multi_draws_both_of_its_counts(name):
     if seen_n:
         assert len(seen_n) >= 3, "%s: object count barely varies: %s" % (
             name, sorted(seen_n))
-        assert len(seen_m) >= 2, "%s: culprit count barely varies: %s" % (
+        assert len(seen_m) >= 2, "%s: violator count barely varies: %s" % (
             name, sorted(seen_m))
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_a_multi_clip_names_more_than_one_culprit(name):
+def test_a_multi_clip_names_more_than_one_violator(name):
     """What the annotation actually ships. `_group` picks the bodies and the
     plan names them; if the two disagree the clip bends objects nobody
     labelled, which every mask and residual would then be wrong about."""
@@ -249,7 +249,7 @@ def test_a_multi_clip_names_more_than_one_culprit(name):
             got = len(plan.causal_body_ids)
             if variant == multi:
                 assert got >= 2, (
-                    "%s x %s: %d culprit(s) in a multi scene" % (name, fam, got))
+                    "%s x %s: %d violator(s) in a multi scene" % (name, fam, got))
                 checked += 1
     assert checked, "%s: no family planned on a multi scene" % name
 
@@ -257,7 +257,7 @@ def test_a_multi_clip_names_more_than_one_culprit(name):
 @pytest.mark.parametrize("name", NAMES)
 def test_peers_are_actors_and_distractors_are_not(name):
     """The one line the two conditions differ on. A peer is an eligible
-    culprit; a distractor is scenery every injector query excludes. Their
+    violator; a distractor is scenery every injector query excludes. Their
     segmentation blocks are distinct so a reader can tell them apart from ids
     alone."""
     from physloc.injectors import _geom

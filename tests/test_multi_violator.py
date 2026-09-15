@@ -1,8 +1,8 @@
-"""Each culprit of a `multi` clip on its own clock.
+"""Each violator of a `multi` clip on its own clock.
 
-Every culprit in a `multi` clip used to fire on the same frame, from one plan,
+Every violator in a `multi` clip used to fire on the same frame, from one plan,
 with one severity timeline painted into all of them. Most eligible clips now
-plan each culprit separately and merge the plans; a quarter keep one shared
+plan each violator separately and merge the plans; a quarter keep one shared
 moment on purpose, so simultaneity is represented rather than accidental.
 """
 from __future__ import annotations
@@ -31,12 +31,12 @@ def _multi_spec(seed, name="drop"):
 
 
 def _plans(inj, spec, traj, seed=3):
-    return multi.culprit_plans(inj, spec, traj,
+    return multi.violator_plans(inj, spec, traj,
                                lambda: np.random.RandomState(seed), "strong",
                                inj.simulates)
 
 
-def test_merge_keeps_each_culprit_and_unions_the_windows():
+def test_merge_keeps_each_violator_and_unions_the_windows():
     a = InterventionPlan(family="phantom_impulse", kind="instant", t_event=5,
                          windows=[(5, 6)], causal_body_ids=[2], params={},
                          magnitude=1.0, magnitude_unit="m/s", severity_bin="strong")
@@ -46,12 +46,12 @@ def test_merge_keeps_each_culprit_and_unions_the_windows():
     m = InterventionPlan.merge([a, b], [2, 600])
     assert m.t_event == 5
     assert m.causal_body_ids == [2, 600]
-    assert [c.body_id for c in m.culprits] == [2, 600]
-    assert [c.t_event for c in m.culprits] == [5, 11]
+    assert [c.body_id for c in m.violators] == [2, 600]
+    assert [c.t_event for c in m.violators] == [5, 11]
     assert sorted(map(tuple, m.windows)) == [(5, 6), (11, 12)]
     d = m.to_dict()
-    assert [c["t_event_frame"] for c in d["culprits"]] == [5, 11]
-    assert d["culprits"][1]["magnitude"] == 0.8
+    assert [c["t_event_frame"] for c in d["violators"]] == [5, 11]
+    assert d["violators"][1]["magnitude"] == 0.8
 
 
 def test_sync_share_is_about_a_quarter():
@@ -70,11 +70,11 @@ def test_non_multi_clips_are_never_split():
     traj = mockroll.roll(spec, sc)
     plan, subs = _plans(injectors.get("phantom_impulse"), spec, traj)
     assert subs == []
-    assert plan is None or plan.notes.get("culprit_timing") == "shared"
+    assert plan is None or plan.notes.get("violator_timing") == "shared"
 
 
 @pytest.mark.parametrize("family", FAMILIES)
-def test_independent_culprits_get_their_own_moments(family):
+def test_independent_violators_get_their_own_moments(family):
     inj = injectors.get(family)
     split, distinct = 0, 0
     for seed in range(12):
@@ -82,13 +82,13 @@ def test_independent_culprits_get_their_own_moments(family):
         before = dict(spec.notes.get("family_targets") or {})
         traj = mockroll.roll(spec, sc)
         plan, subs = _plans(inj, spec, traj)
-        # The per-culprit override never leaks into the scene.
+        # The per-violator override never leaks into the scene.
         assert dict(spec.notes.get("family_targets") or {}) == before
         if plan is None or not subs:
             continue
         split += 1
-        assert plan.notes["culprit_timing"] == "independent"
-        assert [c.body_id for c in plan.culprits] == [int(s.causal_body_ids[0])
+        assert plan.notes["violator_timing"] == "independent"
+        assert [c.body_id for c in plan.violators] == [int(s.causal_body_ids[0])
                                                       for s in subs]
         assert plan.t_event == min(s.t_event for s in subs)
         distinct += int(len({s.t_event for s in subs}) > 1)
@@ -100,12 +100,12 @@ def test_independent_culprits_get_their_own_moments(family):
 
 
 @pytest.mark.parametrize("family", ["phantom_impulse", "continuity"])
-def test_no_culprit_changes_anything_before_its_own_moment(family):
+def test_no_violator_changes_anything_before_its_own_moment(family):
     """The host approximation of what the worker stages, applied in order of
     moment. The clip is the valid rollout until the EARLIEST moment, and adding
-    each later culprit leaves every frame before its own moment as it was.
+    each later violator leaves every frame before its own moment as it was.
 
-    Not "each culprit is lawful until its own moment": an earlier culprit may
+    Not "each violator is lawful until its own moment": an earlier violator may
     genuinely disturb a later one before that one fires, and that disturbance
     is a consequence of the first violation, not a leak of the second.
     """

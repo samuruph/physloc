@@ -32,11 +32,11 @@ PANEL = 288                      # each panel is rendered at this size
 HEADER = 34
 TIMELINE = 84
 PAD = 6
-#: Height of one extra timeline row per culprit, when culprits keep their own
+#: Height of one extra timeline row per violator, when violators keep their own
 #: clocks.
-CULPRIT_ROW = 9
-#: One colour per culprit row, cycled.
-C_CULPRITS = ((255, 120, 200), (120, 230, 255), (200, 255, 120),
+VIOLATOR_ROW = 9
+#: One colour per violator row, cycled.
+C_VIOLATORS = ((255, 120, 200), (120, 230, 255), (200, 255, 120),
               (255, 200, 90), (180, 150, 255), (255, 150, 120))
 
 C_BG = (18, 18, 22)
@@ -85,15 +85,15 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     t_obs = int(v.get("t_observable_frame", -1))
     t_end = int(v.get("t_end_frame", -1))
     peak = (v.get("peak_residual") or {})
-    # ONE ROW PER CULPRIT when they broke the law at moments of their own. The
+    # ONE ROW PER VIOLATOR when they broke the law at moments of their own. The
     # clip's rows are the union, and a union of [7,7] and [9,9] drawn on one
     # bar does not say which object did what when.
-    culprits = v.get("culprits") or []
-    culprit_rows = ([(int(c["instance_id"]),
+    violators = v.get("violators") or []
+    violator_rows = ([(int(c["instance_id"]),
                       [tuple(w) for w in c.get("violation_windows", [])])
-                     for c in culprits]
-                    if v.get("culprit_timing") == "independent"
-                    and len(culprits) > 1 else [])
+                     for c in violators]
+                    if v.get("violator_timing") == "independent"
+                    and len(violators) > 1 else [])
 
     # Order: what the renderer saw, then what we derived from it. RGB, energy
     # and the three geometry passes describe the scene; mask, severity, causal
@@ -119,7 +119,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD
-    H = HEADER + panel + 2 * PAD + TIMELINE + CULPRIT_ROW * len(culprit_rows)
+    H = HEADER + panel + 2 * PAD + TIMELINE + VIOLATOR_ROW * len(violator_rows)
     out = np.zeros((T, H, W, 3), np.uint8)
 
     for t in range(T):
@@ -170,7 +170,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         _header(f, W, meta, t, T, active, observable, occluded)
         _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
                   float(tl["severity_t"][t]), peak, v, iwin, cwin,
-                  culprit_rows)
+                  violator_rows)
         out[t] = f
 
     out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
@@ -242,7 +242,7 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
             edge = m ^ _erode(m)
             img[edge] = np.array(C_MASK, np.float32)
         if ref is not None:
-            # Where the culprit should be, per the valid twin -- drawn *last*
+            # Where the violator should be, per the valid twin -- drawn *last*
             # and outline-only. The violation mask is a superset of it for
             # vanish-type families, so drawing the reference first would let the
             # red fill hide it exactly when it matters most.
@@ -380,16 +380,16 @@ def _header(f, W, meta, t, T, active, observable, occluded):
         bits.append(cond)
     # HOW MANY BODIES ARE WRONG, when it is more than one. `multi` is the
     # condition that asks "which of these is wrong", but it is not the only way
-    # a clip ends up with several culprits: `superelastic` boosts BOTH bodies of
+    # a clip ends up with several violators: `superelastic` boosts BOTH bodies of
     # a two-body collision, because boosting one would add a momentum
     # violation the clip does not annotate; `fission` and `fusion` name both
-    # halves. So a `standard` clip can carry two culprits, and nothing on the
+    # halves. So a `standard` clip can carry two violators, and nothing on the
     # frame said so -- you found it on L3 `stack_topple x superelastic`, where
     # the severity landed on two blocks under a label that did not mention it.
-    nc = md.get("n_culprits")
+    nc = md.get("n_violators")
     if isinstance(nc, int) and nc > 1:
-        timing = v.get("culprit_timing")
-        bits.append("%d culprits%s" % (nc, " (%s)" % timing
+        timing = v.get("violator_timing")
+        bits.append("%d violators%s" % (nc, " (%s)" % timing
                                        if timing in ("independent", "sync")
                                        else ""))
     bits += ["seed %s" % md.get("seed"), "tier %s" % md.get("tier")]
@@ -407,10 +407,10 @@ C_INTERVENE = (120, 200, 255)
 
 
 def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
-              iwin=None, cwin=None, culprit_rows=None):
+              iwin=None, cwin=None, violator_rows=None):
     import cv2
-    culprit_rows = culprit_rows or []
-    extra = CULPRIT_ROW * len(culprit_rows)
+    violator_rows = violator_rows or []
+    extra = VIOLATOR_ROW * len(violator_rows)
     y0 = H - TIMELINE - extra + 4
     x0, x1 = PAD + 2, W - PAD - 2
     span = x1 - x0
@@ -453,11 +453,11 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
             cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
                           color, -1)
 
-    # Each culprit's own violation windows, below the clip's three rows, named
+    # Each violator's own violation windows, below the clip's three rows, named
     # by the instance id that `violation_ids.npz` and `causal_ids.npz` use.
-    for k, (cid, wins) in enumerate(culprit_rows):
-        ry = y0 + 16 + (len(rows) + k) * CULPRIT_ROW
-        color = C_CULPRITS[k % len(C_CULPRITS)]
+    for k, (cid, wins) in enumerate(violator_rows):
+        ry = y0 + 16 + (len(rows) + k) * VIOLATOR_ROW
+        color = C_VIOLATORS[k % len(C_VIOLATORS)]
         cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
         for s, e in wins:
             cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
@@ -473,7 +473,7 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
             _text(f, str(i), (fx(i) - 3, ty + 15), C_DIM, 0.34, 1)
 
     # Markers. Clocks that land on the same frame -- t_event == t_obs is the
-    # common case whenever nothing occludes the culprit -- are merged into one
+    # common case whenever nothing occludes the violator -- are merged into one
     # label rather than overprinted.
     t_iend = max((e for _, e in iwin), default=t_event)
     marks = [(t_event, "t_event", C_INTERVENE),
@@ -540,7 +540,7 @@ def _causal_key(f, x, y, panel, layer):
 
     The array is uint8 with three values and no key anywhere on the frame, so
     "what is red and what is blue" was a question the overlay made a reader ask
-    and then did not answer. Red is the culprit -- the body the plan names --
+    and then did not answer. Red is the violator -- the body the plan names --
     and blue is a body it disturbed, which is measured rather than declared.
     Counts beside each, because a level that is present in the legend and absent
     from the image is worth being able to tell apart from one that is simply
@@ -548,7 +548,7 @@ def _causal_key(f, x, y, panel, layer):
     """
     import cv2
 
-    rows = [("culprit", C_CAUSAL1, int((layer == 1).sum())),
+    rows = [("violator", C_CAUSAL1, int((layer == 1).sum())),
             ("affected", C_CAUSAL2, int((layer == 2).sum()))]
     ly = y + panel - 8 - 11 * (len(rows) - 1)
     for label, colour, count in rows:

@@ -1,6 +1,6 @@
 """The union rule -- docs/PLAN.md 3.3.
 
-    violation_mask[t] = footprint(culprit, invalid, t) | footprint(culprit, valid, t)
+    violation_mask[t] = footprint(violator, invalid, t) | footprint(violator, valid, t)
 
 Without it, vanish- and teleport-type violations produce empty or half-empty
 masks: the body has no invalid-side pixels precisely *because* it vanished. A
@@ -23,7 +23,7 @@ def _seg(T=3, H=4, W=4, fill=0):
 
 
 def test_vanish_mask_comes_from_the_valid_twin():
-    """The culprit is absent from the invalid render entirely."""
+    """The violator is absent from the invalid render entirely."""
     sv, si = _seg(), _seg()
     sv[:, 1, 1] = 7                       # present in valid
     active = np.ones(3, bool)
@@ -67,7 +67,7 @@ def test_static_participant_does_not_flood_the_mask():
     c = masks.causal_mask(sv, si, [2], [1], np.ones(3, bool), neighbourhood=1,
                           static_ids=[1])
     assert (c == 1).sum() == 3
-    assert (c == 2).sum() > 0, "the floor should appear near the culprit"
+    assert (c == 2).sum() > 0, "the floor should appear near the violator"
     assert (c == 2).sum() < sv.size, "but not everywhere"
 
 
@@ -135,7 +135,7 @@ def test_released_clips_have_nonempty_masks_while_active(which):
         observable = np.asarray(tl["observable"], bool)
         per = mask.reshape(mask.shape[0], -1).any(axis=1)
         # Non-empty exactly where the violation is both scored and visible.
-        # While the culprit is fully occluded the violation is active but has no
+        # While the violator is fully occluded the violation is active but has no
         # visible extent, so an empty mask is correct there -- that is the case
         # the observability lag describes.
         assert not (scored & observable & ~per).any(), (
@@ -147,17 +147,17 @@ def test_released_clips_have_nonempty_masks_while_active(which):
 
 
 def test_a_fully_occluded_violation_has_an_empty_mask():
-    """Active but invisible: the culprit is hidden in the valid twin and gone
+    """Active but invisible: the violator is hidden in the valid twin and gone
     from the invalid one, so the union is legitimately empty. The annotation
     must say "nothing to see", not invent a region."""
     sv, si = _seg(), _seg()
-    # culprit has no pixels in either twin -- fully occluded, then removed
+    # violator has no pixels in either twin -- fully occluded, then removed
     m = masks.violation_mask(sv, si, [7], np.ones(3, bool))
     assert not m.any()
 
 
 def test_reference_mask_is_the_lawful_footprint():
-    """`reference_mask` says where the culprit *should* be, taken from the valid
+    """`reference_mask` says where the violator *should* be, taken from the valid
     twin and ungated in time. For a vanished body it is the only mask with any
     pixels at all, which is what makes the union rule legible."""
     sv, si = _seg(), _seg()

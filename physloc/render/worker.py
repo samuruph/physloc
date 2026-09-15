@@ -41,13 +41,13 @@ PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
           "normal", "object_coordinates")
 
 #: How many event moments a family is offered before a variant is given up
-#: because its culprit will not stay on screen after the event. Simulation is
+#: because its violator will not stay on screen after the event. Simulation is
 #: free at this scale, so a retry costs a rollout and nothing else.
 EVENT_ATTEMPTS = 4
 
-#: Families whose violation is the culprit going OUT OF SIGHT: it vanishes
+#: Families whose violation is the violator going OUT OF SIGHT: it vanishes
 #: (`permanence`), fades (`dissolve`), sinks into the floor or through a wall
-#: (`solidity`), or is absorbed into another body (`fusion`). Their culprit
+#: (`solidity`), or is absorbed into another body (`fusion`). Their violator
 #: leaves the picture on purpose, so whether it would have been on screen is
 #: asked of the lawful rollout instead of the invalid one. Measured on mock
 #: rollouts, asking the invalid one declined every seed of `barrier_pass` and
@@ -823,12 +823,12 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
 
     Returns `{"ok": False, "error": ...}` when there is no clip to make, and
     otherwise `{"ok": True, "plan", "traj", "visible"}` -- `visible` being
-    whether the culprits stay on screen after the event, which the caller uses
+    whether the violators stay on screen after the event, which the caller uses
     to decide whether to try another moment. Nothing is written here.
 
-    A `multi` clip may plan each culprit on its own clock (`injectors.multi`);
-    those culprits are then staged at their own frames in one simulation
-    (`stepper.run_segments`) and the plans merged, so `plan.culprits` says when
+    A `multi` clip may plan each violator on its own clock (`injectors.multi`);
+    those violators are then staged at their own frames in one simulation
+    (`stepper.run_segments`) and the plans merged, so `plan.violators` says when
     each one broke the law.
     """
     def is_staged(p) -> bool:
@@ -838,7 +838,7 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
                     and not scripted.intersection(p.causal_body_ids))
 
     try:
-        plan, subs = multi.culprit_plans(
+        plan, subs = multi.violator_plans(
             inj, spec, traj_valid, lambda: np.random.RandomState(rng_seed), sev,
             is_staged)
     except Exception as exc:                               # noqa: BLE001
@@ -865,8 +865,8 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     # was disqualifying the one family built to pass it.
     staged = is_staged(plan)
     if subs:
-        # EACH CULPRIT AT ITS OWN FRAME, in one simulation: the world is reset
-        # to the valid state at the earliest moment, and every later culprit's
+        # EACH VIOLATOR AT ITS OWN FRAME, in one simulation: the world is reset
+        # to the valid state at the earliest moment, and every later violator's
         # intervention is staged on the world as the earlier ones left it.
         ordered = multi.by_moment(subs)
         T = spec.tier.num_frames
@@ -922,38 +922,38 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     if subs:
         for s in subs:
             inj.refine_windows(spec, traj_valid, traj_invalid, s)
-        timing = plan.notes.get("culprit_timing")
-        plan = InterventionPlan.merge(subs, [c.body_id for c in plan.culprits])
-        plan.notes["culprit_timing"] = timing
+        timing = plan.notes.get("violator_timing")
+        plan = InterventionPlan.merge(subs, [c.body_id for c in plan.violators])
+        plan.notes["violator_timing"] = timing
     else:
         inj.refine_windows(spec, traj_valid, traj_invalid, plan)
     return {"ok": True, "plan": plan, "traj": traj_invalid,
-            "visible": culprits_stay_visible(spec, inj.family, plan,
+            "visible": violators_stay_visible(spec, inj.family, plan,
                                              traj_valid, traj_invalid)}
 
 
-def culprits_stay_visible(spec, family, plan, traj_valid, traj_invalid) -> bool:
-    """Whether the plan's moving culprits stay on screen after its event.
+def violators_stay_visible(spec, family, plan, traj_valid, traj_invalid) -> bool:
+    """Whether the plan's moving violators stay on screen after its event.
 
-    Asked of the invalid rollout, so an intervention that throws its culprit out
-    of shot is caught -- except for `ABSENCE_FAMILIES`, whose culprit is meant
+    Asked of the invalid rollout, so an intervention that throws its violator out
+    of shot is caught -- except for `ABSENCE_FAMILIES`, whose violator is meant
     to disappear and is judged on where it would have been.
     """
     traj = traj_valid if family in ABSENCE_FAMILIES else traj_invalid
     by_id = {int(b.segmentation_id): b for b in spec.bodies}
-    if plan.culprits:
-        # Each culprit from ITS OWN moment: a culprit that fires late must not
+    if plan.violators:
+        # Each violator from ITS OWN moment: a violator that fires late must not
         # be judged on the frames before it did anything.
-        return all(_geom.culprits_visible(spec, traj, [by_id[c.body_id]],
+        return all(_geom.violators_visible(spec, traj, [by_id[c.body_id]],
                                           c.t_event)
-                   for c in plan.culprits
+                   for c in plan.violators
                    if c.body_id in by_id and not by_id[c.body_id].static)
     ids = {int(i) for i in plan.causal_body_ids}
     bodies = [b for b in spec.bodies
               if int(b.segmentation_id) in ids and not b.static]
     if not bodies:
         return True
-    return _geom.culprits_visible(spec, traj, bodies, plan.t_event)
+    return _geom.violators_visible(spec, traj, bodies, plan.t_event)
 
 
 def main() -> int:
@@ -1078,7 +1078,7 @@ def main() -> int:
         bins = severities
         if meta is not None and not getattr(meta, "graded", True):
             bins = [severities[-1]] if severities else []
-        # STRONGEST BIN FIRST. It is the bin most likely to throw a culprit out
+        # STRONGEST BIN FIRST. It is the bin most likely to throw a violator out
         # of shot, so it decides which event moment this family uses; the other
         # bins then reuse that moment, and the three magnitudes keep describing
         # one violation.
@@ -1109,7 +1109,7 @@ def main() -> int:
                 continue
             # A VIOLATION NOBODY CAN SEE IS NOT RENDERED. Each event moment the
             # family is offered is planned, simulated and checked for whether
-            # its culprits stay on screen after the event; the first that does
+            # its violators stay on screen after the event; the first that does
             # is kept. The other bins take the strongest bin's moment directly.
             tries = (range(EVENT_ATTEMPTS) if attempt_used is None
                      else (attempt_used,))
@@ -1127,7 +1127,7 @@ def main() -> int:
                     break
             if not made.get("visible"):
                 error = (made.get("error") if not any_ok else
-                         "culprit leaves the frame after t_event at every one "
+                         "violator leaves the frame after t_event at every one "
                          "of %d event moments" % len(tries))
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": error})

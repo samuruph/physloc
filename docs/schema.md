@@ -26,10 +26,10 @@ PhysLoc's annotations beside MOVi's blocks. File names live in `physloc/annotate
 | `instances.npz` | ✓ (`instances[*]` tensors) | ✓ | ✓ | per-instance, per-frame arrays — see below |
 | `traj.npz` | | ✓ | ✓ | the simulator trajectory (the seam file) |
 | `bodies.npz`, `energy.npz`, `energy_map.npz` | | ✓ | ✓ | physical quantities and mechanical energy |
-| `reference_mask.npz` | | ✓ | ✓ | where the culprits lawfully are |
+| `reference_mask.npz` | | ✓ | ✓ | where the violators lawfully are |
 | `timelines.npz`, `residuals.npz` | | ✓ | ✓ | per-frame timelines and residuals (zeros on a valid clip) |
 | `violation_mask.npz`, `mask_invalid.npz`, `causal_mask.npz` | | | ✓ | the masks |
-| `violation_ids.npz`, `causal_ids.npz` | | | ✓ | which culprit each masked pixel belongs to |
+| `violation_ids.npz`, `causal_ids.npz` | | | ✓ | which violator each masked pixel belongs to |
 | `severity_map.npz`, `divergence_map.npz`, `grids.npz` | | | ✓ | severity, divergence (not GT), latent grids |
 | `overlay.mp4` | | | optional | nine-panel review video |
 
@@ -45,7 +45,7 @@ in real units, so no range table is needed.
   "instances":   [ { "id": 2, "name": "ball", "asset_id": "sphere", "mass": 1.0, ... } ],
   "events":      { "collisions": [ { "instances": [1, 2], "frame": 9, "force": 12.3, ... } ] },
   "segmentation": { "encoding": "instance", "background_id": 0, "id_to_name": {...} },
-  "violation":   { "t_event_frame": 7, "culprit_timing": "independent", "culprits": [...], ... },
+  "violation":   { "t_event_frame": 7, "violator_timing": "independent", "violators": [...], ... },
   "difficulty":  { "level": "moderate", "rank": 1, ... },
   "energy":      { "E0": ..., ... },
   "noise_floor": { "position_continuity": {...} },
@@ -65,7 +65,7 @@ in real units, so no range table is needed.
 | `tier`, `release` | geometry (`debug` / `release`) and what the published dataset is called |
 | `domain`, `family` | null on a valid clip |
 | `scenario`, `seed`, `variant`, `condition` | `condition` is one of `standard`, `camera`, `distractors`, `multi`, `camera+multi` |
-| `n_distractors`, `n_actors`, `n_culprits` | what landed in the scene |
+| `n_distractors`, `n_actors`, `n_violators` | what landed in the scene |
 | `physics_medium` | `rigid` \| `granular` (`pour`). Never `fluid`. |
 | `complexity` | the realism level block (`L0`..`L3`) |
 | `params` | every generation knob in force |
@@ -96,8 +96,8 @@ The eye is always at least 0.6 m above the floor (`base.CAMERA_MIN_HEIGHT`).
 
 `id` (= `track_id`, the pixel value in `segmentations`), `name`, `category`, `asset_id`,
 `source`, **`license`** (mandatory), `held_out`, `material`, `color`, `role`, `scale`,
-`static`, `dormant`, `collides`, `mass`, `friction`, `restitution`, `is_culprit`,
-`culprit_index` (position in `violation.causal_body_ids`), `bbox_frames`, `first_frame`,
+`static`, `dormant`, `collides`, `mass`, `friction`, `restitution`, `is_violator`,
+`violator_index` (position in `violation.causal_body_ids`), `bbox_frames`, `first_frame`,
 `last_frame`, `frames_visible`, `pixels_peak`.
 
 **Not re-sorted by visibility, unlike MOVi**: the valid and invalid twins must agree on who is
@@ -131,38 +131,38 @@ point; the events group them.
 | field | notes |
 |---|---|
 | `kind` | `instant` \| `sustained` \| `repeated` |
-| `t_event_frame` | the **earliest** culprit's moment; the law breaks in simulator state |
+| `t_event_frame` | the **earliest** violator's moment; the law breaks in simulator state |
 | `t_observable_frame`, `observability_lag_frames` | first frame with visual evidence, and the lag |
 | `t_end_frame`, `t_intervention_end_frame`, `t_consequence_end_frame` | ends of the three window families |
-| `violation_windows`, `intervention_windows`, `consequence_windows`, `observable_windows` | lists of inclusive `[s, e]`; the clip's are the union over culprits |
-| `occluded_at_event` | whether the primary culprit was hidden |
-| `causal_body_ids` | instance ids; `[0]` is the primary culprit the residual is scored on |
+| `violation_windows`, `intervention_windows`, `consequence_windows`, `observable_windows` | lists of inclusive `[s, e]`; the clip's are the union over violators |
+| `occluded_at_event` | whether the primary violator was hidden |
+| `causal_body_ids` | instance ids; `[0]` is the primary violator the residual is scored on |
 | `spatial_extent` | `global` for `global_gravity` only |
 | `intervention` | `type`, `params`, `magnitude`, `magnitude_unit`, `severity_bin` |
 | `peak_residual` | `law`, `value`, `z_vs_valid`, `score`, `frame` |
-| **`culprit_timing`** | `independent`, `sync` or `shared` — see below |
-| **`culprits`** | one record per dynamic culprit, below |
+| **`violator_timing`** | `independent`, `sync` or `shared` — see below |
+| **`violators`** | one record per dynamic violator, below |
 | `difficulty_inputs` | the two array-derived difficulty values |
 
-**Each culprit on its own clock.** In a `multi` clip whose family acts on each body separately,
-every culprit gets its own moment: `culprit_timing: "independent"`. A quarter of such clips
-(`params.objects.multi_sync_share`) deliberately give all culprits one moment: `"sync"`.
+**Each violator on its own clock.** In a `multi` clip whose family acts on each body separately,
+every violator gets its own moment: `violator_timing: "independent"`. A quarter of such clips
+(`params.objects.multi_sync_share`) deliberately give all violators one moment: `"sync"`.
 Scene-wide families, granular media and families that act on a pair together are `"shared"`.
 
-Each `culprits[]` record: `instance_id`, `t_event_frame`, `t_observable_frame`,
+Each `violators[]` record: `instance_id`, `t_event_frame`, `t_observable_frame`,
 `observability_lag_frames`, `violation_windows`, `intervention_windows`,
 `consequence_windows`, `observable_windows`, `occluded_at_event`,
 `frames_visible_after_event`, `magnitude`, `peak_residual`, `peak_severity`,
-`disturbed_instance_ids` (level-2 bodies this culprit reached first).
+`affected_instance_ids` (level-2 bodies this violator reached first).
 
-**When events happen.** Absent a physical cue, a moment is drawn per (scene, family, culprit)
+**When events happen.** Absent a physical cue, a moment is drawn per (scene, family, violator)
 from 15–70% of the clip, never per severity bin, leaving at least 35% of the clip (0.8 s) for
 the effect. Families about motion fire only before their actor comes to rest. The worker
-rejects a moment after which the culprits leave the shot and tries another; a scene whose
+rejects a moment after which the violators leave the shot and tries another; a scene whose
 actors leave the frame early is resampled before anything renders.
 
 **Why windows are lists.** `superelastic` fires once per bounce; an object can appear, re-hide
-and re-emerge; staggered culprits leave gaps. `t_event_frame` / `t_end_frame` are the min and
+and re-emerge; staggered violators leave gaps. `t_event_frame` / `t_end_frame` are the min and
 max across windows.
 
 **Three clocks.** `intervention_windows` is when we are actively changing something;
@@ -190,17 +190,17 @@ evidence is the change itself (`detectable == "event"`), the consequence window 
 |---|---|---|
 | `violation_mask` | **union** of both twins | the training target; the only mask with pixels for a vanished body |
 | `mask_invalid` | invalid only | where the wrong thing is, in the video a model sees |
-| `reference_mask` | valid only | where the culprits should have been; ungated in time |
-| `severity_map` | invalid only | how badly, per pixel; each culprit painted with its own score |
-| `causal_mask` | invalid only | uint8: `1` a culprit, `2` a body it measurably disturbed |
-| `violation_ids` | as `violation_mask` | uint16 culprit id per masked pixel; the invalid-side footprint wins on overlap |
-| `causal_ids` | as `causal_mask` | uint16: the culprit whose violation or consequence the pixel is |
+| `reference_mask` | valid only | where the violators should have been; ungated in time |
+| `severity_map` | invalid only | how badly, per pixel; each violator painted with its own score |
+| `causal_mask` | invalid only | uint8: `1` a violator, `2` a body it measurably disturbed |
+| `violation_ids` | as `violation_mask` | uint16 violator id per masked pixel; the invalid-side footprint wins on overlap |
+| `causal_ids` | as `causal_mask` | uint16: the violator whose violation or consequence the pixel is |
 
-`violation_mask[t] = footprint(culprit, invalid, t) ∪ footprint(culprit, valid, t)`, per
-culprit gated to that culprit's own active **and** observable frames, then combined. A body that
+`violation_mask[t] = footprint(violator, invalid, t) ∪ footprint(violator, valid, t)`, per
+violator gated to that violator's own active **and** observable frames, then combined. A body that
 vanished has no invalid footprint, so its severity falls back to its lawful footprint on those
 frames only. `causal_mask` level 2 is measured: bodies that provably depart from the valid twin
-*and* that a culprit reached at or after its moment.
+*and* that a violator reached at or after its moment.
 
 `divergence_map` is `|valid − invalid|` and diverges everywhere downstream of the event. **Never
 a training target.**
@@ -211,12 +211,12 @@ a training target.**
 |---|---|---|
 | `active`, `intervening`, `consequence`, `observable`, `occluded` | `[T]` bool | clip-level |
 | `severity_t` | `[T]` f32 | `severity_map[t].max()` |
-| `culprit_ids` | `[K]` | culprit instance ids, in `violation.culprits` order |
-| `culprit_active`, `culprit_intervening`, `culprit_consequence`, `culprit_observable`, `culprit_occluded` | `[K,T]` bool | each culprit's own timelines |
-| `culprit_severity_t` | `[K,T]` f32 | each culprit's peak severity per frame |
+| `violator_ids` | `[K]` | violator instance ids, in `violation.violators` order |
+| `violator_active`, `violator_intervening`, `violator_consequence`, `violator_observable`, `violator_occluded` | `[K,T]` bool | each violator's own timelines |
+| `violator_severity_t` | `[K,T]` f32 | each violator's peak severity per frame |
 
-`residuals.npz`: `r`, `z`, `s` `[T]` for the primary culprit and `law`; plus `culprit_ids`,
-`culprit_r`, `culprit_s` `[K,T]`.
+`residuals.npz`: `r`, `z`, `s` `[T]` for the primary violator and `law`; plus `violator_ids`,
+`violator_r`, `violator_s` `[K,T]`.
 
 ## `grids.npz`, `traj.npz`, `bodies.npz`, `energy.npz`
 
@@ -249,7 +249,7 @@ a training target.**
 11. `provenance.prefix_identical_verified` is true
 12. `violation` is null iff `label == "valid"`
 13. every pair has one valid and at least one invalid clip
-14. each culprit is a causal body, with `t_event ≤ t_observable` and in-range windows; the
-    earliest culprit's moment is the clip's
-15. `violation_ids` covers exactly `violation_mask` and names only culprits
+14. each violator is a causal body, with `t_event ≤ t_observable` and in-range windows; the
+    earliest violator's moment is the clip's
+15. `violation_ids` covers exactly `violation_mask` and names only violators
 16. `instances.npz` has `k` rows in instance order and `num_frames` columns

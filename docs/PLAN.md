@@ -165,7 +165,7 @@ Rasterised into **`timelines.npz`** so consumers never expand intervals themselv
 |---|---|---|---|
 | `active` | `[T]` | bool | is the violation active at frame `t` |
 | `observable` | `[T]` | bool | is there visual evidence at frame `t` |
-| `occluded` | `[T]` | bool | is the primary culprit hidden at frame `t` |
+| `occluded` | `[T]` | bool | is the primary violator hidden at frame `t` |
 | `severity_t` | `[T]` | f32 | violation magnitude over time — `max_b s(b,t)` (§3.4) |
 
 **Why lists of intervals and not a single `[start, end]`:**
@@ -186,14 +186,14 @@ value per pixel per frame, so "where" and "when" are answered by the same array.
 
 | array | shape | dtype | meaning |
 |---|---|---|---|
-| **`violation_mask`** | `[T,H,W]` | bool | **the primary annotation.** True on the culprit body's pixels, on frames where the violation is active **and visible**. |
-| **`reference_mask`** | `[T,H,W]` | bool | where the culprit *should* be — its footprint in the valid twin, ungated in time. Shipped on **both** clips. |
-| `causal_mask` | `[T,H,W]` | uint8 | `0` = nothing, `1` = primary culprit, `k ≥ 2` = consequence body `k−1`. Separates cause from effect spatially. |
+| **`violation_mask`** | `[T,H,W]` | bool | **the primary annotation.** True on the violator body's pixels, on frames where the violation is active **and visible**. |
+| **`reference_mask`** | `[T,H,W]` | bool | where the violator *should* be — its footprint in the valid twin, ungated in time. Shipped on **both** clips. |
+| `causal_mask` | `[T,H,W]` | uint8 | `0` = nothing, `1` = primary violator, `k ≥ 2` = consequence body `k−1`. Separates cause from effect spatially. |
 | `seg` | `[T,H,W]` | uint16 | instance ids — the substrate every other mask is painted into |
 | `divergence_map` | `[T,H,W]` | f16 | `\|valid − invalid\|` in pixel space. **Shipped for analysis, NOT the violation region, never a training target.** |
 
 **How `violation_mask` is built — and the subtlety that makes it correct.** The naive rule
-("pixels of the culprit body in the invalid render") is wrong for half our families:
+("pixels of the violator body in the invalid render") is wrong for half our families:
 
 - `permanence` (vanish): the body has **no pixels** in the invalid render. The violation is
   precisely that it is absent.
@@ -202,7 +202,7 @@ value per pixel per frame, so "where" and "when" are answered by the same array.
 
 So the rule is:
 
-> **`violation_mask[t] = footprint(culprit, invalid, t) ∪ footprint(culprit, valid, t)`**
+> **`violation_mask[t] = footprint(violator, invalid, t) ∪ footprint(violator, valid, t)`**
 
 The union over both twins. This is only well-defined *because* the twins are pixel-aligned
 and share instance indexing — the prefix-identity property paying off directly. It handles
@@ -215,7 +215,7 @@ disjoint) with one rule and no special cases.
 |---|---|---|
 | `newton2_mass` | **both** bodies in the pair | the violation is in the interaction, not in one body |
 | `shadow*` | the **shadow** region, not the caster | the shadow is staged as a body of its own, so it segments like any other |
-| `global_gravity` | every dynamic culprit, with `spatial_extent: "global"` | there is no single localised culprit; the flag lets consumers exclude these from localisation metrics |
+| `global_gravity` | every dynamic violator, with `spatial_extent: "global"` | there is no single localised violator; the flag lets consumers exclude these from localisation metrics |
 | `solidity` | union of both bodies, restricted to the **overlap region** where available | the violation is the interpenetration itself |
 
 > `newton3_reaction` used to head this table and is **retired** — see
@@ -261,7 +261,7 @@ severity_map[t, y, x] = s(b, t)   where  b = seg[t, y, x],  b ∈ causal_body_id
 
 Occlusion is already resolved by `seg`, so no depth reasoning is needed. Where the mask rule
 in §3.3 pulls in the valid twin's footprint (vanish, teleport), the score is painted there
-too. Overlaps resolve by `max`. Every *dynamic* culprit is painted, not only the primary one:
+too. Overlaps resolve by `max`. Every *dynamic* violator is painted, not only the primary one:
 `global_gravity` acts on the whole scene and `fission` on both halves, and painting one body
 would describe a fraction of the violation.
 
@@ -280,7 +280,7 @@ field a spatial model regresses. They are consistent by construction:
 `severity_t[t] == severity_map[t].max()`.
 
 **Step 6 — special cases.** `global_gravity` is flagged `spatial_extent: "global"` and paints
-its culprits; `shadow*` paints the staged shadow body; `newton2_mass` paints the same
+its violators; `shadow*` paints the staged shadow body; `newton2_mass` paints the same
 imbalance into both bodies of the pair.
 
 > The code paints through `seg` for every family, including these — see

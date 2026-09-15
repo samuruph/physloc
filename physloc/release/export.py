@@ -234,10 +234,10 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
         "condition": md.get("condition"),
         "n_distractors": md.get("n_distractors"),
         "n_actors": md.get("n_actors"),
-        "n_culprits": md.get("n_culprits"),
-        # Whether a clip's culprits broke the law at their own moments or at
+        "n_violators": md.get("n_violators"),
+        # Whether a clip's violators broke the law at their own moments or at
         # one -- the column that finds the staggered `multi` clips.
-        "culprit_timing": v.get("culprit_timing"),
+        "violator_timing": v.get("violator_timing"),
         "num_frames": md.get("num_frames"),
         "frame_rate": md.get("frame_rate"),
         "camera_motion": cam.get("motion"),
@@ -446,7 +446,7 @@ INDEX_COLUMNS = (
     "difficulty", "difficulty_rank", "binding_factors",
     "t_event_frame", "violation_windows", "observability_lag",
     "complexity", "condition", "camera_motion", "n_distractors",
-    "n_actors", "n_culprits", "culprit_timing",
+    "n_actors", "n_violators", "violator_timing",
     "actor_shape", "actor_material", "actor_mass",
     "tier", "num_frames", "frame_rate", "seed", "variant",
     "pair_uid", "twin_uid",
@@ -532,7 +532,7 @@ INDEX_TYPES = {
     "magnitude": "double", "peak_severity": "double", "actor_mass": "double",
     "difficulty_rank": "int64", "t_event_frame": "int64",
     "observability_lag": "int64", "n_distractors": "int64",
-    "n_actors": "int64", "n_culprits": "int64", "num_frames": "int64",
+    "n_actors": "int64", "n_violators": "int64", "num_frames": "int64",
     "frame_rate": "int64", "seed": "int64", "variant": "int64",
 }
 
@@ -716,7 +716,7 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "One condition per clip rather than independent coin flips per axis, "
         "so every count is exact and every comparison against `standard` "
         "isolates one change. Under `multi` the scene holds N objects of which "
-        "M violate, both drawn per clip -- `n_actors` and `n_culprits` say how "
+        "M violate, both drawn per clip -- `n_actors` and `n_violators` say how "
         "many -- so the clip asks WHICH objects are wrong rather than whether "
         "something is.",
         "",
@@ -782,8 +782,8 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "why the union is needed.",
         "- `mask_invalid` -- the same footprint, invalid side only.",
         "- `severity_map` -- continuous, how badly, invalid side only.",
-        "- `causal_mask` -- level 1 the culprit, level 2 a body it disturbed.",
-        "- `reference_mask` -- where the culprit lawfully should have been.",
+        "- `causal_mask` -- level 1 the violator, level 2 a body it disturbed.",
+        "- `reference_mask` -- where the violator lawfully should have been.",
         "- `divergence_map` -- `|valid - invalid|` in pixels. **Ships for "
         "inspection, not for training**: it diverges everywhere downstream of "
         "the event, so a model trained on it learns to find the edit rather "

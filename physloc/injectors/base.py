@@ -39,12 +39,12 @@ def _union_windows(windows) -> List[Tuple[int, int]]:
 
 
 @dataclass
-class CulpritTiming:
-    """One culprit's own moment, windows and magnitude, in a plan with several.
+class ViolatorTiming:
+    """One violator's own moment, windows and magnitude, in a plan with several.
 
-    Only a `multi` clip whose culprits were planned separately carries these --
-    see `injectors.multi`. Everything else has one moment for all its culprits
-    and leaves `InterventionPlan.culprits` unset.
+    Only a `multi` clip whose violators were planned separately carries these --
+    see `injectors.multi`. Everything else has one moment for all its violators
+    and leaves `InterventionPlan.violators` unset.
     """
 
     body_id: int
@@ -89,9 +89,9 @@ class InterventionPlan:
     #: When the scene differs from lawful AS A RESULT. Runs on after the
     #: intervention finishes, and for `permanence` never ends.
     consequence_windows: Optional[List[Tuple[int, int]]] = None
-    #: Each culprit on its own clock, when the plan was merged from per-culprit
-    #: plans (`merge`). None means every culprit shares this plan's timing.
-    culprits: Optional[List[CulpritTiming]] = None
+    #: Each violator on its own clock, when the plan was merged from per-violator
+    #: plans (`merge`). None means every violator shares this plan's timing.
+    violators: Optional[List[ViolatorTiming]] = None
 
     def __post_init__(self) -> None:
         # A family that says nothing declares an intervention that lasts the
@@ -154,11 +154,11 @@ class InterventionPlan:
     @classmethod
     def merge(cls, subs: List["InterventionPlan"],
               body_ids: List[int]) -> "InterventionPlan":
-        """One plan from per-culprit plans of one family -- see `injectors.multi`.
+        """One plan from per-violator plans of one family -- see `injectors.multi`.
 
-        `body_ids[i]` is the culprit `subs[i]` acts on. The merged plan fires at
-        the earliest culprit's moment, its windows are the union of theirs, its
-        causal bodies are all of theirs in order, and `culprits` keeps each
+        `body_ids[i]` is the violator `subs[i]` acts on. The merged plan fires at
+        the earliest violator's moment, its windows are the union of theirs, its
+        causal bodies are all of theirs in order, and `violators` keeps each
         one's own moment, windows, magnitude and notes. The first plan speaks
         for the rest where there can be only one answer -- kind, unit, bin.
         """
@@ -168,7 +168,7 @@ class InterventionPlan:
             for i in s.causal_body_ids:
                 if int(i) not in causal:
                     causal.append(int(i))
-        culprits = [CulpritTiming(
+        violators = [ViolatorTiming(
             body_id=int(bid), t_event=int(s.t_event),
             windows=[tuple(w) for w in s.windows],
             intervention_windows=[tuple(w) for w in s.intervention_windows],
@@ -180,7 +180,7 @@ class InterventionPlan:
             t_event=min(int(s.t_event) for s in subs),
             windows=_union_windows(w for s in subs for w in s.windows),
             causal_body_ids=causal,
-            params=dict(first.params, per_culprit=[dict(s.params) for s in subs]),
+            params=dict(first.params, per_violator=[dict(s.params) for s in subs]),
             magnitude=float(first.magnitude), magnitude_unit=first.magnitude_unit,
             severity_bin=first.severity_bin, spatial_extent=first.spatial_extent,
             notes=dict(first.notes),
@@ -188,13 +188,13 @@ class InterventionPlan:
                 w for s in subs for w in s.intervention_windows),
             consequence_windows=_union_windows(
                 w for s in subs for w in s.consequence_windows),
-            culprits=culprits)
+            violators=violators)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "culprits": ([c.to_dict() for c in self.culprits]
-                         if self.culprits else None),
-            "culprit_timing": self.notes.get("culprit_timing"),
+            "violators": ([c.to_dict() for c in self.violators]
+                         if self.violators else None),
+            "violator_timing": self.notes.get("violator_timing"),
             "family": self.family, "kind": self.kind,
             "t_event_frame": self.t_event, "t_end_frame": self.t_end,
             "violation_windows": [list(w) for w in self.windows],
@@ -221,7 +221,7 @@ class Injector:
     family: str = "unnamed"
 
     #: Which draw of the event moment to use. 0 is the first; the worker bumps
-    #: it when the culprit would not stay on screen after the event, so the
+    #: it when the violator would not stay on screen after the event, so the
     #: retry fires at a different moment rather than failing the same way.
     event_attempt: int = 0
 
@@ -445,7 +445,7 @@ class Injector:
                            plan: InterventionPlan) -> Trajectory:
         """Stop uninvolved bodies reacting to collisions that no longer happen.
 
-        An injector edits the culprit and leaves everyone else on their original
+        An injector edits the violator and leaves everyone else on their original
         path. When the edit prevents a collision, the body that *was* going to
         be struck still departs on schedule, hit by nothing -- which is a second,
         unlabelled violation in a clip that claims one.
@@ -455,7 +455,7 @@ class Injector:
         exactly the speed the original impact would have given it.
 
         The rule is the one physics already implies: a body accelerates only if
-        something touches it. So any non-culprit whose speed jumps while nothing
+        something touches it. So any non-violator whose speed jumps while nothing
         is in contact with it gets re-integrated from just before the jump,
         carrying on with whatever it was lawfully doing -- which, for a ball
         waiting to be hit, is nothing at all.
@@ -463,7 +463,7 @@ class Injector:
         # A family that changes no POSE and removes no BODY cannot have made
         # anything else move without cause. `colour_shift` and `deformation`
         # edit colour, opacity and scale and leave every trajectory untouched --
-        # yet the guard was re-settling the ball their culprit lawfully struck,
+        # yet the guard was re-settling the ball their violator lawfully struck,
         # displacing it by 0.44 m in a clip whose only claim is that a ball
         # changed colour.
         #
@@ -472,14 +472,14 @@ class Injector:
         if not self._changes_dynamics(traj, out, plan):
             return out
 
-        culprits = {int(b) for b in plan.causal_body_ids}
+        violators = {int(b) for b in plan.causal_body_ids}
         # Scripted bodies are driven by a constraint the seam does not model --
         # a pendulum bob accelerates every frame with nothing touching it, which
         # is exactly right for a body on a string and exactly what this guard
         # must not "correct".
         movers = [b for b in spec.bodies
                   if not b.static and not b.scripted
-                  and int(b.segmentation_id) not in culprits]
+                  and int(b.segmentation_id) not in violators]
         if not movers:
             return out
 
@@ -508,7 +508,7 @@ class Injector:
     @staticmethod
     def _changes_dynamics(traj: Trajectory, out: Trajectory,
                           plan: InterventionPlan) -> bool:
-        """Did the intervention change a culprit's motion, or remove it?
+        """Did the intervention change a violator's motion, or remove it?
 
         Pose, orientation, both velocities -- and `present`, because a body that
         ceases to exist stops striking whatever it was about to strike, which is
@@ -689,7 +689,7 @@ class Injector:
         # TWO, not four. The threshold used to be four live actors, from when
         # the only caller was `pour` asking for a share of forty grains -- but
         # the `multi` condition draws its object count from three upward, and
-        # at N = 3 the guard silently handed back ONE culprit on a clip whose
+        # at N = 3 the guard silently handed back ONE violator on a clip whose
         # metadata said two. A fraction is only ever set deliberately (by a
         # scenario, or by the condition), so where one exists it should be
         # honoured rather than second-guessed.
@@ -753,7 +753,7 @@ class Injector:
     @staticmethod
     def _all_actors(spec):
         """Every actor, for the families that act on a whole medium rather than
-        on one culprit -- `antigravity` over a pour, `global_gravity` over a
+        on one violator -- `antigravity` over a pour, `global_gravity` over a
         scene, an assembly whose parts must move together."""
         return [b for b in _geom.actors(spec) if not b.dormant]
 
@@ -853,9 +853,9 @@ class Injector:
     def _offscreen_frames(self, spec, traj: Trajectory, bodies,
                           from_frame: int,
                           visible_fraction: Optional[float] = None) -> int:
-        """How many frames after `from_frame` lose sight of the culprit.
+        """How many frames after `from_frame` lose sight of the violator.
 
-        A frame counts as lost when fewer than `visible_fraction` of the culprit
+        A frame counts as lost when fewer than `visible_fraction` of the violator
         bodies are inside the frustum, so one grain of forty drifting out of a
         `pour` is not treated the same as the whole pour leaving.
         """
@@ -871,7 +871,7 @@ class Injector:
                              num_frames=int(traj.num_frames))
         # Only bodies that are actually in the scene count. A dormant
         # understudy is parked far below the world until something summons it,
-        # so including it made the *valid* baseline "half the culprits are off
+        # so including it made the *valid* baseline "half the violators are off
         # camera on every frame" -- which set the budget so high that `fission`
         # passed any separation at all and flung its halves clean out of frame.
         here = np.asarray(traj.present[from_frame:, idx], bool)
@@ -898,7 +898,7 @@ class Injector:
     _fit_memo: Dict[tuple, tuple] = {}
 
     #: How many fits a single injector keeps. One scene and one family need at
-    #: most a few (one per culprit of a `multi` clip), and the worker walks one
+    #: most a few (one per violator of a `multi` clip), and the worker walks one
     #: scene at a time.
     FIT_MEMO_SIZE = 32
 
@@ -959,11 +959,11 @@ class Injector:
             return True
         share = min(1.0, _geom.VISIBLE_AFTER_SHARE
                     + self.FIT_RETRY_SHARE * _geom.event_attempt())
-        return _geom.culprits_visible(spec, traj, movers, t0, tolerance=share)
+        return _geom.violators_visible(spec, traj, movers, t0, tolerance=share)
 
     def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
                       build, tolerance: int = 1, ladder=None, memo=None):
-        """Weaken `knob` until the culprit stays on screen, and return what stuck.
+        """Weaken `knob` until the violator stays on screen, and return what stuck.
 
         The severity bins are chosen for visual legibility on a typical clip,
         but "typical" is a per-seed claim: the same reversed gravity that makes
@@ -1043,7 +1043,7 @@ class Injector:
     def _fit_window_to_frame(self, spec, traj: Trajectory, bodies, t0: int,
                              n_win: int, build, tolerance: int = 1,
                              floor: int = 3, memo=None) -> int:
-        """Shorten a window until the culprit stays in shot, keeping its strength.
+        """Shorten a window until the violator stays in shot, keeping its strength.
 
         The counterpart to `_fit_to_frame`, and the right one whenever the bin
         is a *qualitative* claim. Weakening the knob to keep a body on screen

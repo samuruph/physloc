@@ -19,7 +19,7 @@ class PhantomImpulse(Injector):
     """A body is shoved by nothing.
 
     The cleanest violation in the taxonomy and the one with the least ambiguity
-    about *where*: the culprit is one body, the moment is one frame, and there
+    about *where*: the violator is one body, the moment is one frame, and there
     is no second object anywhere near it. It fires only on frames with no
     recorded contact, because a shove during a collision is indistinguishable
     from the collision.
@@ -31,7 +31,7 @@ class PhantomImpulse(Injector):
     #: what reads clearly rather than what never overflows -- you judged the
     #: strongest bin too gentle on `drop` and elsewhere.
     DV_BY_BIN = {"weak": 1.6, "medium": 3.6, "strong": 7.0}      # m/s
-    #: Frames the culprit may spend off camera before the fit weakens the shove.
+    #: Frames the violator may spend off camera before the fit weakens the shove.
     FRAME_TOLERANCE = 4
     #: Frames a settled medium must have left after the shove for it to be
     #: shoved there rather than in flight -- a third of the debug tier, enough

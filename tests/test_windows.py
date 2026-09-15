@@ -37,7 +37,7 @@ def test_observable_frames_needs_dynamic_ids_only():
     assert win.observable_frames(sv, si, [1, 2]).tolist() == [False, False, False]
 
 
-def test_occlusion_lag_is_reported_when_the_culprit_is_hidden():
+def test_occlusion_lag_is_reported_when_the_violator_is_hidden():
     """The three-clocks payoff: a violation fired while the actor is fully
     occluded is not observable until it fails to re-emerge."""
     T = 12

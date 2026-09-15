@@ -865,7 +865,7 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     fits wherever the primitive did. Granular media keep that scale outright:
     grain size is bounded by the residual laws (CLAUDE.md, `pour`).
 
-    EVERY MOVING BODY, not only the culprit. This used to be `actor` and
+    EVERY MOVING BODY, not only the violator. This used to be `actor` and
     `distractor` alone, which left `stack_topple` scanning one block and
     stacking it on two plastic cubes, `pyramid_impact` dropping a scan onto
     four primitive spheres, and `resting_table` putting a scanned mug beside
@@ -1185,7 +1185,7 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     two wrong" is not reading physics, and the condition is about there being
     SEVERAL, not about there being five.
 
-    At least two culprits, because one is what `standard` already is. At most
+    At least two violators, because one is what `standard` already is. At most
     N-1, so there is always a lawful body to contrast against -- which is the
     whole task. Note what the upper bound allows at N = 3: M = 2 is the only
     legal draw, a violating majority. Deliberate: it makes the small scenes the
@@ -1195,7 +1195,7 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     Reuses the distractor placer with `role="actor"` -- see `_common.distractors`.
     The extras are then ordinary actors: `_geom.actors` returns them, every
     injector's `_group` can pick them, and `group_fraction` decides how many
-    are culprits. `_group` clamps its pick to at least two and needs at least
+    are violators. `_group` clamps its pick to at least two and needs at least
     four live actors to engage at all, which `MULTI_ACTORS` satisfies.
 
     Its own salted stream, so a `multi` clip's scenario draws are the same ones
@@ -1243,10 +1243,10 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
         return                       # too few to pose the question at all
     # HOW MANY VIOLATE, also drawn per clip: at least two, and never all of
     # them, so there is always a lawful body to contrast against.
-    lo = min(MULTI_CULPRIT_RANGE[0], total - MULTI_CULPRIT_RANGE[1])
-    hi = total - MULTI_CULPRIT_RANGE[1]
+    lo = min(MULTI_VIOLATOR_RANGE[0], total - MULTI_VIOLATOR_RANGE[1])
+    hi = total - MULTI_VIOLATOR_RANGE[1]
     m = int(rng.randint(lo, hi + 1)) if hi > lo else hi
-    spec.notes["n_culprits_wanted"] = m
+    spec.notes["n_violators_wanted"] = m
     # `_group` takes a FRACTION and rounds, so the fraction is chosen to round
     # back to exactly `m` -- storing the count directly would mean teaching
     # every injector a second way to ask the same question.
@@ -1361,12 +1361,12 @@ def _flatten_materials(spec: SceneSpec) -> None:
 
 #: THE CONDITION EACH VARIANT CARRIES, as a cycle over variant index.
 #:
-#: Camera motion, distractors and multiple culprits are three ways to make a
+#: Camera motion, distractors and multiple violators are three ways to make a
 #: clip harder, and this table says which combinations the dataset actually
 #: contains and in what proportion. Read down the cycle: six plain clips, then
 #: one of each condition, then the one combination worth having.
 #:
-#:   standard       static camera, one culprit, nothing else in shot
+#:   standard       static camera, one violator, nothing else in shot
 #:   camera         the camera moves
 #:   distractors    extra bodies that take NO part in the physics
 #:   multi          extra bodies that DO -- N actors, M of them violating
@@ -1382,7 +1382,7 @@ def _flatten_materials(spec: SceneSpec) -> None:
 #: **Distractors and multi are alternatives, not a pair.** They are the same
 #: placement machinery -- extra bodies, cleared of the action and inside the
 #: frame -- differing only in whether the extras take part. A scene with both
-#: asks the viewer to sort inert clutter from lawful peers from culprits, which
+#: asks the viewer to sort inert clutter from lawful peers from violators, which
 #: is three distinctions where the family only makes one.
 #:
 #: **The plain clips come FIRST**, so a short run is the easy case: eight
@@ -1408,7 +1408,7 @@ CONDITION_CYCLE = ("standard", "standard", "standard", "standard", "standard",
 #: **The two conditions differ in how many objects get INVALID PHYSICS, not in
 #: how many objects there are.** Under `distractors` exactly one body violates
 #: -- the scenario's own actor -- and the extras are scenery no family can
-#: target. Under `multi` the extras are eligible culprits and 2..N-1 of them
+#: target. Under `multi` the extras are eligible violators and 2..N-1 of them
 #: violate. That is the whole distinction, and it is the one worth drawing:
 #: "which of these is wrong" is a different question from "is anything wrong",
 #: and only `multi` asks it.
@@ -1418,7 +1418,7 @@ EXTRA_OBJECTS = (3, 10)
 #: thing there: how many actors are in shot.
 MULTI_ACTORS = EXTRA_OBJECTS
 
-#: How many of them violate: at least two -- one culprit is what `standard`
+#: How many of them violate: at least two -- one violator is what `standard`
 #: already is -- and at most all but one, so there is always a lawful object to
 #: contrast against.
 #:
@@ -1426,7 +1426,7 @@ MULTI_ACTORS = EXTRA_OBJECTS
 #: violating MAJORITY. That is deliberate and it is your call; it makes the
 #: small scenes the hardest ones, because "most things are wrong" is a
 #: different perceptual claim from "one thing is wrong".
-MULTI_CULPRIT_RANGE = (2, 1)   # (minimum, how many lawful bodies to keep)
+MULTI_VIOLATOR_RANGE = (2, 1)   # (minimum, how many lawful bodies to keep)
 
 
 def condition_for(variant: int, n_variants: Optional[int] = None,
@@ -1438,7 +1438,7 @@ def condition_for(variant: int, n_variants: Optional[int] = None,
     `standard` slots come first, so indexing the cycle directly gave every
     upper level nothing but `standard`. Measured on a real ladder run: L1, L2
     and L3 were 100% standard, so the dataset would have shipped its three
-    hardest levels with no camera motion, no clutter and no multi-culprit clips
+    hardest levels with no camera motion, no clutter and no multi-violator clips
     at all, and the conditions would have existed only at L0.
 
     So a level's `n` variants are spread over the cycle's `P` slots --
@@ -1847,7 +1847,7 @@ class Scenario:
             return True
         lo = int(round(_geom.EVENT_BAND[0] * T))
         hi = max(lo + 1, int(round(FRAMING_MIN * T)))
-        on = _geom.culprits_on_screen(spec, traj, actors)[lo:hi]
+        on = _geom.violators_on_screen(spec, traj, actors)[lo:hi]
         return bool(on.size == 0 or on.mean() >= FRAMING_TOLERANCE)
 
     #: Whether this scenario's own size draws are multiplied by
@@ -1891,7 +1891,7 @@ class Scenario:
 
         Called on every invalid trajectory, after the intervention and before
         the prefix check. `plan` is passed so a scenario can leave alone
-        whatever the intervention is actually about: when the culprit IS the
+        whatever the intervention is actually about: when the violator IS the
         shadow, the injector owns it and this must not overwrite its work.
 
         Prefix identity is untouched: the driven body is a function of a

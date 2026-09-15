@@ -172,14 +172,14 @@ torus_knot`. Two traps, both verified:
   mass) table into `scenarios/_kubasic.py`, the way `_hdri.py` bakes HDRI ids, so host-side
   sampling needs no network.
 
-### 3c. Multi-culprit annotation
+### 3c. Multi-violator annotation
 
 `multi` is what forces it: three of five objects starting to slide at frames 3, 5 and 8 is
-one clip with three culprits and three different windows.
+one clip with three violators and three different windows.
 
-**A culprit becomes a record inside the plan; the clip-level fields become derived reductions
+**A violator becomes a record inside the plan; the clip-level fields become derived reductions
 over those records.** `plan.windows` is *defined* as the merged union, `t_event` as the min
-over culprits, `causal_body_ids` as the list of their ids. A third role, `participant`,
+over violators, `causal_body_ids` as the list of their ids. A third role, `participant`,
 covers a body that is in `causal_body_ids` but is not independently scored — the static floor
 a ball sinks through, the victim of the second half of a `fission`. It
 inherits the primary's windows and score, **which is exactly what the pipeline does today**,
@@ -188,7 +188,7 @@ so the first migration step is a no-op provable by byte-diffing a regenerated re
 The released format grows a body axis **beside** the union, never instead of it:
 `timelines.npz` keeps `active[T]` and gains `active_by_body[T,N]`; `violation_mask.npz` keeps
 `mask[T,H,W]` and gains `mask_by_body[T,N,H,W]`. Additive, because N is not a fixed axis
-(`pour` has ~40 culprits, `global_gravity` has none), because the union is the documented
+(`pour` has ~40 violators, `global_gravity` has none), because the union is the documented
 training target and a CLAUDE.md non-negotiable, and because two independently computed views
 can be **checked against each other** — `mask == mask_by_body.any(1)`. A single source of
 truth would make a window attached to the wrong body id perfectly self-consistent and
@@ -206,9 +206,9 @@ pieces and should land last, because it multiplies whatever the other two produc
 1. ~~**Make the levels isolable**~~ — **done**: a cube slab is the ground at every level,
    the HDRI dome is a render-only backdrop above it, and `test_complexity_isolation.py`
    shows 0 of 13 scenarios differ (§3a). L2 is built.
-2. **Population axis in the scenes**, still one culprit per clip. All 180 cells run unchanged
+2. **Population axis in the scenes**, still one violator per clip. All 180 cells run unchanged
    in a busier scene, which is what makes this safe to land on its own.
-3. **Multi-culprit annotation**, one family at a time. `support` and `friction` first — they
+3. **Multi-violator annotation**, one family at a time. `support` and `friction` first — they
    *are* the "three of five objects start sliding" case.
 4. **Randomisation depth.**
 
@@ -229,7 +229,7 @@ because every prose copy of them in this repository drifted.
    `color` and `intensity` are both keyframable traits, so the mechanism is proven; it needs
    a `LightSpec` animation channel. Completes the appearance domain. Note it necessarily
    co-moves with `shadow`, so the two must not share a scenario.
-2. **Population + multi-culprit** — the big structural piece (§3a).
+2. **Population + multi-violator** — the big structural piece (§3a).
 3. **Complexity ladder** — L2 (HDRI) is **built**; L3 (GSO) is the remaining level (§3b).
 4. **Randomisation depth** — mostly falls out of 3 (§3c).
 

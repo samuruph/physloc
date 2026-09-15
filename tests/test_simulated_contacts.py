@@ -20,7 +20,7 @@ import pytest
 
 from physloc.sim.trajectory import Trajectory
 
-#: (scenario, family) -> must the culprit still touch what it touched lawfully?
+#: (scenario, family) -> must the violator still touch what it touched lawfully?
 SIMULATED = ("continuity", "phantom_impulse", "newton1_inertia", "solidity")
 
 
@@ -172,7 +172,7 @@ def test_a_prevented_collision_leaves_no_contact(work):
             continue
         te = int(blob["t_event_frame"])
         before = _pairs_after(a, te)
-        culprits = {int(i) for i in blob["causal_body_ids"]}
+        violators = {int(i) for i in blob["causal_body_ids"]}
 
         lost = before - _pairs_after(b, te)
 
@@ -191,7 +191,7 @@ def test_a_prevented_collision_leaves_no_contact(work):
         partner = (blob.get("notes") or {}).get("partner_id")
         if partner is not None:
             want = {(min(int(c), int(partner)), max(int(c), int(partner)))
-                    for c in culprits if int(c) != int(partner)}
+                    for c in violators if int(c) != int(partner)}
             lost_norm = {(min(x, y), max(x, y)) for x, y in lost}
             had = {(min(x, y), max(x, y)) for x, y in before}
             want &= had                 # only pairs that touched lawfully
@@ -208,7 +208,7 @@ def test_a_prevented_collision_leaves_no_contact(work):
         # flat ground still lands on the floor and loses no contact, which is
         # correct; the claim is about an OBSTACLE it was moved past.
         obstacle = {p for p in _obstacle_pairs(a, te)
-                    if p[0] in culprits or p[1] in culprits}
+                    if p[0] in violators or p[1] in violators}
         if not obstacle:
             continue
 

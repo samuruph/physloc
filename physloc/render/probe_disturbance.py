@@ -11,7 +11,7 @@ it does not need a single frame rendered.
     bash docker/kubric.sh physloc/render/probe_disturbance.py \
         --scenario collision --families superelastic,dissolve --verbose
 
-Reports, per family, how far the culprit bodies end up from where the lawful
+Reports, per family, how far the violator bodies end up from where the lawful
 twin left them, in metres and in units of the scene's own frame extent -- the
 second is the comparable number, since a metre means something different in a
 0.68 m box and a 6 m room.

@@ -187,7 +187,7 @@ class Pour(Scenario):
             # world, which around a 0.68 m vessel is mostly empty floor. This
             # frames 1.49 m -- the grains that overflow the low walls reach
             # 1.43 m from the centre at 96 grains, and a grain outside the
-            # frame is a culprit with no pixels in a clip that claims one --
+            # frame is a violator with no pixels in a clip that claims one --
             # and looks down at 52
             # degrees rather than 36, so the near wall hides 0.16 m of the box
             # instead of 0.27. That is the trap the wall height already

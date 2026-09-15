@@ -45,7 +45,7 @@ publication. Nothing has been published yet.
 
   **`distractors` and `multi` differ in how many objects get INVALID PHYSICS, not in how
   many objects there are.** Both add `EXTRA_OBJECTS` = 3-10 extra bodies, some moving and
-  some inert. `distractors` leaves exactly one culprit and its extras are `role="distractor"`
+  some inert. `distractors` leaves exactly one violator and its extras are `role="distractor"`
   scenery no family can target; `multi` makes them `role="actor"` peers and 2..N-1 violate.
   Only the second asks "which of these is wrong". They are never combined.
 
@@ -140,12 +140,12 @@ publication. Nothing has been published yet.
   valid one.** `shadow_track`'s cast shadow is a projection of its actor, so
   `Scenario.rescript` re-casts it from the trajectory the intervention actually
   produced -- position, footprint, presence and opacity -- for every family whose
-  culprit is not the shadow itself. Without it, every family on that scenario shipped a
+  violator is not the shadow itself. Without it, every family on that scenario shipped a
   *detached shadow*, which is the `shadow` family, inside a clip claiming and
   annotating something else. The three optical families own the shadow and are left
   alone. **A shadow also carries no energy**: it is a picture of an absence, not matter,
   and `role == "shadow"` is skipped by `residuals.energy`.
-- **`reference_mask` ships on both twins** -- the culprit's lawful footprint, taken from the
+- **`reference_mask` ships on both twins** -- the violator's lawful footprint, taken from the
   valid render and ungated in time. It is the counterfactual "where it should be", and for a
   vanished body it is the only mask with any pixels. Visualisers draw it as a green outline
   *on top of* the red violation mask (drawing it under lets the fill hide it).
@@ -155,19 +155,19 @@ publication. Nothing has been published yet.
 - **Violations are windows, not onsets.** `violation_windows` is a *list* of intervals —
   `superelastic` fires once per bounce, and observability can be interrupted by re-occlusion.
 - **A violation nobody can see is not rendered.** Event moments are drawn per (scene,
-  family, culprit, attempt) -- never per severity bin -- inside `_geom.EVENT_BAND` (15-70% of
+  family, violator, attempt) -- never per severity bin -- inside `_geom.EVENT_BAND` (15-70% of
   the clip), leaving `MIN_VISIBLE_AFTER` (35%, at least 0.8 s) for the effect; a motion
   family (`kinematics`, `dynamics`, `global`) fires only before its actor comes to rest. The
   worker checks the INVALID rollout and re-plans at another moment (`EVENT_ATTEMPTS`) when
-  the culprits leave the shot or go fully behind a screen; families whose culprit leaves the
+  the violators leave the shot or go fully behind a screen; families whose violator leaves the
   picture by design (`ABSENCE_FAMILIES`) are judged on the valid one. Before anything renders,
   a scene whose actors leave the frame early or whose camera dips towards the ground is
   resampled (`Scenario.sample(attempt=k)`, recorded as `framing_attempt` and honoured by the
   annotation pipeline). The camera's eye never goes below `CAMERA_MIN_HEIGHT`: an
   `occluder_pass` clip was once rendered from under the floor.
-- **Each culprit of a `multi` clip has its own clock.** Where a family's culprits are its
-  group and the plan stages, `injectors/multi.py` plans each culprit on its own and merges the
-  plans (`InterventionPlan.culprits`); the worker stages every culprit at its own frame in one
+- **Each violator of a `multi` clip has its own clock.** Where a family's violators are its
+  group and the plan stages, `injectors/multi.py` plans each violator on its own and merges the
+  plans (`InterventionPlan.violators`); the worker stages every violator at its own frame in one
   simulation (`stepper.run_segments`), and `annotate_pair` scores, gates and masks each on its
   own timeline. `params.objects.multi_sync_share` (25%) of such clips keep one moment on
   purpose. Scene-wide families, granular media and edited families stay `shared`.
@@ -180,7 +180,7 @@ publication. Nothing has been published yet.
   scan is sized by bounding VOLUME, not its longest axis (`base.gso_scale_ladder`), stepping
   back towards the longest-axis rule only where a larger scan would start inside a neighbour.
 - **`causal_mask` lasts as long as the consequences do, and that is MEASURED.** Level 1 is
-  red (the culprit the plan names), level 2 is blue (a body it disturbed) — both drawn
+  red (the violator the plan names), level 2 is blue (a body it disturbed) — both drawn
   invalid-side only, both labelled in the overlay's causal panel. The gate is the declared
   consequence window *unioned with* the frames where the invalid trajectory provably
   departs from the valid one, so a two-frame `newton2_mass` exchange that leaves both balls
@@ -201,7 +201,7 @@ publication. Nothing has been published yet.
    space and it diverges everywhere downstream of the event. Ship it, label it, never train
    on it. The training targets are `violation_mask` and `severity_map`.
 3. **`violation_mask` is the union over BOTH twins**:
-   `violation_mask[t] = footprint(culprit, invalid, t) ∪ footprint(culprit, valid, t)`.
+   `violation_mask[t] = footprint(violator, invalid, t) ∪ footprint(violator, valid, t)`.
    Without this, vanish and teleport violations produce empty or half-empty masks — the body
    has no pixels in the invalid render precisely because it vanished. Guarded by
    `test_mask_union.py`.

@@ -1,4 +1,4 @@
-"""Every culprit stays in shot, at every tier.
+"""Every violator stays in shot, at every tier.
 
 The regression this exists for: when the tiers were lengthened (13 -> 25 frames
 at the debug tier, 25 -> 49 at the release tier) every camera in the project stayed where it had
@@ -28,7 +28,7 @@ import mockroll
 
 #: Where violation windows live: `_geom.EVENT_FRACTION` through the end.
 BAND = (0.30, 0.95)
-#: Culprits may clip the edge briefly -- a pour column starts above frame by
+#: Violators may clip the edge briefly -- a pour column starts above frame by
 #: design -- but a body that spends a tenth of the window out of shot is a clip
 #: whose violation nobody can see.
 MIN_VISIBLE = 0.90
@@ -47,7 +47,7 @@ def _visible_fraction(spec, traj, body, lo, hi) -> float:
 
 @pytest.mark.parametrize("tier_name", ["debug", "release"])
 @pytest.mark.parametrize("scenario", sorted(B.available()))
-def test_culprits_stay_in_frame(scenario, tier_name):
+def test_violators_stay_in_frame(scenario, tier_name):
     sc, tier = B.get(scenario), B.TIERS[tier_name]
     for seed in range(SEEDS):
         spec = sc.sample(seed, tier, "L0")

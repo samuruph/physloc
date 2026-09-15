@@ -150,7 +150,7 @@ def test_cell_magnitude_is_ordered(scenario, family):
 
 @pytest.mark.parametrize("scenario,family", CELLS,
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
-def test_only_declared_culprits_change_appearance(scenario, family):
+def test_only_declared_violators_change_appearance(scenario, family):
     """Whatever `apply` makes a body *look* like, `plan` must have declared.
 
     The invariant that catches plan/apply divergence, which is silent by
@@ -159,7 +159,7 @@ def test_only_declared_culprits_change_appearance(scenario, family):
     annotated one alone. The clip came out identical to its valid twin with a
     full set of labels attached, and every existing check passed.
 
-    Narrowed from "no non-culprit array differs" to the appearance channels
+    Narrowed from "no non-violator array differs" to the appearance channels
     only. The old form asserted that a bystander is never touched at all, and
     that turned out to be the wrong invariant: when an intervention prevents a
     collision, the body that *was* going to be struck has to be re-settled, or
@@ -192,7 +192,7 @@ def test_only_declared_culprits_change_appearance(scenario, family):
     undeclared = sorted(restyled - declared)
     assert not undeclared, (
         "bodies %s changed appearance but are not causal" % undeclared)
-    assert restyled or moved, "declared culprits but edited nothing"
+    assert restyled or moved, "declared violators but edited nothing"
 
 
 @pytest.mark.parametrize("scenario,family", CELLS,
@@ -225,12 +225,12 @@ def test_no_body_moves_without_being_touched(scenario, family):
     if not Injector._changes_dynamics(traj, invalid, plan):
         pytest.skip("%s changes no dynamics" % family)
 
-    culprits = {int(i) for i in plan.causal_body_ids}
+    violators = {int(i) for i in plan.causal_body_ids}
     contacts = _geom.geometric_contacts(spec, invalid)
 
     for body in spec.bodies:
         bid = int(body.segmentation_id)
-        if body.static or body.scripted or bid in culprits:
+        if body.static or body.scripted or bid in violators:
             continue
         bad = np.flatnonzero(Injector._uncaused_frames(
             invalid, spec, contacts, bid, from_frame=max(1, plan.t_event)))

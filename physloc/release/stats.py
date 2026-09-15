@@ -15,7 +15,7 @@ shipped `meta.json` files and nothing else.
 
     python -m physloc.cli stats out/physloc_v0
 
-Writes `<root>/stats/`: five figures and `stats.json`. The JSON is the numbers
+Writes `<root>/stats/`: seven figures and `stats.json`. The JSON is the numbers
 behind the figures -- so a regression can be diffed rather than squinted at,
 and so the dataset card can quote them without re-deriving anything.
 
@@ -186,8 +186,39 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         if pr is not None:
             severity[sb].append(float(pr))
 
+    # STRUCTURE: where the invalid clips sit on the two axes a release is
+    # built from, which domains they exercise, and how a multi clip's violators
+    # were timed -- the questions the side-by-side videos answer by eye.
+    level_cond: Dict[str, Counter] = defaultdict(Counter)
+    for m in invalid:
+        level_cond[str((_md(m).get("complexity") or {}).get("name") or "?")][
+            str(_md(m).get("condition") or "?")] += 1
+    domains = Counter(str(_md(m).get("domain") or "?") for m in invalid)
+    timing = Counter(str(m["violation"].get("violator_timing") or "shared")
+                     for m in invalid)
+
+    # WHEN violations fire: as a share of the clip (is the event band used, or
+    # does everything cluster?), in seconds (the same at every clip length),
+    # and how long until a viewer could tell.
+    share, seconds, lag = [], [], []
+    for m in invalid:
+        t = m["violation"].get("t_event_frame")
+        frames = _md(m).get("num_frames")
+        fps = float(_md(m).get("frame_rate") or 12)
+        if t is None or not frames:
+            continue
+        share.append(float(t) / float(frames))
+        seconds.append(float(t) / fps)
+        lg = m["violation"].get("observability_lag_frames")
+        if lg is not None:
+            lag.append(float(lg) / fps)
+
     return {
         "clips": len(metas), "invalid": len(invalid), "valid": len(valid),
+        "level_by_condition": {k: dict(v) for k, v in level_cond.items()},
+        "domains": dict(domains), "violator_timing": dict(timing),
+        "event_time_share": share, "event_time_seconds": seconds,
+        "observability_lag_seconds": lag,
         "levels": dict(levels), "conditions": dict(conditions),
         "severity_bins": dict(bins), "difficulty": dict(diff),
         "binding_factors": dict(binding),
@@ -387,6 +418,94 @@ def _fig_coverage(plt, s, path) -> None:
     plt.close(fig)
 
 
+def _fig_structure(plt, s, path) -> None:
+    """Where the invalid clips sit: level x condition, domain, violator timing."""
+    import numpy as np
+
+    from ..scenarios.base import CONDITION_CYCLE
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.8),
+                             gridspec_kw={"width_ratios": [1.4, 1.0, 0.7]})
+    grid = s.get("level_by_condition") or {}
+    levels = ([k for k in ("L0", "L1", "L2", "L3") if k in grid]
+              + sorted(k for k in grid if k not in ("L0", "L1", "L2", "L3")))
+    declared = list(dict.fromkeys(CONDITION_CYCLE))
+    present = {c for row in grid.values() for c in row}
+    conds = ([c for c in declared if c in present]
+             + sorted(c for c in present if c not in declared))
+    ax = axes[0]
+    if levels and conds:
+        counts = np.asarray([[grid[lv].get(c, 0) for c in conds]
+                             for lv in levels], float)
+        ax.imshow(counts, cmap="Blues", aspect="auto",
+                  vmin=0, vmax=max(1.0, counts.max()))
+        for i in range(len(levels)):
+            for j in range(len(conds)):
+                v = counts[i, j]
+                ax.text(j, i, "%d" % v, ha="center", va="center", fontsize=8,
+                        color="white" if v > 0.6 * counts.max() else INK)
+        ax.set_xticks(range(len(conds)))
+        ax.set_xticklabels(conds, rotation=30, ha="right")
+        ax.set_yticks(range(len(levels)))
+        ax.set_yticklabels(levels)
+    _style(ax, "Invalid clips: level x condition")
+    ax.yaxis.grid(False)
+
+    doms = sorted((s.get("domains") or {}).items(), key=lambda kv: -kv[1])
+    bars = axes[1].bar([k for k, _ in doms], [v for _, v in doms],
+                       color=ACCENT, width=0.62)
+    _bar_labels(axes[1], bars)
+    _style(axes[1], "Invalid clips per domain", "", "clips")
+    axes[1].tick_params(axis="x", labelrotation=35)
+    for lab in axes[1].get_xticklabels():
+        lab.set_horizontalalignment("right")
+    _categories(axes[1], len(doms))
+    _headroom(axes[1])
+
+    order = [k for k in ("shared", "sync", "independent")
+             if k in (s.get("violator_timing") or {})]
+    bars = axes[2].bar(order, [s["violator_timing"][k] for k in order],
+                       color=[EASY, MODERATE, HARD][:len(order)], width=0.62)
+    _bar_labels(axes[2], bars)
+    _style(axes[2], "Violator timing", "", "clips")
+    _categories(axes[2], len(order))
+    _headroom(axes[2])
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def _fig_timing(plt, s, path) -> None:
+    """When violations fire -- spread across the clip, not clustered."""
+    import numpy as np
+
+    from ..injectors._geom import EVENT_BAND
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.4))
+    panels = (
+        (axes[0], "event_time_share", "Event moment, share of the clip",
+         "t_event / clip length", np.linspace(0.0, 1.0, 21)),
+        (axes[1], "event_time_seconds", "Event moment, in seconds",
+         "seconds into the clip", 20),
+        (axes[2], "observability_lag_seconds", "Observability lag",
+         "seconds from event to observable", 20))
+    for ax, key, title, xlabel, bins in panels:
+        vals = np.asarray(s.get(key) or [], float)
+        if vals.size:
+            ax.hist(vals, bins=bins, color=ACCENT, alpha=0.85,
+                    edgecolor="white", linewidth=0.4)
+        _style(ax, title, xlabel, "invalid clips")
+    # The band events are drawn from where nothing physical sets the moment.
+    axes[0].axvspan(EVENT_BAND[0], EVENT_BAND[1], color=GRID, alpha=0.6,
+                    zorder=0, label="event band")
+    axes[0].legend(frameon=False, fontsize=7.5, labelcolor=MUTED,
+                   loc="upper right")
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def report(root: str, outdir: Optional[str] = None) -> Dict[str, object]:
     """Write the figures and `stats.json`; return the summary."""
     import matplotlib
@@ -409,6 +528,8 @@ def report(root: str, outdir: Optional[str] = None) -> Dict[str, object]:
     _fig_composition(plt, s, os.path.join(out, "composition.png"), shares)
     _fig_severity(plt, s, os.path.join(out, "severity.png"))
     _fig_coverage(plt, s, os.path.join(out, "coverage.png"))
+    _fig_structure(plt, s, os.path.join(out, "structure.png"))
+    _fig_timing(plt, s, os.path.join(out, "timing.png"))
     with open(os.path.join(out, "stats.json"), "w") as fh:
         json.dump(s, fh, indent=2, sort_keys=True)
     s["outdir"] = out

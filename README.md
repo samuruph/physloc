@@ -555,6 +555,7 @@ python -m physloc.cli audit     out/review_severity      # cells whose violation
 python -m physloc.cli stats     out/review_severity      # the distributions, plotted
 python -m physloc.cli viz       out/review_severity      # every grid and sheet, one folder
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
+python -m physloc.cli compare   out/review_L0 out/review_L3 out/review_conditions  # dataset structure
 
 python test_dataset_loader.py out/review_severity        # load it: structure and shapes
 python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
@@ -570,7 +571,9 @@ out/review_severity/stats/
   composition.png         levels; conditions measured vs declared; difficulty x complexity
   severity.png            measured peak score per declared bin, and the counts
   coverage.png            clips per family and per scenario
-  stats.json              the numbers behind all five
+  structure.png           level x condition counts; clips per domain; violator timing
+  timing.png              when events fire (share of clip, seconds) and the observability lag
+  stats.json              the numbers behind all seven
 ```
 
 `viz` re-reads finished clips — nothing is rendered again — and names its videos so the sort
@@ -581,6 +584,20 @@ out/review_severity/viz/
   L0_drop_0777_solidity.mp4        one family: the valid clip beside weak/medium/strong
   L0_drop_0777_sheet_strong.mp4    one scene: every family, at one bin
 ```
+
+`compare` shows the dataset's structure: one scenario x family, side by side along one axis. It
+takes several release roots, because a review run usually holds one level:
+
+```
+out/review_L0/compare/           (or --outdir)
+  levels/drop__antigravity.mp4     L0 | L1 | L2 | L3 -- each level's OWN scene, not twins
+  variants/drop__solidity.mp4      up to 5 variants of the cell at one level (--level, -n)
+  conditions/drop__solidity.mp4    standard | camera | distractors | multi | camera+multi
+```
+
+Each tile is the invalid clip with its violation mask and timeline; a missing tile says "not
+generated". `--scenario drop --family solidity` draws one cell; `--limit N` draws N cells per kind
+spread over the scenarios. It reads finished clips only, at a few seconds per video.
 
 ### Overriding a config
 

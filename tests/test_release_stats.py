@@ -68,7 +68,8 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
     got = stats.report(root)
     out = got["outdir"]
     for name in ("difficulty.png", "difficulty_factors.png", "composition.png",
-                 "severity.png", "coverage.png", "stats.json"):
+                 "severity.png", "coverage.png", "structure.png", "timing.png",
+                 "stats.json"):
         p = os.path.join(out, name)
         assert os.path.exists(p) and os.path.getsize(p) > 0, name
     with open(os.path.join(out, "stats.json")) as fh:

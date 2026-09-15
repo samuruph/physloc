@@ -851,7 +851,8 @@ class Injector:
 
     # ------------------------------------------------------------------ #
     def _offscreen_frames(self, spec, traj: Trajectory, bodies,
-                          from_frame: int, visible_fraction: float = 0.6) -> int:
+                          from_frame: int,
+                          visible_fraction: Optional[float] = None) -> int:
         """How many frames after `from_frame` lose sight of the culprit.
 
         A frame counts as lost when fewer than `visible_fraction` of the culprit
@@ -877,6 +878,8 @@ class Injector:
         counted = here.sum(axis=1)
         seen = (vis & here).sum(axis=1)
         frac = np.where(counted > 0, seen / np.maximum(counted, 1), 1.0)
+        if visible_fraction is None:
+            visible_fraction = _geom.visible_share(spec)
         return int((frac < visible_fraction).sum())
 
     #: Fractions of the nominal intervention to try, strongest first.

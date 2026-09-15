@@ -134,6 +134,20 @@ def test_one_body_of_a_pair_on_screen_counts_as_seen():
         assert not _geom.culprits_on_screen(spec, out, trio).any()
 
 
+def test_a_granular_medium_needs_less_of_itself_in_shot():
+    """Some grains of a pour leaving the frame is not a lost violation."""
+    spec, traj = _roll("pour", 777)
+    rigid, _ = _roll("drop", 777)
+    assert _geom.visible_share(spec) == _geom.MEDIUM_VISIBLE_SHARE
+    assert _geom.visible_share(rigid) == _geom.VISIBLE_SHARE
+    grains = [b for b in spec.bodies if not b.static and not b.dormant]
+    out = injectors.get("superelastic")._clone(traj)
+    gone = int(len(grains) * 0.5)                 # half the pour leaves
+    for b in grains[:gone]:
+        out.pos[:, out.index_of(int(b.segmentation_id)), :] = 500.0
+    assert _geom.culprits_on_screen(spec, out, grains).all()
+
+
 def test_non_parabolic_kicks_leave_every_body_at_rest():
     """The interior-only difference left each body drifting sideways."""
     inj = injectors.get("non_parabolic")

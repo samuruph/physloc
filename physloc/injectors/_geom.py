@@ -355,8 +355,25 @@ def _bodies_by_id(spec, body_ids) -> List:
 LINE_OF_SIGHT_SAMPLE = 12
 
 
+#: Share of a GRANULAR medium that must be in shot for it to count as seen.
+#: A pour is hundreds of interchangeable grains: some of them leaving the frame
+#: -- climbing out of the top under reversed gravity and raining back in -- is
+#: still a pour anyone can watch misbehave. At the rigid 60%, `pour` x
+#: `antigravity` was declined on every attempt with 40-57% of the grains in
+#: view (release, container). Pulling the camera back instead would shrink
+#: every `pour` clip to rescue a few strong variants.
+MEDIUM_VISIBLE_SHARE = 0.4
+
+
+def visible_share(spec) -> float:
+    """The share of a culprit group that must be in shot -- see above."""
+    if getattr(spec, "physics_medium", "rigid") == "granular":
+        return MEDIUM_VISIBLE_SHARE
+    return VISIBLE_SHARE
+
+
 def culprits_on_screen(spec, traj, bodies,
-                       share: float = VISIBLE_SHARE) -> np.ndarray:
+                       share: Optional[float] = None) -> np.ndarray:
     """[T] bool: is at least `share` of `bodies` present, in frame and in sight?
 
     Per frame against the camera as it is on that frame. A body that is absent
@@ -365,7 +382,10 @@ def culprits_on_screen(spec, traj, bodies,
     a static screen or wall (`hidden_behind_static`), except on the frames a
     scenario DECLARES occluded: `occluder_pass` hides its actor on purpose, and
     that interval is the observability lag the scenario exists to produce.
+    `share` defaults to `visible_share(spec)`.
     """
+    if share is None:
+        share = visible_share(spec)
     T = int(traj.num_frames)
     idx = []
     for b in bodies:

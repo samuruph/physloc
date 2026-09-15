@@ -283,6 +283,11 @@ first, then the annotation derived from it. A red dot while the violation is act
 timeline with both window families and the three clocks. `grid`, `sheet` and `coverage` use
 the same nine and the same order.
 
+`compare` (`physloc/viz/compare.py`) is the one exception, on purpose: it shows the dataset's
+STRUCTURE -- levels, variants, conditions of one cell side by side -- so each tile is the `mask`
+panel alone with its timeline. Its level video shows each level's own scene; levels are never
+twins, and the header says so.
+
 When drawing text on frames, use `viz.overlay._text`: it draws a dark backing box rather
 than a thick outline, because OpenCV's Hershey glyph advance grows with stroke thickness, so
 an outline pass drawn at `thick+2` is wider than the fill and leaves dark ghost glyphs.

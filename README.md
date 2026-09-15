@@ -59,16 +59,20 @@ bash scripts/run.sh review_severity                       # generate, validate, 
 `run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
 tiled into one video.
 
-Load it and check every annotation by eye:
+Load a release **the way a user gets it** — downloaded from the Hub and read through the
+`loader.py` that ships inside it — and check every annotation by eye:
 
 ```bash
-python test_dataset_loader.py out/review_severity          # what is in it, and every array's shape
-python test_dataset_loader.py out/review_severity --gui    # browser viewer, http://localhost:8765
-python test_dataset_loader.py out/review_severity --render 0 --layers violation,reference,bbox3d
+python test_dataset_loader.py                               # downloads samueleruf/physloc-mini into data/hub
+python test_dataset_loader.py --repo <owner>/physloc-review_severity
+python test_dataset_loader.py --gui                          # browser viewer, http://localhost:8765
+python test_dataset_loader.py --render 0 --layers violation,reference,bbox3d
+python test_dataset_loader.py out/review_severity --generated   # a local run, before exporting it
 ```
 
-From Python, `PhysLocDataset("out/review_severity")` in [`physloc/loader.py`](physloc/loader.py)
-gives every clip and pair — see [Loading the dataset](#loading-the-dataset).
+From Python, `PhysLocDataset("<downloaded release>")` in the shipped `loader.py` (the same file as
+[`physloc/loader.py`](physloc/loader.py)) gives every clip and pair — see
+[Loading the dataset](#loading-the-dataset).
 
 To generate the full dataset, see [Running the full release](#running-the-full-release).
 
@@ -390,7 +394,7 @@ score):
 
 - **It says why** — `binding_factors` names the factors that set the label.
 - **The sets nest** — easy ⊂ moderate ⊂ hard, so "moderate" means every clip with `rank <= 1`.
-- **Nothing cancels** — a tiny footprint is not offset by a static camera.
+- **Nothing cancels** — a tiny violation area is not offset by a static camera.
 
 ```python
 df[df.difficulty_rank <= 1]                        # the "moderate" evaluation set
@@ -561,23 +565,23 @@ python -m physloc.cli viz       out/review_severity      # every grid and sheet,
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
 python -m physloc.cli compare   out/review_L0 out/review_L3 out/review_conditions  # dataset structure
 
-python test_dataset_loader.py out/review_severity        # load it: structure and shapes
-python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
+python test_dataset_loader.py out/review_severity --generated        # load it: structure and shapes
+python test_dataset_loader.py out/review_severity --generated --gui  # any clip, any layer or panel
 ```
 
 `stats` checks the run came out in the shape it declares; it reads only `metadata.json`, so it takes
-seconds over a full release:
+seconds over a full release. **`generate` writes it at the end of every run and `export` ships it
+with the release**, where the dataset card shows every figure:
 
 ```
 out/review_severity/stats/
-  difficulty.png          the three labels, and which factor set each one
-  difficulty_factors.png  each factor's histogram with its two cuts drawn on it
-  composition.png         levels; conditions measured vs declared; difficulty x complexity
-  severity.png            measured peak score per declared bin, and the counts
-  coverage.png            clips per family and per scenario
-  structure.png           level x condition counts; clips per domain; violator timing
-  timing.png              when events fire (share of clip, seconds) and the observability lag
-  stats.json              the numbers behind all seven
+  composition.png         taxonomy donut (domain, family); complexity levels; difficulty x complexity
+  coverage.png            clips per scenario; the scenario x family lattice
+  difficulty.png          easy / moderate / hard, and which factor set each label
+  difficulty_factors.png  each factor's distribution against its easy / moderate / hard zones
+  distributions.png       when events fire, observability lag, measured severity per bin
+  structure.png           conditions against their declared shares; violator timing
+  stats.json              the numbers behind all six
 ```
 
 `viz` re-reads finished clips — nothing is rendered again — and names its videos so the sort

@@ -1161,6 +1161,16 @@ def cmd_generate(a) -> int:
         print("%d cell(s) produced nothing:" % len(failed), file=sys.stderr)
         for row in failed:
             print("   %s" % (row,), file=sys.stderr)
+    # STATS ON EVERY RUN. `physloc stats` had to be remembered, and no script
+    # remembered it, so a run's distributions were only ever looked at when
+    # someone thought to ask. It reads metadata.json only -- seconds, even over
+    # a release -- and a failure to plot is reported, never a failed run.
+    try:
+        from .release.stats import report
+        got = report(rel)
+        print("stats: %d clips -> %s" % (got["clips"], got["outdir"]))
+    except (Exception, SystemExit) as exc:                 # noqa: BLE001
+        print("!! stats not written for %s: %r" % (rel, exc), file=sys.stderr)
     return 0
 
 

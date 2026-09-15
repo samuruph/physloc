@@ -148,6 +148,39 @@ def test_a_granular_medium_needs_less_of_itself_in_shot():
     assert _geom.culprits_on_screen(spec, out, grains).all()
 
 
+def test_a_peer_outside_the_shot_is_not_a_split_culprit():
+    """One peer spawned out of frame declined whole `multi` clips (drop 786,
+    stack_topple 785 x solidity); it must simply not be named a culprit."""
+    from physloc.injectors import multi
+    from physloc.scenarios.base import CONDITION_CYCLE
+
+    variant = next(i for i, c in enumerate(CONDITION_CYCLE) if c == "multi")
+    sc = scenarios.get("drop")
+    inj = injectors.get("phantom_impulse")
+    for seed in range(40):
+        spec = sc.sample(seed, TIERS["debug"], "L0", variant=variant,
+                         n_variants=len(CONDITION_CYCLE))
+        if multi.timing_mode(spec, inj.family) != "independent":
+            continue
+        traj = mockroll.roll(spec, sc)
+        base, subs = multi.culprit_plans(
+            inj, spec, traj, lambda: np.random.RandomState(1), "strong",
+            lambda p: inj.simulates(p))
+        if len(subs) < 3:
+            continue
+        # Park one of the culprits far outside the shot for the whole clip.
+        hidden = int(subs[-1].causal_body_ids[0])
+        out = inj._clone(traj)
+        out.pos[:, out.index_of(hidden), :] = np.float32(500.0)
+        plan, subs2 = multi.culprit_plans(
+            inj, spec, out, lambda: np.random.RandomState(1), "strong",
+            lambda p: inj.simulates(p))
+        assert hidden not in {int(s.causal_body_ids[0]) for s in subs2}
+        assert len(subs2) == len(subs) - 1
+        return
+    pytest.skip("no seed gave an independently timed multi plan of 3+ culprits")
+
+
 def test_non_parabolic_kicks_leave_every_body_at_rest():
     """The interior-only difference left each body drifting sideways."""
     inj = injectors.get("non_parabolic")

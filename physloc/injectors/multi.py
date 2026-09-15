@@ -57,6 +57,23 @@ def _dynamic_ids(spec, ids) -> List[int]:
     return [int(i) for i in ids if int(i) in dynamic]
 
 
+def _seen_enough(spec, traj, body_id: int) -> bool:
+    """Is this body on screen for enough of the clip to carry a violation?
+
+    The share the worker's gate asks of a culprit after its event
+    (`_geom.VISIBLE_AFTER_SHARE`), over the whole stretch events are drawn from
+    -- asked before any moment is drawn, so of the lawful rollout.
+    """
+    body = next((b for b in spec.bodies
+                 if int(b.segmentation_id) == int(body_id)), None)
+    if body is None:
+        return False
+    T = int(traj.num_frames)
+    lo = max(1, int(round(_geom.EVENT_BAND[0] * T)))
+    on = _geom.culprits_on_screen(spec, traj, [body])[lo:]
+    return bool(on.size and on.mean() >= _geom.VISIBLE_AFTER_SHARE)
+
+
 def splittable(inj, spec, plan: InterventionPlan, staged: bool) -> bool:
     """Can this plan's culprits be given moments of their own? See the module."""
     if "multi" not in str(getattr(spec, "condition", "") or ""):
@@ -91,7 +108,19 @@ def culprit_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState]
         plan.notes["culprit_timing"] = "sync"
         return plan, []
 
-    order = _dynamic_ids(spec, plan.causal_body_ids)
+    # A PEER NOBODY CAN SEE IS NOT A CULPRIT. The framing check lets a scene
+    # keep a share of its actors out of shot, but a split plan is judged on
+    # EVERY culprit, so one peer spawned outside the frame declined the whole
+    # clip at every event moment -- measured in the container on `drop` 786
+    # (camera+multi) and `stack_topple` 785 (multi), each x solidity, where
+    # every other culprit was in plain view. Such a peer keeps its lawful
+    # motion and simply is not asked to break the law. Too few left to split,
+    # and the clip keeps its shared plan and the group's share rule.
+    order = [bid for bid in _dynamic_ids(spec, plan.causal_body_ids)
+             if _seen_enough(spec, traj, bid)]
+    if len(order) < 2:
+        plan.notes["culprit_timing"] = "shared"
+        return plan, []
     had_targets = "family_targets" in spec.notes
     targets = spec.notes.setdefault("family_targets", {})
     saved = targets.get(inj.family, _MISSING)

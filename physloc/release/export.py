@@ -10,6 +10,7 @@ This turns that tree into what a dataset host expects:
     physloc_v0/
       README.md                     the dataset card, with YAML front-matter
       LICENSE
+      loader.py                     reads the shards in place; numpy only
       index.parquet                 one row per clip, for the dataset viewer
       splits/{train,val,test}.txt   grouped by pair_uid
       shards/core-{000..NNN}.tar    rgb + annotations, the default download
@@ -33,9 +34,11 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import tarfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .. import loader
 from ..annotate import layout
 
 #: Files that go in the core shards -- what a model trains on.
@@ -329,6 +332,10 @@ def export(root: str, outdir: str, with_passes: bool = False,
     _write_taxonomy(outdir, rows)
     _write_card(rows, outdir, license_name, shards)
     _write_license(outdir, license_name)
+    # The loader ships with the data: schema v2 stores two annotation files and
+    # derives the rest, so the card's `from loader import ...` has to work on a
+    # fresh download with nothing but numpy installed.
+    shutil.copyfile(loader.__file__, os.path.join(outdir, "loader.py"))
     counts = {n: sum(1 for r in rows if r["split"] == n)
               for n, _ in SPLIT_FRACTIONS}
     notes = []

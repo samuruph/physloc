@@ -73,7 +73,7 @@ def test_export_writes_shards_index_card_and_splits(release, tmp_path):
     out = str(tmp_path / "pack")
     res = X.export(release, out)
     assert res["clips"] == 24 and res["pairs"] == 12
-    for name in ("README.md", "LICENSE"):
+    for name in ("README.md", "LICENSE", "loader.py"):
         assert os.path.exists(os.path.join(out, name))
     assert any(os.path.exists(os.path.join(out, n))
                for n in ("index.parquet", "index.jsonl"))

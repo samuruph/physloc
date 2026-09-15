@@ -38,6 +38,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from .. import loader
 from ..annotate import layout
 from . import overlay as ov
 from . import video as vid
@@ -382,32 +383,31 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             continue
         v = meta.get("violation") or {}
         sev = (v.get("intervention") or {}).get("severity_bin", "valid")
-        tlp = os.path.join(cdir, "timelines.npz")
+        clip = loader.Clip.from_dir(cdir)
+        tl = dict(clip.timeline, severity_t=clip.timeline["severity"])
         cols.append({
             # The identity block: every reader below wants scenario, family,
             # seed, tier, complexity, num_frames or frame_rate, and the
             # violation it needs is unpacked into the fields that follow.
-            "dir": cdir, "meta": md, "is_valid": is_valid,
+            "dir": cdir, "meta": md, "is_valid": is_valid, "clip": clip,
             "label": "VALID" if is_valid else sev,
             "sort": ORDER.get("valid" if is_valid else sev, 9),
-            "rgb": ov._rgb(cdir, int(md["num_frames"])),
-            "mask": ov._npz(cdir, "violation_mask.npz", "mask"),
-            "ref": ov._npz(cdir, "reference_mask.npz", "mask"),
-            "sev": (lambda a: None if a is None else a.astype(np.float32))(
-                ov._npz(cdir, "severity_map.npz", "severity")),
-            "causal": ov._npz(cdir, "causal_mask.npz", "mask"),
-            "energy": (lambda a: None if a is None else a.astype(np.float32))(
-                ov._npz(cdir, "energy_map.npz", "energy")),
+            "rgb": clip.video,
+            "mask": clip.violation_mask,
+            "ref": clip.reference_mask,
+            "sev": clip.severity_map,
+            "causal": clip.causal,
+            "energy": clip.energy_map if clip.has(loader.ENERGY_MAP) else None,
             "etrace": ov._energy_trace(cdir),
             "twin_etrace": ov._energy_trace(
                 os.path.join(os.path.dirname(cdir), "valid")),
-            "seg": ov._npz(cdir, layout.SEGMENTATIONS, "segmentations"),
-            "depth": ov._npz(cdir, "depth.npz", "depth"),
-            "flow": ov._npz(cdir, "forward_flow.npz", "forward_flow"),
-            "normals": ov._npz(cdir, "normal.npz", "normal"),
-            "div": (lambda a: None if a is None else a.astype(np.float32))(
-                ov._npz(cdir, "divergence_map.npz", "divergence")),
-            "tl": np.load(tlp) if os.path.exists(tlp) else None,
+            "seg": clip.segmentations,
+            "depth": clip.pass_("depth") if clip.has("depth.npz") else None,
+            "flow": (clip.pass_("forward_flow") if clip.has("forward_flow.npz")
+                     else None),
+            "normals": clip.pass_("normal") if clip.has("normal.npz") else None,
+            "div": clip.divergence,
+            "tl": tl,
             "vwin": [tuple(w) for w in v.get("violation_windows", [])],
             "owin": [tuple(w) for w in v.get("observable_windows", [])],
             "iwin": [tuple(w) for w in v.get("intervention_windows", [])],
@@ -416,6 +416,12 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "mag": (v.get("intervention") or {}).get("magnitude"),
             "mag_unit": (v.get("intervention") or {}).get("magnitude_unit", ""),
         })
+    # The valid column's "should-be" outline: where every violator shown beside
+    # it lawfully is. A valid clip has no violators of its own to take it from.
+    ids = sorted({i for c in cols if not c["is_valid"] for i in c["clip"].violator_ids})
+    for c in cols:
+        if c["is_valid"]:
+            c["ref"] = loader.reference_mask(c["seg"], ids)
     return sorted(cols, key=lambda c: c["sort"])
 
 
@@ -445,14 +451,14 @@ def coverage(release_root: str, out_path: Optional[str] = None,
         bin_ = (v.get("intervention") or {}).get("severity_bin", "strong")
         if bin_ != severity:
             continue
-        tlp = os.path.join(cdir, "timelines.npz")
+        clip = loader.Clip.from_dir(cdir)
         clips.setdefault(md.get("scenario", "?"), {})[
             md.get("family", "?")] = {
                 "meta": md,
-                "rgb": ov._rgb(cdir, int(md["num_frames"])),
-                "mask": ov._npz(cdir, "violation_mask.npz", "mask"),
-                "ref": ov._npz(cdir, "reference_mask.npz", "mask"),
-                "tl": np.load(tlp) if os.path.exists(tlp) else None,
+                "rgb": clip.video,
+                "mask": clip.violation_mask,
+                "ref": clip.reference_mask,
+                "tl": clip.timeline,
                 "lag": v.get("observability_lag_frames", 0)}
     if not clips:
         raise ValueError("no invalid %s clips under %s" % (severity, release_root))

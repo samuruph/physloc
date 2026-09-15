@@ -1,43 +1,61 @@
-"""Annotation visualiser -- docs/PLAN.md Verification.
+"""Annotation visualiser -- every annotation a clip ships, drawn on its video.
 
-Produces ONE mp4 per invalid clip showing every annotation side by side, so a
-human can tell at a glance whether the labels are right. Never trust a metric
-built on an unviewed label.
+One renderer behind three front-ends: `overlay.mp4` (written by `generate`, the
+nine default panels), `test_dataset_loader.py --render` (any layers and panels)
+and the browser viewer in `viz/gui.py`, which asks for one frame at a time.
 
-Layout:
+Two kinds of thing are drawn, and they are never mixed:
 
-    +---------------------------------------------------------------+
-    | domain / family / scenario   seed   severity      [O] ACTIVE   |
-    +------------+------------+------------+------------+------------+
-    | RGB        | + MASK     | SEVERITY   | CAUSAL     | DIVERGENCE |
-    +------------+------------+------------+------------+------------+
-    | timeline: violation window (red) / observable (amber) + playhead|
-    | t_event  t_obs  t_end  lag   sev(t)   peak                     |
-    +---------------------------------------------------------------+
+* **layers** go ON the RGB panel and combine freely -- the violation, its
+  visible part, the reference outline, severity, causal, 2D and 3D boxes,
+  centres, velocities, labels and collision events. They are outlines or
+  translucent, so several read at once.
+* **panels** go BESIDE it -- the valid twin, segmentation, depth, both flows,
+  normals, object coordinates, energy, the mask / severity / causal views,
+  divergence and a top-down camera map. Each one covers the whole frame, so
+  drawing it over the video would hide the thing it annotates.
 
-No image files are written -- mp4 only.
+    +---------------------------------------------------------------------+
+    | domain / family / scenario   L0 strong standard  [o] ACTIVE  f 7/24  |
+    +-------------+-------------+-------------+-------------+-------------+
+    | RGB+layers  | ENERGY      | SEGMENTATION| DEPTH       | FLOW        |
+    +-------------+-------------+-------------+-------------+-------------+
+    | MASK        | SEVERITY    | CAUSAL      | DIVERGENCE  |             |
+    +-------------+-------------+-------------+-------------+-------------+
+    | legend: one colour per violator, then the layers drawn               |
+    | clocks: intervening / consequence / observable                       |
+    | one row per violator (active, observable, occluded) + severity lane  |
+    | frame ticks, t_event / t_applied / t_obs / t_end, playhead           |
+    +---------------------------------------------------------------------+
+
+Reads ONLY through `physloc/loader.py`, so every picture is also a check that
+the loader derives what the pipeline meant. mp4 only -- no image files.
 """
 from __future__ import annotations
 
-import json
+import math
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .. import loader
 from ..annotate import layout
+from ..annotate import movi
 from . import video as vid
 
 PANEL = 288                      # each panel is rendered at this size
 HEADER = 34
-TIMELINE = 84
+LEGEND = 24
 PAD = 6
-#: Height of one extra timeline row per violator, when violators keep their own
-#: clocks.
-VIOLATOR_ROW = 9
-#: One colour per violator row, cycled.
+COLUMNS = 5
+CLOCK_ROW = 9
+VIOLATOR_ROW = 11
+SEVERITY_LANE = 34
+#: One colour per violator, used identically by every layer, the legend and the
+#: timeline, so "which object is this" never needs a second lookup.
 C_VIOLATORS = ((255, 120, 200), (120, 230, 255), (200, 255, 120),
-              (255, 200, 90), (180, 150, 255), (255, 150, 120))
+               (255, 200, 90), (180, 150, 255), (255, 150, 120))
 
 C_BG = (18, 18, 22)
 C_TEXT = (232, 232, 238)
@@ -48,136 +66,531 @@ C_OBS = (250, 185, 60)
 C_CAUSAL1 = (255, 70, 70)
 C_CAUSAL2 = (90, 160, 255)
 C_REF = (90, 235, 120)      # "where it should be", from the valid twin
+C_EVENT = (255, 230, 90)
+C_BLANK = (26, 26, 32)
+
+#: Layers drawn on the RGB panel, in drawing order, with what each one shows.
+LAYERS: Dict[str, str] = {
+    "violation": "violation mask (both twins), one colour per violator",
+    "visible": "the part of the violation visible in this video (white outline)",
+    "severity": "severity heat over the violators",
+    "causal": "causal mask: violators (red outline), affected bodies (blue)",
+    "reference": "where the violators lawfully are, from the valid twin (green)",
+    "bbox2d": "2D boxes from the segmentation",
+    "bbox3d": "3D boxes projected through the camera",
+    "centers": "projected object centres (hollow when not visible)",
+    "velocity": "velocity, projected 1/3 s ahead",
+    "labels": "instance name and id (violators marked !)",
+    "events": "collisions on this frame",
+}
+
+#: Panels, in the order a caller lists them, with their titles.
+PANELS: Dict[str, str] = {
+    "rgb": "RGB",
+    "valid": "VALID TWIN",
+    "energy": "ENERGY  per body, fraction of E0",
+    "segmentation": "SEGMENTATION  instance ids",
+    "depth": "DEPTH  metres, near->far",
+    "flow": "FORWARD FLOW  hue=direction val=speed",
+    "backward_flow": "BACKWARD FLOW",
+    "normal": "NORMALS",
+    "object_coordinates": "OBJECT COORDINATES",
+    "mask": "MASK  red=violation  green=should-be",
+    "severity": "SEVERITY MAP",
+    "causal": "CAUSAL MASK",
+    "divergence": "DIVERGENCE (not GT)",
+    "camera": "CAMERA  top-down, metres",
+}
+
+#: What `generate` writes as `overlay.mp4`: evidence first, then the annotation
+#: derived from it -- the same nine, in the same order, as the grid and sheet.
+DEFAULT_PANELS = ("rgb", "energy", "segmentation", "depth", "flow", "mask",
+                  "severity", "causal", "divergence")
+DEFAULT_LAYERS: Sequence[str] = ()
+
+#: Bodies too big to box: the floor and the HDRI dome would frame the whole shot.
+UNBOXED_ROLES = ("floor", "backdrop")
+#: The file a panel needs, so a clip without it gets a captioned blank.
+PANEL_FILES = {"energy": loader.ENERGY_MAP, "depth": "depth.npz",
+               "flow": "forward_flow.npz", "backward_flow": "backward_flow.npz",
+               "normal": "normal.npz", "object_coordinates": "object_coordinates.npz"}
+#: The 12 edges of a box whose 8 corners are `itertools.product(x, y, z)`:
+#: corners joined by an edge differ in exactly one of the three bits.
+BOX_EDGES = tuple((a, a | bit) for bit in (1, 2, 4) for a in range(8) if not a & bit)
+VELOCITY_SECONDS = 1.0 / 3.0
+#: Panels that say nothing about a valid clip, which has no violation.
+VIOLATION_PANELS = ("mask", "severity", "causal", "divergence")
 
 
-def build(clip_dir: str, out_path: Optional[str] = None,
-          panel: int = PANEL, **_ignored) -> Dict[str, object]:
-    import cv2
+def build(clip_dir: str, out_path: Optional[str] = None, panel: int = PANEL,
+          layers: Sequence[str] = DEFAULT_LAYERS,
+          panels: Sequence[str] = DEFAULT_PANELS, **_ignored) -> Dict[str, object]:
+    """Render a clip to mp4 (default: `<clip_dir>/overlay.mp4`)."""
+    clip = loader.Clip.from_dir(clip_dir)
+    r = Renderer(clip, layers, panels, panel)
+    out_path = out_path or os.path.join(clip_dir, layout.OVERLAY)
+    vid.write(r.render(), out_path, fps=clip.fps)
+    return {"path": out_path, "frames": clip.num_frames,
+            "panels": list(r.panels), "layers": list(r.layers)}
 
-    meta = _json(os.path.join(clip_dir, layout.METADATA))
-    md = layout.identity(meta)
-    v = meta.get("violation") or {}
-    T = int(md["num_frames"])
 
-    rgb = _rgb(clip_dir, T)
-    mask = _npz(clip_dir, "violation_mask.npz", "mask")
-    sev = _npz(clip_dir, "severity_map.npz", "severity")
-    causal = _npz(clip_dir, "causal_mask.npz", "mask")
-    ref = _npz(clip_dir, "reference_mask.npz", "mask")
-    diverg = _npz(clip_dir, "divergence_map.npz", "divergence")
-    energy = _npz(clip_dir, "energy_map.npz", "energy")
-    seg = _npz(clip_dir, layout.SEGMENTATIONS, "segmentations")
-    depth = _npz(clip_dir, "depth.npz", "depth")
-    flow = _npz(clip_dir, "forward_flow.npz", "forward_flow")
-    normals = _npz(clip_dir, "normal.npz", "normal")
-    etrace = _energy_trace(clip_dir)
-    etwin = _energy_trace(_twin_dir(clip_dir, meta))
-    tl = np.load(os.path.join(clip_dir, "timelines.npz"))
+class Renderer:
+    """Composes one frame at a time from a `loader.Clip`."""
 
-    sev = None if sev is None else sev.astype(np.float32)
-    diverg = None if diverg is None else diverg.astype(np.float32)
+    def __init__(self, clip: "loader.Clip", layers: Sequence[str] = DEFAULT_LAYERS,
+                 panels: Sequence[str] = DEFAULT_PANELS, panel: int = PANEL,
+                 columns: int = COLUMNS):
+        unknown = ([x for x in layers if x not in LAYERS]
+                   + [x for x in panels if x not in PANELS])
+        if unknown:
+            raise KeyError("unknown %s; layers: %s; panels: %s"
+                           % (unknown, ", ".join(LAYERS), ", ".join(PANELS)))
+        self.clip = clip
+        self.layers = tuple(layers)
+        self.panels = tuple(panels) or ("rgb",)
+        self.size = int(panel)
+        self.columns = max(1, min(int(columns), len(self.panels)))
+        self.rows = math.ceil(len(self.panels) / self.columns)
+        self.meta = clip.metadata
+        self.v = self.meta.get("violation") or {}
+        self.T = clip.num_frames
+        self.ids = [int(i) for i in clip.objects["ids"]]
+        insts = self.meta.get("instances", [])
+        self.names = {int(i["id"]): str(i.get("name", i["id"])) for i in insts}
+        self.roles = {int(i["id"]): i.get("role") for i in insts}
+        self.width = self.columns * self.size + (self.columns + 1) * PAD
+        self.panels_bottom = HEADER + PAD + self.rows * (self.size + PAD)
+        clocks = (0 if clip.is_valid else
+                  30 + 3 * CLOCK_ROW + len(self.ids) * VIOLATOR_ROW + SEVERITY_LANE)
+        self.height = self.panels_bottom + LEGEND + clocks + 40
+        self._cache: Dict[str, object] = {}
 
-    vwin = [tuple(w) for w in v.get("violation_windows", [])]
-    owin = [tuple(w) for w in v.get("observable_windows", [])]
-    iwin = [tuple(w) for w in v.get("intervention_windows", [])]
-    cwin = [tuple(w) for w in v.get("consequence_windows", [])]
-    t_event = int(v.get("t_event_frame", -1))
-    t_obs = int(v.get("t_observable_frame", -1))
-    t_end = int(v.get("t_end_frame", -1))
-    peak = (v.get("peak_residual") or {})
-    # ONE ROW PER VIOLATOR when they broke the law at moments of their own. The
-    # clip's rows are the union, and a union of [7,7] and [9,9] drawn on one
-    # bar does not say which object did what when.
-    violators = v.get("violators") or []
-    violator_rows = ([(int(c["instance_id"]),
-                      [tuple(w) for w in c.get("violation_windows", [])])
-                     for c in violators]
-                    if v.get("violator_timing") == "independent"
-                    and len(violators) > 1 else [])
+    # ---- whole frames ----------------------------------------------------
+    def render(self) -> np.ndarray:
+        return np.stack([self.frame(t) for t in range(self.T)])
 
-    # Order: what the renderer saw, then what we derived from it. RGB, energy
-    # and the three geometry passes describe the scene; mask, severity, causal
-    # and divergence are the annotation built on top. Reading left to right
-    # therefore goes from evidence to label, and the same order is used in the
-    # grid and the sheet so a panel is a panel wherever you meet it.
-    panels: List[Tuple[str, str]] = [("RGB", "rgb")]
-    if energy is not None:
-        panels.append(("ENERGY  per body, fraction of E0", "energy"))
-    if seg is not None:
-        panels.append(("SEGMENTATION  per-instance tracks", "seg"))
-    if depth is not None:
-        panels.append(("DEPTH  metres, near->far", "depth"))
-    if flow is not None:
-        panels.append(("OPTICAL FLOW  hue=direction val=speed", "flow"))
-    panels.append(("MASK red=violation  green=should-be", "mask"))
-    if sev is not None:
-        panels.append(("SEVERITY MAP", "sev"))
-    if causal is not None:
-        panels.append(("CAUSAL MASK", "causal"))
-    if diverg is not None:
-        panels.append(("DIVERGENCE (not GT)", "div"))
+    def frame(self, t: int) -> np.ndarray:
+        import cv2
+        S = self.size
+        f = np.full((self.height, self.width, 3), C_BG, np.uint8)
+        for n, name in enumerate(self.panels):
+            x = PAD + (n % self.columns) * (S + PAD)
+            y = HEADER + PAD + (n // self.columns) * (S + PAD)
+            f[y:y + S, x:x + S] = self._panel(name, t)
+            cv2.rectangle(f, (x, y), (x + S - 1, y + S - 1), (60, 60, 70), 1)
+            title = PANELS[name]
+            if name == "rgb" and self.layers:
+                title = "RGB + " + ", ".join(self.layers)
+            _label(f, _fit(title, S - 10, 0.44), (x + 5, y + 16))
+            self._notes(f, name, t, x, y)
+        tl = self.clip.timeline
+        _header(f, self.width, self.meta, t, self.T, bool(tl["active"][t]),
+                bool(tl["observable"][t]), bool(tl["occluded"][t]))
+        self._legend(f, self.panels_bottom)
+        self._timeline(f, t, self.panels_bottom + LEGEND)
+        return f
 
-    n = len(panels)
-    W = n * panel + (n + 1) * PAD
-    H = HEADER + panel + 2 * PAD + TIMELINE + VIOLATOR_ROW * len(violator_rows)
-    out = np.zeros((T, H, W, 3), np.uint8)
+    def colour(self, instance_id: int):
+        if instance_id in self.ids:
+            return C_VIOLATORS[self.ids.index(instance_id) % len(C_VIOLATORS)]
+        return SEG_PALETTE[int(instance_id) % len(SEG_PALETTE)]
 
-    for t in range(T):
-        f = np.full((H, W, 3), C_BG, np.uint8)
-        active = bool(tl["active"][t])
-        observable = bool(tl["observable"][t])
-        occluded = bool(tl["occluded"][t]) if "occluded" in tl.files else False
+    # ---- panels ----------------------------------------------------------
+    def _blank(self, text: str) -> np.ndarray:
+        img = np.full((self.size, self.size, 3), C_BLANK, np.uint8)
+        _text(img, _fit(text, self.size - 16, 0.42), (8, self.size // 2), C_DIM, 0.42, 1)
+        return img
 
-        for i, (label, kind) in enumerate(panels):
-            img = _panel(kind, t, rgb, mask, sev, causal, diverg, panel, ref,
-                         energy, seg, depth, flow, normals)
-            x = PAD + i * (panel + PAD)
-            y = HEADER + PAD
-            f[y:y + panel, x:x + panel] = img
-            cv2.rectangle(f, (x, y), (x + panel - 1, y + panel - 1), (60, 60, 70), 1)
-            _label(f, label, (x + 5, y + 16))
-            if kind == "sev":
-                _sev_scale(f, x, y, panel, float(tl["severity_t"][t]))
-            if kind == "mask":
-                px = int(mask[t].sum()) if mask is not None else 0
-                _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
-            if kind == "causal" and causal is not None:
-                _causal_key(f, x, y, panel, causal[t])
-            if kind == "seg" and seg is not None:
-                ids = [int(u) for u in np.unique(seg[t]) if u]
-                _text(f, "ids %s" % ",".join(map(str, ids[:8])),
-                      (x + 5, y + panel - 8), C_DIM, 0.36, 1)
-            if kind == "flow" and flow is not None and t >= len(flow) - 1:
-                # Kubric writes zeros here: forward flow at the last frame has
-                # no next frame to point at. Saying so beats rendering a black
-                # square that looks like a broken pass.
-                _text(f, "undefined at last frame", (x + 5, y + panel - 8),
-                      C_DIM, 0.36, 1)
-            if kind == "depth" and depth is not None:
-                d = np.asarray(depth[t], np.float32)
-                d = d[..., 0] if d.ndim == 3 else d
-                here = d < DEPTH_SENTINEL
-                if here.any():
-                    _text(f, "%.1f-%.1f m" % (d[here].min(), d[here].max()),
-                          (x + 5, y + panel - 8), C_DIM, 0.36, 1)
-            if kind == "energy":
-                _energy_scale(f, x, y, panel,
-                              float(np.abs(energy[t]).max()) if energy is not None
-                              else None)
-                if etrace is not None:
-                    _energy_curve(f, x, y, panel, t, etrace, etwin)
+    def _panel(self, name: str, t: int) -> np.ndarray:
+        c, S = self.clip, self.size
+        if name in PANEL_FILES and not c.has(PANEL_FILES[name]):
+            return self._blank("no %s in this clip" % name)
+        if name in VIOLATION_PANELS and c.is_valid:
+            return self._blank("valid clip: no %s" % name)
+        if name in ("valid", "divergence") and not c.is_valid and c.twin is None:
+            return self._blank("valid twin not found")
+        if name == "rgb":
+            img = _resize(c.video[t], S)
+            for layer in self.layers:
+                getattr(self, "_layer_" + layer)(img, t)
+            return img
+        if name == "valid":
+            return _resize((c if c.is_valid else c.twin).video[t], S)
+        if name == "camera":
+            return self._camera(t)
+        kind, arrays = {
+            "energy": ("energy", lambda: {"energy": c.energy_map}),
+            "segmentation": ("seg", lambda: {"seg": c.segmentations}),
+            "depth": ("depth", lambda: {"depth": c.pass_("depth")}),
+            "flow": ("flow", lambda: {"flow": c.pass_("forward_flow")}),
+            "backward_flow": ("flow", lambda: {"flow": c.pass_("backward_flow")}),
+            "normal": ("normals", lambda: {"normals": c.pass_("normal")}),
+            "object_coordinates": ("normals",
+                                   lambda: {"normals": c.pass_("object_coordinates")}),
+            "mask": ("mask", lambda: {"mask": c.violation_mask, "ref": c.reference_mask}),
+            "severity": ("sev", lambda: {"sev": c.severity_map}),
+            "causal": ("causal", lambda: {"causal": c.causal}),
+            "divergence": ("div", lambda: {"diverg": c.divergence}),
+        }[name]
+        args = dict(mask=None, sev=None, causal=None, diverg=None, ref=None,
+                    energy=None, seg=None, depth=None, flow=None, normals=None)
+        args.update(arrays())
+        return _panel(kind, t, c.video, size=S, **args)
 
-        _header(f, W, meta, t, T, active, observable, occluded)
-        _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
-                  float(tl["severity_t"][t]), peak, v, iwin, cwin,
-                  violator_rows)
-        out[t] = f
+    def _notes(self, f, name: str, t: int, x: int, y: int) -> None:
+        """The per-panel scale bars and read-outs, drawn on the composed frame."""
+        c, S = self.clip, self.size
+        if name in PANEL_FILES and not c.has(PANEL_FILES[name]):
+            return
+        if name in VIOLATION_PANELS and c.is_valid:
+            return
+        if name == "mask":
+            _text(f, "%d px" % int(c.violation_mask[t].sum()), (x + 5, y + S - 8),
+                  C_DIM, 0.40, 1)
+        elif name == "severity":
+            _sev_scale(f, x, y, S, float(c.timeline["severity"][t]))
+        elif name == "causal":
+            _causal_key(f, x, y, S, c.causal[t])
+        elif name == "segmentation":
+            ids = [int(u) for u in np.unique(c.segmentations[t]) if u]
+            _text(f, _fit("ids %s" % ",".join(map(str, ids)), S - 10, 0.36),
+                  (x + 5, y + S - 8), C_DIM, 0.36, 1)
+        elif name in ("flow", "backward_flow"):
+            last = t >= self.T - 1 if name == "flow" else t == 0
+            if last:
+                _text(f, "undefined on this frame", (x + 5, y + S - 8), C_DIM, 0.36, 1)
+        elif name == "depth":
+            d = np.asarray(c.pass_("depth")[t], np.float32)
+            d = d[..., 0] if d.ndim == 3 else d
+            here = d < DEPTH_SENTINEL
+            if here.any():
+                _text(f, "%.1f-%.1f m" % (d[here].min(), d[here].max()),
+                      (x + 5, y + S - 8), C_DIM, 0.36, 1)
+        elif name == "energy":
+            _energy_scale(f, x, y, S, float(np.abs(c.energy_map[t]).max()))
+            if c.has(loader.ENERGY):
+                twin = c.twin if not c.is_valid else None
+                _energy_curve(f, x, y, S, t, dict(c.energy),
+                              dict(twin.energy) if twin is not None
+                              and twin.has(loader.ENERGY) else None)
 
-    out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
-    vid.write(out, out_path, fps=int(md.get("frame_rate", 12)))
-    return {"path": out_path, "frames": T, "panels": [p[0] for p in panels],
-            "t_event": t_event, "t_observable": t_obs, "t_end": t_end,
-            "violation_windows": vwin, "observable_windows": owin}
+    def _camera(self, t: int) -> np.ndarray:
+        """Top-down (x, y) map: the camera's path and view wedge, object tracks."""
+        import cv2
+        S, cam, inst = self.size, self.clip.camera, self.clip.instances
+        img = np.full((S, S, 3), C_BLANK, np.uint8)
+        eye = np.asarray(cam["positions"], np.float64)[:, :2]
+        keep = [i for i, iid in enumerate(inst["ids"])
+                if self.roles.get(int(iid)) not in UNBOXED_ROLES]
+        tracks = np.asarray(inst["positions"], np.float64)[keep][:, :, :2]
+        pts = np.concatenate([eye, tracks.reshape(-1, 2)])
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        span = max(float((hi - lo).max()), 1e-6) * 1.15
+        mid = (lo + hi) / 2.0
+
+        def px(p):
+            return (int(S / 2 + (p[0] - mid[0]) / span * (S - 24)),
+                    int(S / 2 + 10 - (p[1] - mid[1]) / span * (S - 24)))
+
+        step = _nice_step(span / 4.0)
+        for g in np.arange(math.floor((mid[0] - span) / step) * step, mid[0] + span, step):
+            cv2.line(img, px((g, mid[1] - span)), px((g, mid[1] + span)), (36, 36, 44), 1)
+        for g in np.arange(math.floor((mid[1] - span) / step) * step, mid[1] + span, step):
+            cv2.line(img, px((mid[0] - span, g)), px((mid[0] + span, g)), (36, 36, 44), 1)
+        _text(img, "grid %.2g m" % step, (6, S - 8), C_DIM, 0.34, 1)
+
+        for j, i in enumerate(keep):
+            iid = int(inst["ids"][i])
+            col = self.colour(iid)
+            track = [px(p) for p in tracks[j]]
+            for a, b in zip(track, track[1:]):
+                cv2.line(img, a, b, tuple(int(v * 0.45) for v in col), 1, cv2.LINE_AA)
+            cv2.circle(img, track[t], 4, col, -1, cv2.LINE_AA)
+            if iid in self.ids:
+                cv2.circle(img, track[t], 7, col, 1, cv2.LINE_AA)
+
+        path = [px(p) for p in eye]
+        for a, b in zip(path, path[1:]):
+            cv2.line(img, a, b, (120, 120, 135), 1, cv2.LINE_AA)
+        R = movi.rotation_matrix(cam["quaternions"][t])
+        forward = (R @ np.array([0.0, 0.0, -1.0]))[:2]
+        if np.linalg.norm(forward) > 1e-6:
+            half = math.radians(float(cam.get("field_of_view", 40.0)) / 2.0)
+            base = math.atan2(forward[1], forward[0])
+            reach = span * 0.35
+            for side in (-half, half):
+                tip = eye[t] + reach * np.array([math.cos(base + side), math.sin(base + side)])
+                cv2.line(img, path[t], px(tip), (220, 220, 230), 1, cv2.LINE_AA)
+        cv2.circle(img, path[t], 5, (255, 255, 255), -1, cv2.LINE_AA)
+        _text(img, "camera", (path[t][0] + 8, path[t][1] + 4), C_DIM, 0.34, 1)
+        return img
+
+    # ---- layers (drawn at panel resolution, on the RGB panel) -------------
+    def _up(self, m: np.ndarray) -> np.ndarray:
+        import cv2
+        return cv2.resize(np.asarray(m, np.uint8), (self.size, self.size),
+                          interpolation=cv2.INTER_NEAREST).astype(bool)
+
+    def _layer_violation(self, img, t):
+        violation = self.clip.violation[t]
+        for iid in self.ids:
+            m = self._up(violation == iid)
+            if m.any():
+                col = np.array(self.colour(iid), np.float32)
+                img[m] = (img[m] * 0.5 + col * 0.5).astype(np.uint8)
+                img[m ^ _erode(m)] = col.astype(np.uint8)
+
+    def _layer_visible(self, img, t):
+        m = self._up(self.clip.visible_violation[t])
+        img[m ^ _erode(m)] = (255, 255, 255)
+
+    def _layer_severity(self, img, t):
+        import cv2
+        s = cv2.resize(self.clip.severity_map[t], (self.size, self.size),
+                       interpolation=cv2.INTER_NEAREST)
+        on = s > 0
+        if on.any():
+            heat = cv2.applyColorMap((np.clip(s, 0, 1) ** SEV_GAMMA * 255).astype(np.uint8),
+                                     cv2.COLORMAP_INFERNO)[..., ::-1]
+            img[on] = (img[on] * 0.25 + heat[on] * 0.75).astype(np.uint8)
+
+    def _layer_causal(self, img, t):
+        causal = self.clip.causal[t]
+        affected = self._up(causal == 2)
+        img[affected] = (img[affected] * 0.5 + np.array(C_CAUSAL2) * 0.5).astype(np.uint8)
+        img[affected ^ _erode(affected)] = C_CAUSAL2
+        violators = self._up(causal == 1)
+        img[violators ^ _erode(violators)] = C_CAUSAL1
+
+    def _layer_reference(self, img, t):
+        m = self._up(self.clip.reference_mask[t])
+        img[m ^ _erode(m)] = C_REF
+
+    def _boxed(self, t: int):
+        """(row, id) of every body worth boxing on frame `t`.
+
+        Skips the floor and the dome, and any body that does not exist on this
+        frame: a vanished body keeps a pose in the trajectory, and a box drawn
+        around nothing reads as a detection."""
+        if "present" not in self._cache:
+            table = {}
+            if self.clip.has(loader.TRAJECTORY):
+                traj = self.clip.trajectory
+                for j, bid in enumerate(traj["body_ids"]):
+                    table[int(bid)] = np.asarray(traj["present"][:, j], bool)
+            self._cache["present"] = table
+        present = self._cache["present"]
+        inst = self.clip.instances
+        return [(i, int(iid)) for i, iid in enumerate(inst["ids"])
+                if self.roles.get(int(iid)) not in UNBOXED_ROLES
+                and (int(iid) not in present or present[int(iid)][t])]
+
+    def _layer_bbox2d(self, img, t):
+        import cv2
+        boxes, S = self.clip.instances["bboxes"], self.size
+        for i, iid in self._boxed(t):
+            b = boxes[i, t]
+            if np.isnan(b).any():
+                continue
+            y0, x0, y1, x1 = (int(round(v * S)) for v in b)
+            cv2.rectangle(img, (x0, y0), (x1 - 1, y1 - 1), self.colour(iid), 1)
+
+    def _projected(self, key: str, points: np.ndarray) -> np.ndarray:
+        """Project instance-major world points [k,T,...,3] -> [k,T,...,3]
+        of (x, y) in [0, 1] and the depth sign, once per clip."""
+        if key not in self._cache:
+            cam = self.clip.camera
+            p = movi.project(np.swapaxes(points, 0, 1), cam["positions"],
+                             cam["quaternions"], cam["K"])
+            self._cache[key] = np.swapaxes(p, 0, 1)
+        return self._cache[key]
+
+    def _layer_bbox3d(self, img, t):
+        import cv2
+        S = self.size
+        proj = self._projected("bbox3d", self.clip.instances["bboxes_3d"])
+        for i, iid in self._boxed(t):
+            p = proj[i, t]
+            if (p[:, 2] <= 0).any() or not np.isfinite(p[:, :2]).all():
+                continue
+            xy = np.round(p[:, :2] * S).astype(int)
+            if np.abs(xy).max() > 8 * S:
+                continue
+            for a, b in BOX_EDGES:
+                cv2.line(img, tuple(xy[a]), tuple(xy[b]), self.colour(iid), 1, cv2.LINE_AA)
+
+    def _layer_centers(self, img, t):
+        import cv2
+        inst, S = self.clip.instances, self.size
+        for i, iid in self._boxed(t):
+            x, y = inst["image_positions"][i, t]
+            if not (0 <= x <= 1 and 0 <= y <= 1):
+                continue
+            seen = inst["visibility"][i, t] > 0
+            cv2.circle(img, (int(x * S), int(y * S)), 3, self.colour(iid),
+                       -1 if seen else 1, cv2.LINE_AA)
+
+    def _layer_velocity(self, img, t):
+        import cv2
+        inst, S = self.clip.instances, self.size
+        ahead = inst["positions"] + inst["velocities"] * VELOCITY_SECONDS
+        tips = self._projected("velocity", ahead[:, :, None, :])[:, :, 0]
+        for i, iid in self._boxed(t):
+            if float(np.linalg.norm(inst["velocities"][i, t])) < 0.05 or tips[i, t, 2] <= 0:
+                continue
+            x0, y0 = inst["image_positions"][i, t]
+            x1, y1 = tips[i, t, :2]
+            if not all(np.isfinite([x0, y0, x1, y1])):
+                continue
+            cv2.arrowedLine(img, (int(x0 * S), int(y0 * S)), (int(x1 * S), int(y1 * S)),
+                            self.colour(iid), 1, cv2.LINE_AA, tipLength=0.25)
+
+    def _layer_labels(self, img, t):
+        inst, S = self.clip.instances, self.size
+        for i, iid in self._boxed(t):
+            b = inst["bboxes"][i, t]
+            if np.isnan(b).any():
+                continue
+            mark = "! " if iid in self.ids else ""
+            _text(img, "%s%s #%d" % (mark, self.names.get(iid, iid), iid),
+                  (int(b[1] * S) + 2, max(int(b[0] * S) - 3, 10)),
+                  self.colour(iid), 0.34, 1)
+
+    def _layer_events(self, img, t):
+        import cv2
+        S = self.size
+        for e in (self.meta.get("events") or {}).get("collisions", []):
+            if int(e.get("frame", -1)) != t or e.get("image_position") is None:
+                continue
+            x, y = e["image_position"]
+            if 0 <= x <= 1 and 0 <= y <= 1:
+                r = int(3 + 2 * math.log10(1 + 10 * max(float(e.get("force", 0)), 0)))
+                cv2.circle(img, (int(x * S), int(y * S)), r, C_EVENT, 1, cv2.LINE_AA)
+
+    # ---- legend and timeline ---------------------------------------------
+    def _legend(self, f, y: int) -> None:
+        import cv2
+        x, yb = PAD + 2, y + 15
+        if self.clip.is_valid:
+            _text(f, "valid clip -- nothing here is violated", (x, yb), C_DIM, 0.40, 1)
+            x += _w("valid clip -- nothing here is violated", 0.40) + 18
+        for iid in self.ids:
+            cv2.rectangle(f, (x, yb - 9), (x + 10, yb), self.colour(iid), -1)
+            s = "violator %s #%d" % (self.names.get(iid, iid), iid)
+            _text(f, s, (x + 14, yb), C_TEXT, 0.40, 1)
+            x += 14 + _w(s, 0.40) + 16
+        if self.layers:
+            s = "layers: " + ", ".join(self.layers)
+            _text(f, _fit(s, max(self.width - x - PAD, 40), 0.36), (x, yb), C_DIM, 0.36, 1)
+
+    def _timeline(self, f, t: int, y0: int) -> None:
+        import cv2
+        T, v = self.T, self.v
+        x0, x1 = PAD + 2, self.width - PAD - 2
+        span = x1 - x0
+
+        def fx(frame):
+            return int(x0 + (frame / max(T, 1)) * span)
+
+        y = y0
+        if not self.clip.is_valid:
+            vwin = [tuple(w) for w in v.get("violation_windows", [])]
+            iwin = [tuple(w) for w in v.get("intervention_windows", [])] or vwin
+            cwin = [tuple(w) for w in v.get("consequence_windows", [])] or vwin
+            owin = [tuple(w) for w in v.get("observable_windows", [])]
+            rows = [("intervening", "being changed", iwin, C_INTERVENE),
+                    ("consequence", "still wrong", cwin, C_MASK),
+                    ("observable", "a viewer could tell", owin, C_OBS)]
+            lx = x0
+            for label, gloss, _wins, colour in rows:
+                cv2.rectangle(f, (lx, y + 3), (lx + 10, y + 12), colour, -1)
+                lx += 14
+                _text(f, label, (lx, y + 11), C_TEXT, 0.40, 1)
+                lx += _w(label, 0.40) + 4
+                _text(f, "(%s)" % gloss, (lx, y + 11), C_DIM, 0.34, 1)
+                lx += _w("(%s)" % gloss, 0.34) + 16
+            # The legend line, then a row of its own for the clock markers, so a
+            # label like `t_event=t_applied=t_obs=t_end` never lands on the legend.
+            y += 30
+            for _label_, _gloss, wins, colour in rows:
+                cv2.rectangle(f, (x0, y), (x1, y + 6), (40, 40, 48), -1)
+                for s, e in wins:
+                    cv2.rectangle(f, (fx(s), y), (max(fx(e + 1) - 1, fx(s) + 2), y + 6),
+                                  colour, -1)
+                y += CLOCK_ROW
+
+            # One row per violator: its own active window in its own colour,
+            # observable as an amber underline, occluded as a grey overline.
+            obj = self.clip.objects
+            for k, iid in enumerate(self.ids):
+                col = self.colour(iid)
+                cv2.rectangle(f, (x0, y), (x1, y + 8), (34, 34, 40), -1)
+                for key, top, colour, h in (("active", y, col, 9),
+                                            ("observable", y + 7, C_OBS, 2),
+                                            ("occluded", y, (130, 130, 140), 2)):
+                    for s, e in _runs(obj[key][k]):
+                        cv2.rectangle(f, (fx(s), top),
+                                      (max(fx(e + 1) - 1, fx(s) + 2), top + h - 1),
+                                      colour, -1)
+                name = "#%d %s" % (iid, self.names.get(iid, ""))
+                _text(f, name, (x1 - _w(name, 0.32) - 2, y + 8), col, 0.32, 1)
+                y += VIOLATOR_ROW
+
+            # Severity per violator on one 0..1 lane: the value `severity_map`
+            # paints over each body on that frame.
+            top, h = y + 2, SEVERITY_LANE - 6
+            cv2.rectangle(f, (x0, top), (x1, top + h), (26, 26, 32), -1)
+            for k, iid in enumerate(self.ids):
+                sev = np.clip(obj["severity"][k], 0, 1)
+                pts = [(fx(i + 0.5), int(top + h - sev[i] * (h - 2) - 1)) for i in range(T)]
+                for a, b in zip(pts, pts[1:]):
+                    cv2.line(f, a, b, self.colour(iid), 1, cv2.LINE_AA)
+            _text(f, "severity [0, 1]", (x0 + 3, top + 11), C_DIM, 0.32, 1)
+            y += SEVERITY_LANE
+
+        # frame ticks, labelled every 4 (every 8 on a long clip)
+        every = 4 if T <= 40 else 8
+        for i in range(T):
+            cv2.line(f, (fx(i), y), (fx(i), y + 4), (90, 90, 100), 1)
+            if i % every == 0:
+                _text(f, str(i), (fx(i) - 3, y + 15), C_DIM, 0.34, 1)
+
+        t_event = t_iend = t_obs = t_end = -1
+        if not self.clip.is_valid:
+            t_event = int(v.get("t_event_frame", -1))
+            t_obs = int(v.get("t_observable_frame", -1))
+            t_end = int(v.get("t_end_frame", -1))
+            iw = v.get("intervention_windows") or v.get("violation_windows") or []
+            t_iend = max((int(e) for _, e in iw), default=t_event)
+            marks = [(t_event, "t_event", C_INTERVENE), (t_iend, "t_applied", C_INTERVENE),
+                     (t_obs, "t_obs", C_OBS), (t_end, "t_end", (170, 170, 210))]
+            by_frame: Dict[int, List] = {}
+            for frame, tag, col in marks:
+                if 0 <= frame < T:
+                    by_frame.setdefault(frame, []).append((tag, col))
+            for frame in sorted(by_frame):
+                tags = by_frame[frame]
+                label = "=".join(tag for tag, _ in tags)
+                cv2.line(f, (fx(frame), y0 + 17), (fx(frame), y + 4), tags[0][1], 1)
+                tx = fx(frame) + 3
+                if tx + _w(label, 0.36) > x1:
+                    tx = fx(frame) - _w(label, 0.36) - 3
+                _text(f, label, (tx, y0 + 27), tags[0][1], 0.36, 1)
+
+        px = fx(t) + max(1, span // (2 * max(T, 1)))
+        cv2.line(f, (px, y0 + 17), (px, y + 5), (255, 255, 255), 1)
+
+        if self.clip.is_valid:
+            info = "valid twin of %s" % self.clip.pair_uid
+        else:
+            peak = v.get("peak_residual") or {}
+            info = ("t_event=%d  applied_to=%d  t_obs=%d  t_end=%d  lag=%d  |  "
+                    "severity(t)=%.3f  peak=%.3f  r=%.3f (%s)"
+                    % (t_event, t_iend, t_obs, t_end, v.get("observability_lag_frames", 0),
+                       float(self.clip.timeline["severity"][t]),
+                       float(peak.get("score", 0.0)), float(peak.get("value", 0.0)),
+                       peak.get("law", "-")))
+        _text(f, _fit(info, span, 0.44), (x0, self.height - 8), C_TEXT, 0.44, 1)
 
 
 # ------------------------------------------------------------------ panels
@@ -193,7 +606,7 @@ SEG_PALETTE = [
 ]
 #: Depth beyond this is the renderer's "nothing here" sentinel (~1e10), not a
 #: distance. Anything past it is background and must not enter the normalisation.
-DEPTH_SENTINEL = 1e6
+DEPTH_SENTINEL = loader.DEPTH_BACKGROUND
 
 
 _FLOW_SCALE_CACHE: Dict[int, float] = {}
@@ -336,6 +749,15 @@ def _w(s, scale, thick=1):
     return cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)[0][0]
 
 
+def _fit(s: str, width: int, scale: float) -> str:
+    """`s`, cut with an ellipsis until it fits `width` pixels."""
+    if _w(s, scale) <= width:
+        return s
+    while s and _w(s + "...", scale) > width:
+        s = s[:-1]
+    return s + "..."
+
+
 def _header(f, W, meta, t, T, active, observable, occluded):
     """Laid out right-to-left from measured widths so nothing ever collides."""
     import cv2
@@ -360,8 +782,8 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     right_limit = x - 14
 
     # --- left edge: identity, then metadata if it still fits ---
-    left = "%s / %s / %s" % (md.get("domain"), md.get("family"),
-                             md.get("scenario"))
+    left = ("%s / %s / %s" % (md.get("domain"), md.get("family"), md.get("scenario"))
+            if md.get("label") != "valid" else "valid / %s" % md.get("scenario"))
     _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
     lx = PAD + 2 + _w(left, 0.52) + 22
     sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
@@ -390,8 +812,8 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     if isinstance(nc, int) and nc > 1:
         timing = v.get("violator_timing")
         bits.append("%d violators%s" % (nc, " (%s)" % timing
-                                       if timing in ("independent", "sync")
-                                       else ""))
+                                        if timing in ("independent", "sync")
+                                        else ""))
     bits += ["seed %s" % md.get("seed"), "tier %s" % md.get("tier")]
     for k in range(len(bits), 0, -1):
         mid = "   ".join(x for x in bits[:k] if x)
@@ -404,108 +826,6 @@ def _header(f, W, meta, t, T, active, observable, occluded):
 #: they overlap at the start and the eye needs to separate "we are changing
 #: something" from "the scene is wrong as a result".
 C_INTERVENE = (120, 200, 255)
-
-
-def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
-              iwin=None, cwin=None, violator_rows=None):
-    import cv2
-    violator_rows = violator_rows or []
-    extra = VIOLATOR_ROW * len(violator_rows)
-    y0 = H - TIMELINE - extra + 4
-    x0, x1 = PAD + 2, W - PAD - 2
-    span = x1 - x0
-
-    def fx(frame):
-        return int(x0 + (frame / max(T, 1)) * span)
-
-    # THREE clocks, not two. The split is in the data but was not drawn, so a
-    # `colour_shift` whose intervention ends at frame 14 still looked like it
-    # ran to frame 24 -- the bar being shown was the union, which does.
-    iwin = iwin if iwin else vwin
-    cwin = cwin if cwin else vwin
-    rows = [("intervening", "being changed", iwin, C_INTERVENE),
-            ("consequence", "still wrong", cwin, C_MASK),
-            ("observable", "a viewer could tell", owin, C_OBS)]
-
-    # A filled swatch in the bar's own colour, then the name in white. Colouring
-    # the text instead left the reader matching a thin coloured glyph against a
-    # thick coloured bar, which is exactly the guessing this legend exists to
-    # remove -- and the three colours have no conventional meaning to fall back
-    # on. The gloss says what the window means, not just what it is called.
-    lx = x0
-    for label, gloss, _wins, colour in rows:
-        cv2.rectangle(f, (lx, y0 + 3), (lx + 10, y0 + 12), colour, -1)
-        cv2.rectangle(f, (lx, y0 + 3), (lx + 10, y0 + 12), (20, 20, 26), 1)
-        lx += 14
-        _text(f, label, (lx, y0 + 11), C_TEXT, 0.40, 1)
-        lx += _w(label, 0.40) + 4
-        gl = "(%s)" % gloss
-        _text(f, gl, (lx, y0 + 11), C_DIM, 0.34, 1)
-        lx += _w(gl, 0.34) + 16
-
-    for row, (_label, _gloss, wins, color) in enumerate(rows):
-        ry = y0 + 16 + row * 9
-        cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
-        # The row's own colour repeated at the left edge, so a bar that happens
-        # to start late is still identifiable without counting rows.
-        cv2.rectangle(f, (x0 - 1, ry), (x0 + 1, ry + 7), color, -1)
-        for s, e in wins:
-            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
-                          color, -1)
-
-    # Each violator's own violation windows, below the clip's three rows, named
-    # by the instance id that `violation_ids.npz` and `causal_ids.npz` use.
-    for k, (cid, wins) in enumerate(violator_rows):
-        ry = y0 + 16 + (len(rows) + k) * VIOLATOR_ROW
-        color = C_VIOLATORS[k % len(C_VIOLATORS)]
-        cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
-        for s, e in wins:
-            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
-                          color, -1)
-        _text(f, "id %d" % cid, (x1 - _w("id %d" % cid, 0.30) - 2, ry + 7),
-              color, 0.30, 1)
-
-    # frame ticks every frame, labelled every 4
-    ty = y0 + 45 + extra
-    for i in range(T):
-        cv2.line(f, (fx(i), ty), (fx(i), ty + 4), (90, 90, 100), 1)
-        if i % 4 == 0:
-            _text(f, str(i), (fx(i) - 3, ty + 15), C_DIM, 0.34, 1)
-
-    # Markers. Clocks that land on the same frame -- t_event == t_obs is the
-    # common case whenever nothing occludes the violator -- are merged into one
-    # label rather than overprinted.
-    t_iend = max((e for _, e in iwin), default=t_event)
-    marks = [(t_event, "t_event", C_INTERVENE),
-             (t_iend, "t_applied", C_INTERVENE),
-             (t_obs, "t_obs", C_OBS),
-             (t_end, "t_end", (170, 170, 210))]
-    by_frame = {}
-    for frame, tag, col in marks:
-        if 0 <= frame < T:
-            by_frame.setdefault(frame, []).append((tag, col))
-    for frame in sorted(by_frame):
-        tags = by_frame[frame]
-        col = tags[0][1]
-        label = "=".join(t for t, _ in tags)
-        cv2.line(f, (fx(frame), y0 + 14), (fx(frame), ty + 4), col, 1)
-        tw = _w(label, 0.36)
-        tx = fx(frame) + 3
-        if tx + tw > x1:
-            tx = fx(frame) - tw - 3
-        _text(f, label, (tx, y0 + 13), col, 0.36, 1)
-
-    # playhead
-    px = fx(t) + max(1, span // (2 * max(T, 1)))
-    cv2.line(f, (px, y0 + 14), (px, ty + 5), (255, 255, 255), 1)
-
-    lag = v.get("observability_lag_frames", 0)
-    info = ("t_event=%d  applied_to=%d  t_obs=%d  t_end=%d  lag=%d  |  "
-            "severity(t)=%.3f  peak=%.3f  r=%.3f (%s)"
-            % (t_event, t_iend, t_obs, t_end, lag, sev_t,
-               float(peak.get("score", 0.0)), float(peak.get("value", 0.0)),
-               peak.get("law", "-")))
-    _text(f, info, (x0, H - 6), C_TEXT, 0.44, 1)
 
 
 def _sev_scale(f, x, y, size, value):
@@ -541,7 +861,7 @@ def _causal_key(f, x, y, panel, layer):
     The array is uint8 with three values and no key anywhere on the frame, so
     "what is red and what is blue" was a question the overlay made a reader ask
     and then did not answer. Red is the violator -- the body the plan names --
-    and blue is a body it disturbed, which is measured rather than declared.
+    and blue is a body it affected, which is measured rather than declared.
     Counts beside each, because a level that is present in the legend and absent
     from the image is worth being able to tell apart from one that is simply
     hard to see.
@@ -578,29 +898,11 @@ def _text(img, s, org, color, scale, thick=1, backing=True):
                 cv2.LINE_AA)
 
 
-# ------------------------------------------------------------------ io
-def _json(p):
-    with open(p) as fh:
-        return json.load(fh)
-
-
-def _npz(clip_dir, fname, key):
-    p = os.path.join(clip_dir, fname)
-    if not os.path.exists(p):
-        return None
-    z = np.load(p)
-    return z[key] if key in z.files else z[z.files[0]]
-
-
-def _rgb(clip_dir, T):
-    import imageio.v2 as imageio
-    p = os.path.join(clip_dir, layout.VIDEO)
-    if not os.path.exists(p):
-        raise FileNotFoundError("no %s in %s" % (layout.VIDEO, clip_dir))
-    r = imageio.get_reader(p)
-    frames = [np.asarray(x)[..., :3] for x in r]
-    r.close()
-    return np.stack(frames[:T]).astype(np.uint8)
+# ------------------------------------------------------------------ helpers
+def _resize(img: np.ndarray, size: int) -> np.ndarray:
+    import cv2
+    return cv2.resize(np.ascontiguousarray(img[..., :3]), (size, size),
+                      interpolation=cv2.INTER_NEAREST)
 
 
 def _erode(m):
@@ -610,22 +912,27 @@ def _erode(m):
     return e
 
 
+def _runs(flags) -> List[tuple]:
+    """Inclusive (start, end) of each run of True."""
+    out, start = [], None
+    for i, on in enumerate(np.asarray(flags, bool)):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            out.append((start, i - 1))
+            start = None
+    if start is not None:
+        out.append((start, len(flags) - 1))
+    return out
+
+
+def _nice_step(x: float) -> float:
+    """1, 2 or 5 times a power of ten, at least `x`."""
+    p = 10 ** math.floor(math.log10(max(x, 1e-9)))
+    return next(m * p for m in (1, 2, 5, 10) if m * p >= x)
+
+
 # ------------------------------------------------------------------ energy
-def _twin_dir(clip_dir, meta):
-    """Sibling clip directory named by `twin_uid`, or None."""
-    twin = layout.identity(meta).get("twin_uid")
-    if not twin:
-        return None
-    root = os.path.dirname(os.path.dirname(os.path.abspath(clip_dir)))
-    cand = os.path.join(root, os.path.basename(os.path.dirname(twin)),
-                        os.path.basename(twin))
-    if os.path.isdir(cand):
-        return cand
-    cand = os.path.join(os.path.dirname(os.path.abspath(clip_dir)),
-                        os.path.basename(twin))
-    return cand if os.path.isdir(cand) else None
-
-
 def _energy_trace(clip_dir):
     if not clip_dir:
         return None

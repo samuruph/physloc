@@ -96,6 +96,28 @@ def test_a_clip_path_names_its_identity():
                  "pair_uid": "mini/L1/drop/0005_camera-multi"}
 
 
+def test_the_loader_imports_by_path_without_the_package():
+    """Another environment imports `loader.py` by path, without `physloc`
+    installed and often without registering the module in `sys.modules` -- which
+    is exactly what broke a `@dataclass` in it."""
+    import ast
+    import importlib.util
+
+    with open(L.__file__) as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.level == 0 and not (node.module or "").startswith("physloc"), (
+                "loader.py must not import from physloc")
+        if isinstance(node, ast.Import):
+            assert not any(a.name.startswith("physloc") for a in node.names)
+
+    spec = importlib.util.spec_from_file_location("physloc_loader_by_path", L.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.Pair("some/pair").invalids == []
+
+
 # ---- a generated release ----------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -117,6 +139,7 @@ def test_every_pair_has_its_valid_twin_and_shapes_agree(dataset):
         assert pair.valid is not None and pair.invalids, pair.pair_uid
         T, H, W = pair.valid.segmentations.shape
         assert pair.valid.video.shape == (T, H, W, 3)
+        assert os.path.exists(pair.valid.video_path)
         assert not pair.valid.violation_mask.any()
         for clip in pair.invalids:
             K = len(clip.violator_ids)

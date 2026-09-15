@@ -37,7 +37,6 @@ import json
 import os
 import tarfile
 import tempfile
-from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -299,6 +298,12 @@ class Clip:
 
     # ---- what the renderer made ------------------------------------------
     @property
+    def video_path(self) -> str:
+        """A path to this clip's `video.mp4`, for tools that open the file
+        themselves -- a temporary copy when the clip is read from a shard."""
+        return self._src.video_path()
+
+    @property
     def video(self) -> np.ndarray:
         """uint8 [T,H,W,3]."""
         return self._cached("video", lambda: _decode_video(self._src.video_path()))
@@ -458,16 +463,25 @@ class Clip:
         return "Clip(%s)" % self.uid
 
 
-@dataclass
 class Pair:
-    """One scene: its valid clip and every invalid clip made from it."""
-    pair_uid: str
-    valid: Optional[Clip]
-    invalids: List[Clip] = field(default_factory=list)
+    """One scene: its valid clip and every invalid clip made from it.
+
+    A plain class, not a dataclass: `@dataclass` looks its module up in
+    `sys.modules`, and a loader imported by path is not always registered there.
+    """
+
+    def __init__(self, pair_uid: str, valid: Optional[Clip] = None,
+                 invalids: Optional[List[Clip]] = None):
+        self.pair_uid = pair_uid
+        self.valid = valid
+        self.invalids = list(invalids or [])
 
     @property
     def prompt(self) -> Optional[str]:
         return (self.valid or self.invalids[0]).prompt
+
+    def __repr__(self) -> str:
+        return "Pair(%s, %d invalid)" % (self.pair_uid, len(self.invalids))
 
 
 # ---------------------------------------------------------------------------

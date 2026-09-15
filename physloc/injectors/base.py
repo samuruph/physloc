@@ -923,6 +923,41 @@ class Injector:
             self._fit_memo.pop(next(iter(self._fit_memo)))
         self._fit_memo[key] = (result, spec, traj)
 
+    #: How much stricter a fit gets on each event attempt after the first. The
+    #: fits are measured on the host's integrator and the worker's visibility
+    #: gate on PyBullet's rollout, and the two disagree by a few frames: a
+    #: bounce the preview kept in shot left it on the solver. Every attempt used
+    #: to fit the same way, so a family whose moment is fixed by the physics --
+    #: `superelastic`'s first impact, `support`'s third of the clip -- planned
+    #: the identical declined variant four times. Each retry now asks for more
+    #: of the span in shot and spends none of the off-screen allowance.
+    FIT_RETRY_SHARE = 0.15
+    #: ...and BACKS OFF from what the preview allowed, because a stricter check
+    #: of the same preview changes nothing when the preview is what is wrong.
+    #: The host integrates a medium far more gently than PyBullet does: on
+    #: `pour` at release a 9-frame reversal the preview kept in shot carried the
+    #: pile 6 m up in the container, and a bounce fitted at 0.48 of its excess
+    #: sprayed it -- each identically on all four attempts. A retry now steps
+    #: this many rungs further down the ladder, or keeps this fraction of the
+    #: fitted window, per attempt.
+    FIT_RETRY_RUNGS = 2
+    FIT_RETRY_WINDOW = 0.6
+
+    def _fit_gate(self, spec, traj, bodies, t0: int) -> bool:
+        """Would the worker's visibility gate accept `traj` for these bodies?
+
+        The fits used to count frames off screen against a budget, which is
+        not the question the worker asks: it wants the opening moments after
+        the event in shot and a share of the span after it. A fit that passed
+        its budget and failed the gate declined the whole variant.
+        """
+        movers = [b for b in bodies if not getattr(b, "static", False)]
+        if spec is None or not movers or not isinstance(traj, Trajectory):
+            return True
+        share = min(1.0, _geom.VISIBLE_AFTER_SHARE
+                    + self.FIT_RETRY_SHARE * _geom.event_attempt())
+        return _geom.culprits_visible(spec, traj, movers, t0, tolerance=share)
+
     def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
                       build, tolerance: int = 1, ladder=None, memo=None):
         """Weaken `knob` until the culprit stays on screen, and return what stuck.
@@ -955,13 +990,20 @@ class Injector:
                             ladder, memo)
         if key is not None and key in self._fit_memo:
             return self._fit_memo[key][0]
+        if _geom.event_attempt() > 0:
+            tolerance = 0
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
+        # The gate only binds where the lawful clip passes it: a scene that
+        # already loses its actor is a framing problem no weakening can fix.
+        gated = self._fit_gate(spec, traj, bodies, t0)
         built = {}
 
         def fits(i: int) -> bool:
             if i not in built:
                 built[i] = build(ladder[i])
-            return self._offscreen_frames(spec, built[i], bodies, t0) <= budget
+            return (self._offscreen_frames(spec, built[i], bodies, t0) <= budget
+                    and (not gated
+                         or self._fit_gate(spec, built[i], bodies, t0)))
 
         # THE STRONGEST RUNG FIRST, then a bisection. Every rung is a full
         # re-integration, and for a medium that is `_rewrite_group` over every
@@ -984,6 +1026,13 @@ class Injector:
                     else:
                         lo = mid + 1
                 got = (ladder[hi], built[hi])
+        attempt = _geom.event_attempt()
+        if attempt > 0:
+            i = min(len(ladder) - 1,
+                    ladder.index(got[0]) + self.FIT_RETRY_RUNGS * attempt)
+            if i not in built:
+                built[i] = build(ladder[i])
+            got = (ladder[i], built[i])
         if key is not None:
             self._remember_fit(key, got, spec, traj)
         return got
@@ -1010,10 +1059,15 @@ class Injector:
                             (n_win, floor), memo)
         if key is not None and key in self._fit_memo:
             return self._fit_memo[key][0]
+        if _geom.event_attempt() > 0:
+            tolerance = 0
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
+        gated = self._fit_gate(spec, traj, bodies, t0)
 
         def fits(n: int) -> bool:
-            return self._offscreen_frames(spec, build(n), bodies, t0) <= budget
+            out = build(n)
+            return (self._offscreen_frames(spec, out, bodies, t0) <= budget
+                    and (not gated or self._fit_gate(spec, out, bodies, t0)))
 
         # THE REQUESTED WINDOW FIRST, then a bisection for the longest one that
         # fits -- the same reasoning as `_fit_to_frame`. Walking down one frame
@@ -1035,6 +1089,9 @@ class Injector:
                 else:
                     hi = mid - 1
             got = lo
+        attempt = _geom.event_attempt()
+        if attempt > 0:
+            got = max(floor, int(round(got * self.FIT_RETRY_WINDOW ** attempt)))
         if key is not None:
             self._remember_fit(key, got, spec, traj)
         return got

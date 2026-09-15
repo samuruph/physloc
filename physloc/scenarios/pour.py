@@ -106,7 +106,9 @@ class Pour(Scenario):
             walls.append(BodySpec(
                 name="wall_%d" % i, kind="cube",
                 position=(cx_, cy_, wall_h), scale=(sx, sy, wall_h),
-                mass=0.0, static=True, friction=0.6, restitution=0.1,
+                # 0.4, the ground's own: at 0.1 a grain striking a wall kept 2%
+                # of its normal speed and stopped dead against it.
+                mass=0.0, static=True, friction=0.6, restitution=0.4,
                 color=(0.34, 0.35, 0.40), segmentation_id=self.SEG_WALLS[i],
                 role="prop"))
 
@@ -141,14 +143,26 @@ class Pour(Scenario):
                           rad * float(rng.uniform(-1, 1)), z0),
                 scale=(r,) * 3,
                 velocity=(0.0, 0.0, float(rng.uniform(-0.4, 0.0))),
-                mass=0.12, friction=0.5, restitution=0.2,
+                # PyBullet multiplies the pair's restitution, so 0.2 left a
+                # grain landing on the ground 8% of its bounce and one landing
+                # on another grain 4%: the pour stuck where it touched.
+                mass=0.12, friction=0.5, restitution=0.6,
                 # What lets the medium HOLD A PILE. Without it the grains are
                 # frictionless rollers with no angle of repose, and the pour
                 # settled one grain deep across the whole box however narrowly
                 # it was poured -- see `BodySpec.rolling_friction`. Well under
                 # the 0.08-0.24 the `friction` family solves for, so that
                 # violation still has room to be a violation.
-                rolling_friction=0.12,
+                #
+                # 0.05, down from 0.12. At 0.12 against a 0.06 m grain the
+                # torque locked each grain where it landed -- it moved a median
+                # 0.07 m after first contact and was still 4 frames later, which
+                # reads as grains glued in place. Measured in the container at
+                # the debug tier (seed 777, 37 frames), with restitution 0.6
+                # and walls at 0.4: 0.13 m of travel and a visible rebound (p90
+                # 0.04 m), with the tallest tenth of the pile still 4 radii up.
+                # At 0.02 it travelled further but the pile flattened to 3.
+                rolling_friction=0.05,
                 color=C.hue_rgb((hue + 0.03 * i) % 1.0, s=0.5, v=0.85),
                 segmentation_id=SEG_GRAIN_BASE + i, role="actor"))
             del ang

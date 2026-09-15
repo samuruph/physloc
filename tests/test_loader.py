@@ -148,13 +148,20 @@ def test_a_batch_collates(dataset):
 def test_exported_shards_read_back_identically(dataset, tmp_path):
     from physloc.release import export
 
+    # WITH the passes: a clip then spans two tars, its core and its passes
+    # shard, and reading every member from the last tar opened returned garbage.
     out = str(tmp_path / "pack")
-    export.export(RELEASE, out)
+    export.export(RELEASE, out, with_passes=True)
     packed = L.PhysLocDataset(out)
     assert len(packed) == len(dataset)
+    assert sum(len(L.PhysLocDataset(out, split=name))
+               for name, _ in export.SPLIT_FRACTIONS) == len(dataset)
     by_uid = {c.uid: c for c in packed.clips}
     for clip in dataset.clips:
         other = by_uid[clip.uid]
+        assert other.metadata == clip.metadata
+        if clip.has("depth.npz"):
+            assert np.array_equal(other.pass_("depth"), clip.pass_("depth"))
         assert np.array_equal(other.violation, clip.violation)
         assert np.array_equal(other.severity_map, clip.severity_map)
         assert np.array_equal(other.reference_mask, clip.reference_mask)

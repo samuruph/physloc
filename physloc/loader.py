@@ -192,18 +192,20 @@ class _DirSource:
 
 
 class _TarSource:
-    """One clip's members inside a tar, read by offset -- nothing is extracted."""
+    """One clip's members inside tar shards, read by offset -- nothing is extracted.
 
-    def __init__(self, tar_path: str, members: Dict[str, tuple]):
-        self.tar_path = tar_path
-        self.members = members           # file name -> (data offset, size)
+    A clip can span two tars, its core shard and the optional passes shard, so
+    every member remembers which tar it is in."""
+
+    def __init__(self, members: Dict[str, tuple]):
+        self.members = members           # file name -> (tar path, data offset, size)
 
     def has(self, name: str) -> bool:
         return name in self.members
 
     def read(self, name: str) -> bytes:
-        offset, size = self.members[name]
-        with open(self.tar_path, "rb") as fh:
+        path, offset, size = self.members[name]
+        with open(path, "rb") as fh:
             fh.seek(offset)
             return fh.read(size)
 
@@ -502,16 +504,14 @@ def _index_dirs(root: str) -> List[tuple]:
 
 def _index_tars(paths: Iterable[str]) -> List[tuple]:
     grouped: Dict[str, Dict[str, tuple]] = {}
-    owner: Dict[str, str] = {}
     for path in sorted(paths):
         with tarfile.open(path) as tf:
             for m in tf.getmembers():
                 if not m.isfile():
                     continue
                 key, _, name = m.name.partition(".")
-                grouped.setdefault(key, {})[name] = (m.offset_data, m.size)
-                owner[key] = path
-    return [(key.replace("__", "/"), _TarSource(owner[key], files))
+                grouped.setdefault(key, {})[name] = (path, m.offset_data, m.size)
+    return [(key.replace("__", "/"), _TarSource(files))
             for key, files in sorted(grouped.items())]
 
 
@@ -525,7 +525,8 @@ class PhysLocDataset:
         PhysLocDataset(root, label="invalid", family=("permanence", "solidity"),
                        level="L0", condition="standard", split="main")
 
-    `split` reads `splits/<name>.txt` (pair uids) and so needs an exported root.
+    `split` reads `splits/<name>.txt` (clip or pair uids) and so needs an
+    exported root.
     """
 
     FILTERS = ("label", "family", "scenario", "level", "condition", "severity_bin")
@@ -542,10 +543,12 @@ class PhysLocDataset:
         rows = _index_tars(shards) if shards else _index_dirs(root)
         want = {k: ({v} if isinstance(v, str) or v is None else set(v))
                 for k, v in filters.items()}
-        pairs_in_split = None
+        in_split = None
         if split is not None:
+            # `physloc export` lists clip uids; a pair uid names every clip of
+            # its pair. Pairs never straddle a split, so either selects the same.
             with open(os.path.join(root, "splits", "%s.txt" % split)) as fh:
-                pairs_in_split = {line.strip() for line in fh if line.strip()}
+                in_split = {line.strip() for line in fh if line.strip()}
 
         self.clips: List[Clip] = []
         self._fields: List[Dict[str, Optional[str]]] = []
@@ -553,7 +556,7 @@ class PhysLocDataset:
             f = _path_fields(uid)
             if any(f.get(k) not in v for k, v in want.items()):
                 continue
-            if pairs_in_split is not None and f["pair_uid"] not in pairs_in_split:
+            if in_split is not None and uid not in in_split and f["pair_uid"] not in in_split:
                 continue
             self.clips.append(Clip(source))
             self._fields.append(f)

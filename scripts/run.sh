@@ -130,6 +130,17 @@ REL=$($PV config-path --config "$CONFIG" "${OUTDIR_ARG[@]}" 2>/dev/null \
 echo "== validate =="
 $PV validate "$REL" || true
 
+# `generate` writes stats as its last act, but a run that was interrupted and
+# resumed, or re-annotated since, can carry figures from an older state -- and
+# they cost seconds, so draw them again from what is on disk now.
+echo "== stats: the six figures and stats.json -> $REL/stats =="
+$PV stats "$REL" || true
+
+# Kept beside the run, not just in the scroll-back: it is the list of cells
+# whose violation cannot be seen, which is the first thing to read in the morning.
+echo "== audit: cells whose violation is not visible -> $REL/audit.txt =="
+$PV audit "$REL" 2>&1 | tee "$REL/audit.txt" || true
+
 # Which severity bins this release actually contains.
 # clips/<release>/<level>/<scenario>/<seed>/<clip> -- the level joined the key
 # when one run started producing several levels, so these depths went up by one.
@@ -153,6 +164,26 @@ done
 #   python -m physloc.cli viz out/review_conditions --outdir out/inspect
 echo "== grids and sheets -> $REL/viz =="
 $PV viz "$REL" || true
+
+# Structure videos: variants and conditions of a cell side by side, at every
+# level this run holds (`--level` defaults to L0, which an L3-only run would not
+# have), and the levels themselves when there are several. Capped per kind,
+# spread over the scenarios, because every eligible cell is hundreds of videos
+# on a full review. Across separate runs, `run_reviews.sh` compares them all.
+COMPARE_LIMIT="${PHYSLOC_COMPARE_LIMIT:-12}"
+LEVELS=$(find "$REL/clips" -mindepth 2 -maxdepth 2 -type d -name 'L[0-9]' \
+         -printf '%f\n' 2>/dev/null | sort -u)
+echo "== compare: structure videos -> $REL/compare (levels: ${LEVELS:-none}) =="
+for LEVEL in $LEVELS; do
+  for KIND in variants conditions; do
+    $PV compare "$REL" --kind "$KIND" --level "$LEVEL" --limit "$COMPARE_LIMIT" \
+        --outdir "$REL/compare/$LEVEL" || true
+  done
+done
+if [ "$(echo "$LEVELS" | wc -w)" -gt 1 ]; then
+  $PV compare "$REL" --kind levels --limit "$COMPARE_LIMIT" \
+      --outdir "$REL/compare" || true
+fi
 
 echo "== randomisation: is the sampler actually varying? (renders nothing) =="
 $PV randomisation --seeds 24 || true
@@ -191,6 +222,10 @@ $PV export "$REL" --outdir "out/hf/$(basename "$REL")" "${PUSH[@]}" || true
 echo
 echo "done -> $REL"
 echo "  coverage_strong.mp4            scenario x family lattice -- open this first"
+echo "  audit.txt                      cells whose violation is not visible"
+echo "  stats/                         1_overview.png ... 6_timing_and_severity.png, stats.json"
+echo "  viz/                           every grid and sheet, one folder"
+echo "  compare/<level>/{variants,conditions}/   one cell's structure side by side"
 echo "  out/hf/$(basename "$REL")/       packaged dataset: index.parquet plays the videos"
 echo "  clips/*/*/*/sheet_strong.mp4   one scenario: every family x every annotation"
 echo "  clips/*/*/*/grid_<family>.mp4  one family: every severity x every annotation"

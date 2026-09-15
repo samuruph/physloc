@@ -112,7 +112,12 @@ LAWFUL_MAGNITUDE = {
     "gravity_scale_deviation": 0.0,
     "count_ratio": 1.0,
     "volume_ratio": 1.0,
-    "energy_gain_ratio": 1.0,
+    # ZERO, for the same reason as gravity: `superelastic` reports
+    # `gain ** 2 - 1`, which is already the gain over a lawful bounce. At 1.0
+    # the guard scored `|gain ** 2 - 2|`, ordered only while every gain stayed
+    # above sqrt(2) -- and a frame-fitted `drop` bounce of 1.04 / 1.08 / 1.15
+    # read as weak the strongest of the three.
+    "energy_gain_ratio": 0.0,
     "mass_ratio_removed": 1.0,
 }
 

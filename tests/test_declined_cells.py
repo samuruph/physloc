@@ -36,6 +36,27 @@ def _culprits(spec, plan):
             if i in by_id and not by_id[i].static]
 
 
+@pytest.mark.parametrize("seed", [777, 778, 779])
+def test_superelastic_drop_bounce_stays_in_shot(seed):
+    """The shared ladder bottomed out at a 2.4x bounce, which put the ball
+    10-13 m up on every seed; the deeper one finds a gain the frame holds."""
+    spec, traj = _roll("drop", seed)
+    inj = injectors.get("superelastic")
+    plan = _plan(inj, spec, traj)
+    assert plan is not None
+    out = inj.apply(spec, traj, plan)
+    assert _geom.culprits_visible(spec, out, _culprits(spec, plan), plan.t_event)
+    assert plan.params["speed_gain"] > 1.0
+
+
+def test_superelastic_bins_stay_ordered_after_a_deep_fit():
+    spec, traj = _roll("drop", 777)
+    inj = injectors.get("superelastic")
+    gains = [_plan(inj, spec, traj, sev).params["speed_gain"]
+             for sev in ("weak", "medium", "strong")]
+    assert gains[0] < gains[1] < gains[2]
+
+
 def test_a_retry_fits_no_stronger_than_the_first_attempt():
     """Attempts used to plan the identical variant four times over."""
     spec, traj = _roll("drop", 778)

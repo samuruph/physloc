@@ -1014,6 +1014,18 @@ class SuperElastic(Injector):
     #: leave the shot sooner -- that is what the violation looks like -- and the
     #: cost is a few frames of empty mask at the tail.
     FRAME_TOLERANCE = 4
+    #: DEEPER than the shared ladder. A dropped ball arrives at its fastest,
+    #: so the shared floor of 0.28 -- a speed gain of 2.4 -- still threw it
+    #: 10-13 m up on every `drop` seed measured (777-781), and on `stack_topple`
+    #: the pair left the shot four frames after the bounce. Each of those
+    #: clips was declined rather than rendered weaker. A gain of 1.15-1.25 is
+    #: what the frame holds there, and it still returns the ball higher than
+    #: it fell, which is the violation.
+    FIT_LADDER = Injector.FIT_LADDER + (0.22, 0.17, 0.13, 0.10, 0.07, 0.05,
+                                        0.03)
+    #: Share of the visible extent a boosted grain of a MEDIUM may climb --
+    #: see `frame_speed_cap` in `plan`.
+    MEDIUM_RISE_SHARE = 0.5
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as
@@ -1249,10 +1261,18 @@ class SuperElastic(Injector):
                    # which this family already documents as not describing the
                    # staged rollout. So the bound it could not enforce on the
                    # preview is enforced on the solver instead.
-                   "frame_speed_cap": float(
-                       cam.frame_extent(spec.camera_position,
-                                        spec.camera_look_at)
-                       / max(self.FRAME_TOLERANCE * float(traj.dt), 1e-9)),
+                   #
+                   # A RISE, not a crossing. This was the frame's extent over
+                   # `FRAME_TOLERANCE` frames -- 11.5 m/s on `pour` at release,
+                   # the speed of something that has LEFT the shot by then --
+                   # and grains launched at it in the container ended a median
+                   # 5 m up with 9% of the pile in shot. Now the speed that
+                   # carries a grain up half the visible extent and no higher.
+                   "frame_speed_cap": float(np.sqrt(
+                       2.0 * float(np.linalg.norm(traj.gravity))
+                       * self.MEDIUM_RISE_SHARE
+                       * cam.frame_extent(spec.camera_position,
+                                          spec.camera_look_at))),
                    "surface_top": top,
                    "speed_gain": gain, "n_bounces": len(windows),
                    "r_strong": float(r_strong),
@@ -1503,6 +1523,8 @@ class SuperElastic(Injector):
                 return
             for sid, idx in movers:
                 w = watch[sid]
+                if crowd and w.get("spent"):
+                    continue
                 points = [c for c in pb.getContactPoints(bodyA=idx)
                           if float(c[9]) > 1e-6]
                 if not points:
@@ -1552,6 +1574,14 @@ class SuperElastic(Injector):
                 pb.resetBaseVelocity(idx, (v + n * (target - out_speed)).tolist(),
                                      list(pb.getBaseVelocity(idx)[1]))
                 w["ready"] = False
+                # ONE BOUNCE PER GRAIN. A frame of flight re-armed a grain for
+                # its next landing, which is right for a dropped ball and is a
+                # chain reaction in a pile: measured on `pour` at release, the
+                # median grain was still moving at 5-7 m/s twenty frames on,
+                # against a lawful pile at rest. A medium arriving
+                # super-elastically is each grain coming back harder once.
+                if crowd:
+                    w["spent"] = True
 
         return (boost,)
 

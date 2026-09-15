@@ -103,7 +103,13 @@ class Support(Injector):
                        # obviously airborne pour.
                        "surface_top": (float(_geom.surface_top(spec, actor))
                                        if len(targets) > 1 else float(top)),
-                       "clearance_radii": clearance, "mode": mode})
+                       "clearance_radii": clearance, "mode": mode,
+                       # The path a SLIDING body lawfully takes from here, as
+                       # its horizontal velocity per frame -- see `stage`.
+                       "lawful_xy_velocity": (
+                           traj.lin_vel[t0:, bi, :2].astype(float).tolist()
+                           if mode == "hover_moving" and len(targets) <= 1
+                           else None)})
 
         # KEEP THE HOVER IN SHOT. A body caught a third of the way through a
         # `drop` is still high, and lifting it the strong bin's 3.6 radii from
@@ -182,11 +188,26 @@ class Support(Injector):
         if not targets:
             return ()
 
-        def weightless(_client, _step, _frame):
+        # A SLIDING BODY FOLLOWS ITS LAWFUL PATH, lifted clear -- which is what
+        # `_apply` draws and what the family says. Cancelling gravity alone
+        # also cancelled the floor friction that was slowing it, so it glided
+        # on at its launch speed: on `stack_topple` at 37 frames the top block
+        # left the shot 3 m out where the lawful one stopped at 1.94 m, on
+        # every attempt, since a lower hover does nothing for a drift.
+        lawful = plan.notes.get("lawful_xy_velocity")
+        t0 = int(plan.t_event)
+
+        def weightless(_client, _step, frame):
             for idx, mass in targets:
                 pos, _ = pb.getBasePositionAndOrientation(idx)
                 pb.applyExternalForce(idx, -1, (-g * mass).tolist(), list(pos),
                                       pb.WORLD_FRAME)
+                if lawful:
+                    k = min(max(int(frame) - t0, 0), len(lawful) - 1)
+                    v, w = pb.getBaseVelocity(idx)
+                    pb.resetBaseVelocity(
+                        idx, [float(lawful[k][0]), float(lawful[k][1]),
+                              float(v[2])], list(w))
 
         return (weightless,)
 

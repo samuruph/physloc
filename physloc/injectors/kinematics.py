@@ -390,6 +390,9 @@ class Continuity(Injector):
 
     family = "continuity"
     JUMP_RADII = {"weak": 1.5, "medium": 4.0, "strong": 9.0}
+    #: Turns added to the scene's heading per event attempt: the drawn heading,
+    #: its reverse, then either side -- see `plan`.
+    RETRY_HEADING_TURNS = (0.0, np.pi, 0.5 * np.pi, -0.5 * np.pi)
 
     def strong_residual_reference(self, spec) -> float:
         return float(self.JUMP_RADII["strong"])
@@ -430,7 +433,18 @@ class Continuity(Injector):
         #   left twelve seeds producing two distinct teleport directions, where
         #   phantom_impulse's heading draw produced twelve. A model can learn
         #   an axis; it cannot learn a heading.
+        #
+        # **A RETRY TURNS IT.** The heading was the same on every event attempt,
+        # so a jump that carried the body out of shot did so four times: on
+        # `stack_topple` L3 777 a toppling block teleported 1.06 m outward --
+        # already the fit's shortest rung -- slid on and left the frame at all
+        # four moments, where the same jump back towards the middle of the shot
+        # would have landed in plain view at full strength. Attempt 0 keeps the
+        # scene's heading; later attempts reverse it, then try either side.
+        # All bins of one attempt still share one heading.
         heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
+        heading += self.RETRY_HEADING_TURNS[
+            _geom.event_attempt() % len(self.RETRY_HEADING_TURNS)]
         direction = np.array([np.cos(heading), np.sin(heading), 0.0])
         nominal = direction * jump_r * radius
         # A teleport big enough to leave the frame depicts an object vanishing,
@@ -513,6 +527,7 @@ class Continuity(Injector):
         start = np.asarray(traj.pos[t0, bi], np.float64)
         obstacles = _geom.Obstacles(spec, traj,
                                     exclude_ids=[int(actor.segmentation_id)])
+        clear = []
         for k in self.LANDING_TRIES:
             candidate = np.asarray(delta, np.float64) * float(k)
             target = start + candidate
@@ -522,8 +537,36 @@ class Continuity(Injector):
                 continue                      # something pushed it: it overlaps
             if not bool(_geom.in_frame(spec, target[None, :])[0]):
                 continue
-            return candidate
-        return np.asarray(delta, np.float64)
+            clear.append(candidate)
+        # IN SHOT AFTERWARDS, not only at the landing. A body that is still
+        # moving carries on from wherever it lands, so a landing inside the
+        # frame could still slide out of it: on `stack_topple` L3 777 the weak
+        # bin's jump back towards the stack landed in it, the next clear
+        # candidate was the outward one, and the toppling block slid out of
+        # shot two frames later -- declined, where medium and strong had
+        # rendered. The first clear candidate the worker's gate would accept
+        # wins -- along the jump's own line first, then the same distances
+        # turned a quarter either side, which clears a stack sitting straight
+        # behind the body -- and failing all of them the first clear one, as
+        # before.
+        d = np.asarray(delta, np.float64)
+        side = np.array([-d[1], d[0], 0.0])
+        sideways = []
+        for k in self.LANDING_TRIES:
+            if k <= 0.0:
+                continue
+            for turn in (side, -side):
+                target = start + turn * float(k)
+                moved, _ = obstacles.resolve(target.copy(), np.zeros(3), radius,
+                                             0.0, float(t0))
+                if (float(np.linalg.norm(moved - target)) <= 1e-6
+                        and bool(_geom.in_frame(spec, target[None, :])[0])):
+                    sideways.append(turn * float(k))
+        for candidate in clear + sideways:
+            if self._fit_gate(spec, self._teleport(traj, actor, t0, candidate),
+                              [actor], t0):
+                return candidate
+        return clear[0] if clear else d
 
     #: How far along its own cycle a constrained body jumps, in seconds. Large
     #: enough to be plainly a different point of the swing, short of the half

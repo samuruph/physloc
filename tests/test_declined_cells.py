@@ -107,6 +107,26 @@ def test_support_hover_is_fitted_into_the_frame():
     assert 0.0 < plan.params["clearance_radii"] <= inj.CLEARANCE_RADII["strong"]
 
 
+def test_a_sliding_hover_carries_its_lawful_path():
+    """Weightless and frictionless, the staged block glided out of shot; the
+    plan hands the stage the path it would lawfully have slid along."""
+    inj = injectors.get("support")
+    for name in ("stack_topple", "ramp_slide", "collision", "barrier_pass"):
+        for seed in range(6):
+            spec, traj = _roll(name, seed)
+            plan = _plan(inj, spec, traj)
+            if plan is None or plan.notes["mode"] != "hover_moving":
+                continue
+            path = plan.notes["lawful_xy_velocity"]
+            assert path is not None
+            assert len(path) == traj.num_frames - plan.t_event
+            bi = traj.index_of(int(plan.causal_body_ids[0]))
+            assert np.allclose(np.asarray(path),
+                               traj.lin_vel[plan.t_event:, bi, :2], atol=1e-5)
+            return
+    pytest.skip("no sampled scene put support on a sliding body")
+
+
 def test_support_hangs_a_medium_still():
     spec, traj = _roll("pour", 777)
     plan = _plan(injectors.get("support"), spec, traj)
@@ -179,6 +199,26 @@ def test_a_peer_outside_the_shot_is_not_a_split_violator():
         assert len(subs2) == len(subs) - 1
         return
     pytest.skip("no seed gave an independently timed multi plan of 3+ violators")
+
+
+def test_continuity_retries_turn_the_jump():
+    """The same outward jump on every attempt left the frame four times over
+    (stack_topple L3 777); a retry must jump somewhere else."""
+    spec, traj = _roll("drop", 777)
+    inj = injectors.get("continuity")
+    unit = []
+    for attempt in range(4):
+        per_bin = []
+        for sev in ("weak", "strong"):
+            d = np.asarray(_plan(inj, spec, traj, sev, attempt).params["delta_m"])
+            per_bin.append(d / max(np.linalg.norm(d), 1e-9))
+        # Bins of one attempt share a heading...
+        assert np.allclose(per_bin[0], per_bin[1], atol=1e-6)
+        unit.append(per_bin[1])
+    # ...attempt 1 reverses attempt 0, and 2 and 3 are either side of it.
+    assert float(unit[0] @ unit[1]) < -0.99
+    assert abs(float(unit[0] @ unit[2])) < 0.05
+    assert abs(float(unit[0] @ unit[3])) < 0.05
 
 
 def test_non_parabolic_kicks_leave_every_body_at_rest():

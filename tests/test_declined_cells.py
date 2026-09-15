@@ -132,3 +132,38 @@ def test_one_body_of_a_pair_on_screen_counts_as_seen():
     trio = [b for b in spec.bodies if not b.static and not b.dormant][:3]
     if len(trio) == 3:
         assert not _geom.culprits_on_screen(spec, out, trio).any()
+
+
+def test_non_parabolic_kicks_leave_every_body_at_rest():
+    """The interior-only difference left each body drifting sideways."""
+    inj = injectors.get("non_parabolic")
+    spec, _ = _roll("drop", 777)
+    for n in (5, 9, 17):
+        from types import SimpleNamespace
+        plan = SimpleNamespace(params={"amplitude_m": 0.4, "cycles": inj.CYCLES})
+        for k in range(3):
+            path = inj._offsets(spec, plan, n, k, 3)
+            dt = 1.0 / 30.0
+            accel = inj._stage_accel(path, dt)
+            assert accel.shape == (n + 2, 3)
+            # Velocity after the last kick, and the displacement it leaves.
+            v = np.cumsum(accel * dt, axis=0)
+            assert np.allclose(v[-1], 0.0, atol=1e-9)
+            x = np.cumsum(v * dt, axis=0)
+            # The path from the event's own frame, then back where it began.
+            assert np.allclose(x[:n], path, atol=1e-9)
+            assert np.allclose(x[n:], 0.0, atol=1e-9)
+
+
+def test_non_parabolic_medium_path_is_speed_capped():
+    """~27 m/s sideways on `pour` at release detonated the pile in PyBullet."""
+    tier = TIERS["release"].override(num_frames=25)
+    spec, traj = _roll("pour", 20260826, tier)
+    inj = injectors.get("non_parabolic")
+    plan = _plan(inj, spec, traj)
+    if plan is None:
+        pytest.skip("no airborne run on this sample")
+    t0, t1 = plan.windows[0]
+    peak = inj._peak_speed(spec, plan.params["amplitude_m"], t1 - t0 + 1,
+                           1.0 / traj.dt)
+    assert peak <= inj.MEDIUM_SPEED_CAP + 1e-6

@@ -581,6 +581,18 @@ class NonParabolic(Injector):
     #: it smoother, and the amplitude is not the part to change: legibility here
     #: comes from the shape being continuous and obviously not a parabola.
     CYCLES = 1.75
+    #: Peak sideways speed, m/s, of the path a MEDIUM is asked to follow. See
+    #: `plan`: about half of how fast `pour`'s grains fall.
+    MEDIUM_SPEED_CAP = 4.0
+
+    def _peak_speed(self, spec, amp: float, n: int, fps: float) -> float:
+        """Fastest frame-to-frame speed of the full-amplitude path."""
+        from types import SimpleNamespace
+        path = self._offsets(spec, SimpleNamespace(
+            params={"amplitude_m": amp, "cycles": self.CYCLES}), n)
+        steps = np.diff(np.vstack([np.zeros((1, 3)), path, np.zeros((1, 3))]),
+                        axis=0)
+        return float(np.linalg.norm(steps, axis=1).max() * fps)
 
     def strong_residual_reference(self, spec) -> float:
         # The least-squares parabola absorbs a little of a symmetric wobble, so
@@ -616,6 +628,19 @@ class NonParabolic(Injector):
         # not a pile falling wrongly. You reported it as having no effect.
         scale = self._medium_radius(traj, targets, t0)
         amp = self.AMPLITUDE_RADII[severity_bin] * scale
+        # A MEDIUM SNAKES NO FASTER THAN IT CAN WITHOUT DETONATING. The amplitude
+        # is written in the medium's radius and the cycles are fixed, so over a
+        # short flight the path's own speed is enormous: on `pour` at release
+        # (nine airborne frames) the strong bin asked for ~27 m/s sideways, the
+        # grains met the box walls and each other at that speed, and PyBullet
+        # threw the pile 40 m -- declined on every attempt. Scaled on the
+        # STRONG bin, so the three keep their spacing, and only on a medium: a
+        # single body has nothing to collide with mid-flight.
+        if len(targets) > 2:
+            strong = self.AMPLITUDE_RADII["strong"] * scale
+            peak = self._peak_speed(spec, strong, t1 - t0 + 1, 1.0 / traj.dt)
+            if peak > self.MEDIUM_SPEED_CAP:
+                amp *= self.MEDIUM_SPEED_CAP / peak
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
@@ -682,6 +707,16 @@ class NonParabolic(Injector):
                 + (0.6 * amp * envelope * np.cos(phase))[:, None]
                 * right[None, :])
 
+    @staticmethod
+    def _stage_accel(offset, dt: float) -> np.ndarray:
+        """[n + 2, 3] acceleration, per frame from `t_event`, along `offset`.
+
+        Rest before and after, so the velocity kicks sum to zero -- see `stage`.
+        """
+        padded = np.vstack([np.zeros((2, 3)), np.asarray(offset, np.float64),
+                            np.zeros((2, 3))])
+        return (padded[2:] - 2.0 * padded[1:-1] + padded[:-2]) / (dt * dt)
+
     def stage(self, spec, simulator, objs, plan):
         import pybullet as pb
 
@@ -705,18 +740,53 @@ class NonParabolic(Injector):
             # the mass. Differenced twice rather than differentiated
             # analytically so the staged path and `_apply` describe the same
             # curve.
-            accel = np.zeros_like(offset)
-            accel[1:-1] = ((offset[2:] - 2.0 * offset[1:-1] + offset[:-2])
-                           / (dt * dt))
+            #
+            # **PADDED WITH REST AT BOTH ENDS, so the kicks sum to zero.** The
+            # interior-only difference never applied the first frame's velocity
+            # or took back the last, so every body left the window still moving
+            # sideways at `offset[0] / dt` and kept going for the rest of the
+            # clip -- small over a long flight, and on `pour`'s nine frames part
+            # of what carried the grains 40 m. Rest before the path is the world
+            # as reset, so the first kick lands on `t0` and none before it; two
+            # frames of rest after it take the velocity back out.
+            accel = self._stage_accel(offset, dt)  # frames t0 .. t0 + n + 1
             targets.append((idx, float(getattr(body, "mass", 1.0)), accel))
         if not targets:
             return ()
 
-        def snake(_client, _step, frame):
-            if not (t0 <= frame <= t1):
+        # A GRAIN THAT HAS LANDED IS LEFT ALONE. The path describes a body in
+        # flight, and on a medium most grains are down in the box well before
+        # the primary grain's airborne run ends: driving them on pushed a
+        # settled pile into its own walls, and even at the capped speed about
+        # half of `pour` spilled over and rolled out of shot. Only a touch on
+        # something STATIC counts -- grains in a falling stream brush each
+        # other, and stopping on that would stop almost everything at once.
+        crowd = len(targets) > 2
+        statics = set()
+        if crowd:
+            for b in spec.bodies:
+                if b.static:
+                    sidx = stepper.pybullet_index(simulator, objs, spec,
+                                                  int(b.segmentation_id))
+                    if sidx is not None:
+                        statics.add(int(sidx))
+        landed = set()
+
+        def snake(_client, step, frame):
+            f = frame - t0
+            if not (0 <= f < n + 2):
                 return
-            f = min(frame - t0, n - 1)
             for idx, mass, accel in targets:
+                if crowd:
+                    if idx in landed:
+                        continue
+                    # Not on the first substep: the manifold then belongs to
+                    # the run before the reset -- see `stepper.run_from`.
+                    if step >= 1 and any(
+                            int(c[2]) in statics
+                            for c in pb.getContactPoints(bodyA=idx)):
+                        landed.add(idx)
+                        continue
                 at, _ = pb.getBasePositionAndOrientation(idx)
                 pb.applyExternalForce(idx, -1, (accel[f] * mass).tolist(),
                                       list(at), pb.WORLD_FRAME)

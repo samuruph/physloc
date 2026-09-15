@@ -17,52 +17,23 @@ from typing import Dict
 
 import numpy as np
 
-
-def temporal_bins(num_frames: int, latent_frames: int):
-    """Which source frames feed each latent frame, under 4x VAE binning.
-
-    A 4k+1 timeline maps as: latent 0 <- source 0; latent i>0 <- sources
-    [4i-3 .. 4i]. Requiring 4k+1 is exactly what makes this exact.
-    """
-    if (num_frames - 1) % 4 != 0 or (num_frames - 1) // 4 + 1 != latent_frames:
-        raise ValueError("num_frames=%d does not bin to %d latent frames (need 4k+1)"
-                         % (num_frames, latent_frames))
-    bins = [np.array([0])]
-    for i in range(1, latent_frames):
-        bins.append(np.arange(4 * i - 3, 4 * i + 1))
-    return bins
+from .. import loader as _loader
 
 
-def _spatial_reduce(x: np.ndarray, out_hw: int, how: str) -> np.ndarray:
-    """[H,W] -> [out_hw,out_hw] by exact block reduction."""
-    H, W = x.shape
-    if H % out_hw or W % out_hw:
-        raise ValueError("%dx%d does not divide into %d" % (H, W, out_hw))
-    bh, bw = H // out_hw, W // out_hw
-    b = x.reshape(out_hw, bh, out_hw, bw)
-    return b.max(axis=(1, 3)) if how == "max" else b.mean(axis=(1, 3))
+#: The implementation lives in `physloc/loader.py`, which a consumer imports
+#: without the generator. Schema v2 no longer writes `grids.npz`: the loader
+#: reduces on demand, and these names stay so the generator side reads the same.
+temporal_bins = _loader.temporal_bins
+_spatial_reduce = _loader._block
 
 
 def reduce_all(mask: np.ndarray, severity: np.ndarray,
                latent_frames: int, latent_hw: int) -> Dict[str, np.ndarray]:
-    T = mask.shape[0]
-    bins = temporal_bins(T, latent_frames)
+    g = _loader.latent_grid(mask, severity, latent_frames, latent_hw)
     tag = "%dx%dx%d" % (latent_frames, latent_hw, latent_hw)
-
-    m = np.zeros((latent_frames, latent_hw, latent_hw), bool)
-    smax = np.zeros((latent_frames, latent_hw, latent_hw), np.float32)
-    smean = np.zeros((latent_frames, latent_hw, latent_hw), np.float32)
-    sev = severity.astype(np.float32)
-
-    for i, src in enumerate(bins):
-        mm = mask[src].any(axis=0)
-        m[i] = _spatial_reduce(mm.astype(np.float32), latent_hw, "max") > 0
-        smax[i] = _spatial_reduce(sev[src].max(axis=0), latent_hw, "max")
-        smean[i] = _spatial_reduce(sev[src].mean(axis=0), latent_hw, "mean")
-
-    return {"mask_%s" % tag: m,
-            "severity_max_%s" % tag: smax.astype(np.float16),
-            "severity_mean_%s" % tag: smean.astype(np.float16),
+    return {"mask_%s" % tag: g["mask"],
+            "severity_max_%s" % tag: g["severity_max"].astype(np.float16),
+            "severity_mean_%s" % tag: g["severity_mean"].astype(np.float16),
             "latent_frames": np.int32(latent_frames),
             "latent_hw": np.int32(latent_hw),
             "ordering": np.array("time_major_F_H_W")}

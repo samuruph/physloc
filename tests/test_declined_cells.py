@@ -74,3 +74,24 @@ def test_a_retry_shortens_the_fitted_window():
                                              floor=floor)
         want = max(floor, int(round(30 * Injector.FIT_RETRY_WINDOW ** attempt)))
         assert got == want
+
+
+def test_one_body_of_a_pair_on_screen_counts_as_seen():
+    """A colliding pair is one event: the middle block rebounding in view is
+    evidence even while the top block tumbles out of the side."""
+    spec, traj = _roll("stack_topple", 777)
+    pair = [b for b in spec.bodies if not b.static and not b.dormant][:2]
+    assert len(pair) == 2
+    out = traj.copy() if hasattr(traj, "copy") else injectors.get(
+        "superelastic")._clone(traj)
+    j = out.index_of(int(pair[0].segmentation_id))
+    out.pos[:, j, :] = np.asarray([500.0, 500.0, 500.0], np.float32)
+    assert _geom.culprits_on_screen(spec, out, pair).all()
+    # ...but not when neither is.
+    k = out.index_of(int(pair[1].segmentation_id))
+    out.pos[:, k, :] = np.asarray([-500.0, 500.0, 500.0], np.float32)
+    assert not _geom.culprits_on_screen(spec, out, pair).any()
+    # A medium still needs most of itself in shot.
+    trio = [b for b in spec.bodies if not b.static and not b.dormant][:3]
+    if len(trio) == 3:
+        assert not _geom.culprits_on_screen(spec, out, trio).any()

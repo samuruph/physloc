@@ -403,7 +403,13 @@ def culprits_on_screen(spec, traj, bodies,
                                                            radii[j]):
                     ok[f, j] = False
     seen = ok.sum(axis=1)
-    return seen >= np.maximum(1, np.ceil(share * len(idx)))
+    # ROUNDED, not the ceiling. For a medium the two agree; for a PAIR the
+    # ceiling of 60% of two is both, and a colliding pair is one event: on
+    # `stack_topple x superelastic` the struck middle block rebounds in plain
+    # view while the top block tumbles out of the side, and demanding both
+    # declined the cell at every gain the ladder offers -- measured in the
+    # container at seed 777, down to a speed gain of 1.15.
+    return seen >= np.maximum(1, np.floor(share * len(idx) + 0.5))
 
 
 def eligible_event_frames(spec, traj, bodies, lo: int, hi: int) -> np.ndarray:

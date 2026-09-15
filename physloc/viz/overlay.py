@@ -190,6 +190,16 @@ class Renderer:
         self._timeline(f, t, self.panels_bottom + LEGEND)
         return f
 
+    def panel(self, name: str, t: int) -> np.ndarray:
+        """One panel on its own, S x S, with its scale bars and read-outs but no
+        title, header or timeline -- for a viewer that lays those out itself.
+        Layers are drawn when `name` is "rgb"."""
+        if name not in PANELS:
+            raise KeyError("unknown panel %r; panels: %s" % (name, ", ".join(PANELS)))
+        img = np.array(self._panel(name, t), np.uint8, copy=True)
+        self._notes(img, name, t, 0, 0)
+        return img
+
     def colour(self, instance_id: int):
         if instance_id in self.ids:
             return C_VIOLATORS[self.ids.index(instance_id) % len(C_VIOLATORS)]

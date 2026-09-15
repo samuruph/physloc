@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 from .. import injectors
+from ..params import upgrade_keys
 from ..residuals import laws
 from ..scenarios import TIERS
 from ..scenarios.base import Tier
@@ -99,7 +100,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                   write_video: bool = True) -> Dict[str, object]:
     """Turn one worker variant into a released valid/invalid clip pair."""
     with open(os.path.join(vdir, "plan.json")) as fh:
-        blob = json.load(fh)
+        blob = upgrade_keys(json.load(fh))
     spec_d, plan_d = blob["spec"], blob["plan"]
 
     scenario = spec_d["scenario"]

@@ -168,9 +168,31 @@ def write(values: Dict[str, Any], workdir: str) -> str:
     return path
 
 
+#: Key renames a work dir may predate. Schema v2 renamed `culprit` to `violator`
+#: and `disturbed_instance_ids` to `affected_instance_ids`; a work dir rendered
+#: before that must still annotate, and re-rendering it to change a spelling
+#: would cost hours of Blender for nothing.
+LEGACY_RENAMES = (("culprit", "violator"),
+                  ("disturbed_instance_ids", "affected_instance_ids"))
+
+
+def upgrade_keys(obj: Any) -> Any:
+    """Rename legacy keys anywhere in a JSON tree. Values are left alone."""
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            for old, new in LEGACY_RENAMES:
+                key = key.replace(old, new)
+            out[key] = upgrade_keys(value)
+        return out
+    if isinstance(obj, list):
+        return [upgrade_keys(v) for v in obj]
+    return obj
+
+
 def read(path: str) -> Dict[str, Any]:
     with open(path) as fh:
-        return resolved(json.load(fh))
+        return resolved(upgrade_keys(json.load(fh)))
 
 
 #: The values in force, for `metadata.json` and for anything that wants to report

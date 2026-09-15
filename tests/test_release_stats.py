@@ -29,7 +29,7 @@ def test_summarise_counts_what_the_figures_draw(tmp_path):
     for foot, cond in ((0.3, "standard"), (0.02, "camera"), (0.001, "multi")):
         m = _meta(condition=cond, scenario="drop", family="antigravity",
                   complexity={"name": "L0"})
-        m["violation"]["difficulty_inputs"]["footprint"] = foot
+        m["violation"]["difficulty_inputs"]["violation_area"] = foot
         m["violation"]["intervention"] = {"severity_bin": "strong"}
         m["difficulty"] = D.assess(m)
         metas.append(m)
@@ -59,7 +59,7 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
     for foot in (0.3, 0.02, 0.001):
         m = _meta(condition="standard", scenario="drop", family="antigravity",
                   complexity={"name": "L0"})
-        m["violation"]["difficulty_inputs"]["footprint"] = foot
+        m["violation"]["difficulty_inputs"]["violation_area"] = foot
         m["violation"]["intervention"] = {"severity_bin": "strong"}
         m["difficulty"] = D.assess(m)
         metas.append(m)
@@ -67,9 +67,7 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
 
     got = stats.report(root)
     out = got["outdir"]
-    for name in ("difficulty.png", "difficulty_factors.png", "composition.png",
-                 "severity.png", "coverage.png", "structure.png", "timing.png",
-                 "stats.json"):
+    for name in [n for n, _ in stats.FIGURES] + ["stats.json"]:
         p = os.path.join(out, name)
         assert os.path.exists(p) and os.path.getsize(p) > 0, name
     with open(os.path.join(out, "stats.json")) as fh:

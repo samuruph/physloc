@@ -330,7 +330,17 @@ def export(root: str, outdir: str, with_passes: bool = False,
 
     index_path = _write_index(rows, outdir, clips)
     _write_taxonomy(outdir, rows)
-    _write_card(rows, outdir, license_name, shards)
+    # THE STATISTICS SHIP WITH THE RELEASE, computed on exactly the clips being
+    # packaged, and the card shows them. A benchmark is judged on its
+    # distributions, and a reader should not have to generate anything to see
+    # them. A failure to plot costs the figures, never the export.
+    stats_dir: Optional[str] = os.path.join(outdir, "stats")
+    try:
+        from .stats import report
+        report(root, stats_dir)
+    except (Exception, SystemExit):                            # noqa: BLE001
+        stats_dir = None
+    _write_card(rows, outdir, license_name, shards, stats_dir)
     _write_license(outdir, license_name)
     # The loader ships with the data: schema v2 stores two annotation files and
     # derives the rest, so the card's `from loader import ...` has to work on a
@@ -605,9 +615,22 @@ def _count(rows, field):
 
 
 def _write_card(rows: List[Dict], outdir: str, license_name: str,
-                shards: Dict[str, List[str]]) -> None:
+                shards: Dict[str, List[str]],
+                stats_dir: Optional[str] = None) -> None:
     """The dataset card. YAML front-matter first, because the hub parses it."""
     from collections import Counter
+
+    from .stats import FIGURES
+
+    stats_lines: List[str] = []
+    if stats_dir and os.path.isdir(stats_dir):
+        stats_lines = ["## Dataset statistics", "",
+                       "Computed from every clip's `metadata.json`; the numbers "
+                       "behind each figure are in `stats/stats.json`.", ""]
+        for name, caption in FIGURES:
+            if os.path.exists(os.path.join(stats_dir, name)):
+                stats_lines += ["![%s](stats/%s)" % (name[:-4], name), "",
+                                "*%s*" % caption, ""]
 
     scenarios = Counter(r["scenario"] for r in rows)
     families = Counter(r["family"] for r in rows if r["family"])
@@ -736,6 +759,7 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         reference.render("scenarios"),
         "",
+        *stats_lines,
         "## Files",
         "",
         "- `shards/<split>-*.tar` -- RGB video and every annotation, one set "

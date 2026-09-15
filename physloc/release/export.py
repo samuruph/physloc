@@ -835,5 +835,8 @@ def upload(outdir: str, repo_id: str, private: bool = False,
     api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=private,
                     exist_ok=True)
-    api.upload_folder(repo_id=repo_id, repo_type="dataset", folder_path=outdir)
+    # Bytecode appears the moment anyone imports the shipped `loader.py` from
+    # inside the folder, and it has no business on the hub.
+    api.upload_folder(repo_id=repo_id, repo_type="dataset", folder_path=outdir,
+                      ignore_patterns=["__pycache__/*", "*.pyc"])
     return "https://huggingface.co/datasets/%s" % repo_id

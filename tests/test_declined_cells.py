@@ -97,6 +97,22 @@ def test_a_retry_shortens_the_fitted_window():
         assert got == want
 
 
+def test_support_hover_is_fitted_into_the_frame():
+    """Seed 778 hung the ball at z = 3.7, above the shot, on every attempt."""
+    spec, traj = _roll("drop", 778)
+    inj = injectors.get("support")
+    plan = _plan(inj, spec, traj)
+    out = inj.apply(spec, traj, plan)
+    assert _geom.culprits_visible(spec, out, _culprits(spec, plan), plan.t_event)
+    assert 0.0 < plan.params["clearance_radii"] <= inj.CLEARANCE_RADII["strong"]
+
+
+def test_support_hangs_a_medium_still():
+    spec, traj = _roll("pour", 777)
+    plan = _plan(injectors.get("support"), spec, traj)
+    assert plan.notes["mode"] == "hover_still"
+
+
 def test_one_body_of_a_pair_on_screen_counts_as_seen():
     """A colliding pair is one event: the middle block rebounding in view is
     evidence even while the top block tumbles out of the side."""

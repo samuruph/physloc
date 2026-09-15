@@ -77,25 +77,49 @@ class Support(Injector):
         # falling; that is `antigravity`. It hangs.
         speed = float(np.linalg.norm(traj.lin_vel[t0, bi][:2]))
         mode = "hover_still" if speed < 0.3 else "hover_moving"
-        return InterventionPlan(
-            family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, T - 1)],
-            causal_body_ids=[int(b.segmentation_id) for b in targets] or
-                            [int(actor.segmentation_id)],
-            params={"type": "hover", "clearance_radii": clearance_r,
-                    "mode": mode},
-            magnitude=float(clearance_r * radius),
-            magnitude_unit="m_support_clearance", severity_bin=severity_bin,
-            notes={"radius": radius,
-                   # With the WHOLE medium lifted there is nothing left beneath
-                   # any of it, so the clearance datum is the floor. Measured
-                   # against the pile -- which is what `support_under_any`
-                   # returns for a grain in a column -- a grain hovering at
-                   # z = 0.33 sat *below* its recorded support and the law read
-                   # clearance 0.000 on an obviously airborne pour.
-                   "surface_top": (float(_geom.surface_top(spec, actor))
-                                   if len(targets) > 1 else float(top)),
-                   "clearance_radii": clearance_r, "mode": mode})
+        if len(targets) > 1:
+            # A medium hangs where support failed. Its sideways speed is the
+            # spout's spread, not a slide along a surface anyone could see it
+            # keep -- see `stage`.
+            mode = "hover_still"
+
+        def hover(clearance: float) -> InterventionPlan:
+            return InterventionPlan(
+                family=self.family, kind="sustained", t_event=t0,
+                windows=[(t0, T - 1)],
+                causal_body_ids=[int(b.segmentation_id) for b in targets] or
+                                [int(actor.segmentation_id)],
+                params={"type": "hover", "clearance_radii": clearance,
+                        "mode": mode},
+                magnitude=float(clearance * radius),
+                magnitude_unit="m_support_clearance", severity_bin=severity_bin,
+                notes={"radius": radius,
+                       # With the WHOLE medium lifted there is nothing left
+                       # beneath any of it, so the clearance datum is the floor.
+                       # Measured against the pile -- which is what
+                       # `support_under_any` returns for a grain in a column --
+                       # a grain hovering at z = 0.33 sat *below* its recorded
+                       # support and the law read clearance 0.000 on an
+                       # obviously airborne pour.
+                       "surface_top": (float(_geom.surface_top(spec, actor))
+                                       if len(targets) > 1 else float(top)),
+                       "clearance_radii": clearance, "mode": mode})
+
+        # KEEP THE HOVER IN SHOT. A body caught a third of the way through a
+        # `drop` is still high, and lifting it the strong bin's 3.6 radii from
+        # there hung it above the frame for the rest of the clip: on seed 778
+        # at z = 3.7, declined on every attempt because the moment never moves.
+        # Fitted on the strongest bin so the three stay ordered. A medium is
+        # not fitted here -- `_apply` lifts only its first grain, which is not
+        # a preview of the whole pour rising.
+        if len(targets) <= 1:
+            strongest = float(self.CLEARANCE_RADII["strong"])
+            scale, _ = self._fit_to_frame(
+                spec, traj, [actor], t0, strongest,
+                lambda k: self._apply(spec, traj, hover(strongest * k)),
+                memo=("hover", strongest))
+            clearance_r *= float(scale)
+        return hover(clearance_r)
 
     #: Weightlessness is a force statement, so PyBullet can say it: cancel
     #: gravity on the body and let it keep whatever motion it had.
@@ -144,7 +168,16 @@ class Support(Injector):
             # it would add a Newton-1 violation on top of this one -- but a
             # falling body stops falling, because that is what "nothing is
             # holding it up, and yet" looks like.
-            pb.resetBaseVelocity(idx, [float(v[0]), float(v[1]), 0.0], list(w))
+            #
+            # A body the plan calls STILL keeps no sideways motion either,
+            # which is what `_apply` has always drawn. It matters for a medium:
+            # a pour caught mid-stream carries the spout's spread, and with
+            # gravity gone every grain flew on in a straight line -- measured
+            # at release on `pour`, out to 4 m and under 60% of the pile in
+            # shot within ten frames, on every attempt.
+            keep = 0.0 if plan.notes.get("mode") == "hover_still" else 1.0
+            pb.resetBaseVelocity(idx, [keep * float(v[0]), keep * float(v[1]),
+                                       0.0], list(w))
             targets.append((idx, float(getattr(body, "mass", 1.0))))
         if not targets:
             return ()

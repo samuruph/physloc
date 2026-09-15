@@ -19,6 +19,8 @@ import numpy as np
 import pytest
 
 from conftest import REPO
+from physloc import loader
+from physloc.annotate.windows import rasterise
 
 WORKDIR = os.environ.get("PHYSLOC_MULTI_WORKDIR",
                          os.path.join(REPO, "out/smoke_multi/drop/0005"))
@@ -74,15 +76,16 @@ def test_independent_violators_keep_their_own_windows(release):
             continue
         seen += 1
         T = m["metadata"]["num_frames"]
-        tl = np.load(os.path.join(cdir, "timelines.npz"))
-        assert list(tl["violator_ids"]) == [c["instance_id"] for c in v["violators"]]
+        obj = loader.Clip.from_dir(cdir).objects
+        assert list(obj["ids"]) == [c["instance_id"] for c in v["violators"]]
         for k, c in enumerate(v["violators"]):
             want = np.zeros(T, bool)
             for s, e in c["violation_windows"]:
                 want[s:e + 1] = True
-            assert np.array_equal(tl["violator_active"][k], want)
-        # The clip-level timeline is the union of the violators' own.
-        assert np.array_equal(tl["active"], tl["violator_active"].any(axis=0))
+            assert np.array_equal(obj["active"][k], want)
+        # The clip's windows are the union of the violators' own.
+        clip_active = rasterise([tuple(w) for w in v["violation_windows"]], T)
+        assert np.array_equal(clip_active, obj["active"].any(axis=0))
     if not seen:
         pytest.skip("this workdir has no independently timed violators")
 
@@ -91,11 +94,8 @@ def test_pixel_attribution_names_only_violators_and_their_consequences(release):
     for cdir, m in _invalid_clips(release):
         v = m["violation"]
         violator_ids = {c["instance_id"] for c in v["violators"]}
-        vids = np.load(os.path.join(cdir, "violation_ids.npz"))["ids"]
-        vmask = np.load(os.path.join(cdir, "violation_mask.npz"))["mask"]
-        assert np.array_equal(vids > 0, vmask)
+        clip = loader.Clip.from_dir(cdir)
+        vids, cids, cmask = clip.violation, clip.causal_source, clip.causal
         assert set(np.unique(vids[vids > 0]).tolist()) <= violator_ids
-        cids = np.load(os.path.join(cdir, "causal_ids.npz"))["ids"]
-        cmask = np.load(os.path.join(cdir, "causal_mask.npz"))["mask"]
         assert np.array_equal(cids > 0, cmask > 0)
         assert set(np.unique(cids[cids > 0]).tolist()) <= violator_ids

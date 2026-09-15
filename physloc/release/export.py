@@ -39,16 +39,16 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from ..annotate import layout
 
 #: Files that go in the core shards -- what a model trains on.
-CORE_FILES = (layout.METADATA, layout.VIDEO, "violation_mask.npz",
-              "mask_invalid.npz", "reference_mask.npz", "causal_mask.npz",
-              "violation_ids.npz", "causal_ids.npz", "severity_map.npz",
-              "timelines.npz", "residuals.npz", layout.SEGMENTATIONS,
-              layout.INSTANCES, "energy.npz", "bodies.npz", "traj.npz",
-              "grids.npz")
+#: Files that go in the core shards -- what a model trains on. Masks, severity,
+#: timelines and grids are not files: `physloc/loader.py` derives them from
+#: `masks.npz`, `objects.npz` and `segmentations.npz`.
+CORE_FILES = (layout.METADATA, layout.VIDEO, layout.MASKS, layout.OBJECTS,
+              layout.SEGMENTATIONS, layout.INSTANCES, "energy.npz",
+              "bodies.npz", "traj.npz")
 
 #: Files that go in the optional shards -- the raw geometry passes.
 PASS_FILES = tuple("%s.npz" % name for name in layout.PASSES.values()) + (
-    "energy_map.npz", "divergence_map.npz")
+    "energy_map.npz",)
 
 #: Roughly how large a shard should get before starting another. 400 MB is the
 #: usual WebDataset advice: big enough that sequential reads dominate, small
@@ -765,29 +765,41 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "",
         "## Reading a clip",
         "",
-        "```python",
-        "import webdataset as wds",
+        "`loader.py` (numpy only) reads the shards in place and derives every "
+        "annotation below:",
         "",
-        'ds = wds.WebDataset("shards/core-000.tar")',
-        "for sample in ds:",
-        '    meta = sample["metadata.json"]  # bytes -> json.loads; MOVi layout',
-        '    video = sample["video.mp4"]',
-        '    mask = sample["violation_mask.npz"]',
+        "```python",
+        "from loader import PhysLocDataset",
+        "",
+        'ds = PhysLocDataset(".", label="invalid", split="main")',
+        "clip = ds.clips[0]",
+        "clip.video             # uint8 [T,H,W,3]",
+        "clip.violation_mask    # bool [T,H,W]   the localisation target",
+        "clip.severity_map      # float32 [T,H,W]",
+        'clip.objects["severity"]  # [K,T], one row per violating object',
         "```",
         "",
         "## The annotations, and what they are not",
         "",
-        "- `violation_mask` -- where the violation is, unioned over BOTH twins. "
-        "A vanished body has no pixels in the invalid render, which is exactly "
-        "why the union is needed.",
-        "- `mask_invalid` -- the same footprint, invalid side only.",
-        "- `severity_map` -- continuous, how badly, invalid side only.",
-        "- `causal_mask` -- level 1 the violator, level 2 a body it disturbed.",
-        "- `reference_mask` -- where the violator lawfully should have been.",
-        "- `divergence_map` -- `|valid - invalid|` in pixels. **Ships for "
-        "inspection, not for training**: it diverges everywhere downstream of "
-        "the event, so a model trained on it learns to find the edit rather "
-        "than the physics.",
+        "Stored (invalid clips only; schema version %d):" % layout.SCHEMA_VERSION,
+        "",
+        "- `masks.npz` `violation` -- uint16 [T,H,W], 0 or the violating "
+        "object's instance id, unioned over BOTH twins: a vanished body has no "
+        "pixels in the invalid render, which is exactly why the union is needed.",
+        "- `masks.npz` `causal` / `causal_source` -- level 1 a violator, level 2 "
+        "a body it affected, and which violator each pixel belongs to.",
+        "- `objects.npz` -- per violating object, per frame: `severity`, the "
+        "clocks `active` / `intervening` / `consequence` / `observable` / "
+        "`occluded`, and the raw `residual` and its 0..1 `score`.",
+        "",
+        "Derived by the loader: `violation_mask` (`violation > 0`), "
+        "`visible_violation` (the part visible in the invalid video), "
+        "`severity_map` (each object's severity painted on its pixels), "
+        "`reference_mask` (where the violators lawfully are), clip timelines and "
+        "latent token grids. `divergence` (`|valid - invalid|`) is for "
+        "inspection, never training: it diverges everywhere downstream of the "
+        "event, so a model trained on it learns to find the edit rather than "
+        "the physics.",
         "",
         "## Scenarios",
         "",

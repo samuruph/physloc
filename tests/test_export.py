@@ -49,8 +49,11 @@ def _clip(root, pair, name, label, family=None, seed=7):
         json.dump(meta, fh)
     with open(os.path.join(cdir, "video.mp4"), "wb") as fh:
         fh.write(b"\0" * 64)
-    np.savez_compressed(os.path.join(cdir, "violation_mask.npz"),
-                        mask=np.zeros((2, 4, 4), bool))
+    np.savez_compressed(os.path.join(cdir, "segmentations.npz"),
+                        segmentations=np.zeros((2, 4, 4), np.uint16))
+    if label == "invalid":
+        np.savez_compressed(os.path.join(cdir, "masks.npz"),
+                            violation=np.zeros((2, 4, 4), np.uint16))
     np.savez_compressed(os.path.join(cdir, "depth.npz"),
                         depth=np.zeros((2, 4, 4), np.float32))
     return cdir
@@ -124,7 +127,7 @@ def test_raw_passes_stay_out_of_the_core_shards(release, tmp_path):
         with tarfile.open(os.path.join(out, "shards", shard)) as tf:
             names += tf.getnames()
     assert names
-    assert any(n.endswith(".violation_mask.npz") for n in names)
+    assert any(n.endswith(".masks.npz") for n in names)
     assert not any(n.endswith(".depth.npz") for n in names), (
         "a raw geometry pass leaked into the core shards")
 
@@ -182,7 +185,7 @@ def test_every_split_ships_the_same_files(release, tmp_path):
     assert all(k == kinds[0] for k in kinds), (
         "splits ship different files: %s"
         % {k: sorted(v) for k, v in per_split.items()})
-    assert "violation_mask.npz" in kinds[0]
+    assert "masks.npz" in kinds[0]
     assert "metadata.json" in kinds[0]
 
 

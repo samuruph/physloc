@@ -23,6 +23,7 @@ from typing import Dict, List
 
 import numpy as np
 
+from .. import loader
 from . import layout
 
 #: A cell is flagged when it fails ALL of these. Any one of them passing means
@@ -42,19 +43,18 @@ def measure_clip(cdir: str) -> Dict[str, object]:
         "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
         "peak_severity": 0.0, "observable_frames": 0, "evidence": 0.0,
     }
-    tl_path = os.path.join(cdir, "timelines.npz")
-    if os.path.exists(tl_path):
-        tl = np.load(tl_path)
-        out["peak_severity"] = float(np.asarray(tl["severity_t"]).max())
-        out["observable_frames"] = int(np.asarray(tl["observable"]).sum())
+    clip = loader.Clip.from_dir(cdir)
+    if not clip.has(layout.OBJECTS):
+        return out
+    tl = clip.timeline
+    out["peak_severity"] = float(np.asarray(tl["severity"]).max())
+    out["observable_frames"] = int(np.asarray(tl["observable"]).sum())
 
-    mp = os.path.join(cdir, "violation_mask.npz")
-    dp = os.path.join(cdir, "divergence_map.npz")
-    if os.path.exists(mp) and os.path.exists(dp):
-        mask = np.load(mp)["mask"].astype(bool)
-        div = np.asarray(np.load(dp)["divergence"], np.float32)
-        if mask.any():
-            out["evidence"] = float(div[mask].max())
+    # Divergence is no longer shipped; it is computed from the two videos, which
+    # is what it always was -- so this needs the valid twin beside the clip.
+    mask = clip.violation_mask
+    if mask.any() and clip.twin is not None:
+        out["evidence"] = float(clip.divergence[mask].max())
     return out
 
 

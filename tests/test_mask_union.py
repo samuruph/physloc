@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from conftest import find_release
+from physloc import loader
 from physloc.annotate import masks
 
 
@@ -116,8 +117,9 @@ def test_released_clips_have_nonempty_masks_while_active(which):
             meta = json.load(fh)["metadata"]
         if meta.get("label") != "invalid":
             continue
-        mask = np.load(os.path.join(cdir, "%s.npz" % which))["mask"]
-        tl = np.load(os.path.join(cdir, "timelines.npz"))
+        clip = loader.Clip.from_dir(cdir)
+        mask = getattr(clip, which)
+        tl = clip.timeline
         # WHICH window the mask answers to depends on where the violation is
         # detectable. An `event` family -- a colour that finishes changing, a
         # body that finishes growing -- is only wrong ACROSS the change: a
@@ -131,7 +133,7 @@ def test_released_clips_have_nonempty_masks_while_active(which):
         fam = FAMILIES.get(meta.get("family"))
         key = ("intervening" if fam is not None and fam.detectable == "event"
                else "consequence")
-        scored = np.asarray(tl[key] if key in tl.files else tl["active"], bool)
+        scored = np.asarray(tl[key], bool)
         observable = np.asarray(tl["observable"], bool)
         per = mask.reshape(mask.shape[0], -1).any(axis=1)
         # Non-empty exactly where the violation is both scored and visible.

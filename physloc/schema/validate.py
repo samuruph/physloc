@@ -14,6 +14,7 @@ import numpy as np
 
 from ..annotate.windows import rasterise as win_rasterise
 
+from .. import loader
 from ..annotate import layout
 from ..annotate import windows as win
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of, is_compatible
@@ -143,19 +144,14 @@ def validate_clip(cdir: str) -> List[str]:
             if bool((part & ~union).any()):
                 bad("intervention_windows falls outside violation_windows")
 
-    # 10c. the invalid-side mask is a subset of the union it was carved from.
-    ipath = os.path.join(cdir, "mask_invalid.npz")
-    vpath = os.path.join(cdir, "violation_mask.npz")
-    if os.path.exists(ipath) and os.path.exists(vpath):
-        try:
-            im = np.load(ipath)["mask"].astype(bool)
-            vm = np.load(vpath)["mask"].astype(bool)
-            if im.shape != vm.shape:
-                bad("mask_invalid and violation_mask disagree on shape")
-            elif bool((im & ~vm).any()):
-                bad("mask_invalid has pixels outside violation_mask")
-        except Exception as exc:                              # noqa: BLE001
-            bad("mask_invalid unreadable: %s" % exc)
+    # 10c. schema v2: an invalid clip stores `masks.npz` and `objects.npz`, and
+    # every other annotation is derived from them by `physloc/loader.py`. So the
+    # checks below read THROUGH the loader -- validating the derivations a
+    # consumer will actually get, not a file only the generator reads.
+    clip = loader.Clip.from_dir(cdir)
+    for name in (layout.MASKS, layout.OBJECTS):
+        if not clip.has(name):
+            bad("missing %s" % name)
     te, to, tend = (int(v["t_event_frame"]), int(v["t_observable_frame"]),
                     int(v["t_end_frame"]))
     # 2. ordering. Evidence cannot precede its cause, and a window cannot end
@@ -195,15 +191,34 @@ def validate_clip(cdir: str) -> List[str]:
     if fam == "newton3_reaction" and len(v.get("causal_body_ids", [])) < 2:
         bad("newton3_reaction needs >= 2 causal_body_ids")
 
-    tl_p = os.path.join(cdir, "timelines.npz")
-    vm_p = os.path.join(cdir, "violation_mask.npz")
-    sm_p = os.path.join(cdir, "severity_map.npz")
-    if not (os.path.exists(tl_p) and os.path.exists(vm_p) and os.path.exists(sm_p)):
-        bad("missing timelines/violation_mask/severity_map")
+    if not (clip.has(layout.MASKS) and clip.has(layout.OBJECTS)):
         return errs
-    tl = np.load(tl_p)
-    mask = np.load(vm_p)["mask"]
-    smap = np.load(sm_p)["severity"].astype(np.float32)
+    try:
+        obj = clip.objects
+        tl = clip.timeline
+        mask = clip.violation_mask
+        smap = clip.severity_map
+    except Exception as exc:                                  # noqa: BLE001
+        bad("annotations unreadable: %s" % exc)
+        return errs
+
+    # 17. the stored arrays have the shapes the schema declares, and the
+    # per-violator table is in the order of `violation.violators`.
+    ids = [int(i) for i in obj["ids"]]
+    if ids != clip.violator_ids:
+        bad("objects.npz ids %s != metadata violators %s" % (ids, clip.violator_ids))
+    for key in ("severity", "residual", "score") + layout.CLOCKS:
+        if key not in obj or obj[key].shape != (len(ids), T):
+            bad("objects.npz %s has shape %s, expected (%d, %d)"
+                % (key, None if key not in obj else list(obj[key].shape),
+                   len(ids), T))
+    seg_shape = clip.segmentations.shape
+    for key in ("violation", "causal", "causal_source"):
+        if getattr(clip, key).shape != seg_shape:
+            bad("masks.npz %s is not [T,H,W] like segmentations" % key)
+    sev = np.asarray(obj.get("severity", np.zeros(0)), np.float32)
+    if sev.size and (sev.min() < 0 or sev.max() > 1 + 1e-6):
+        bad("objects.npz severity outside [0, 1]")
 
     # 4. active is exactly the rasterisation of the windows
     if not np.array_equal(tl["active"], win.rasterise(wins, T)):
@@ -231,11 +246,10 @@ def validate_clip(cdir: str) -> List[str]:
         bad("violation_mask non-empty on frames %s where nothing is observable"
             % np.flatnonzero(active & ~observable & per).tolist())
     # 6. severity_t == severity_map.max()
-    st = np.asarray(tl["severity_t"], np.float32)
-    mx = smap.reshape(T, -1).max(axis=1)
-    if not np.allclose(st, mx, atol=1e-3):
-        bad("severity_t != severity_map.max() (max diff %.4g)"
-            % float(np.abs(st - mx).max()))
+    # (v2: `severity` is derived as that max, so the check is that the painted
+    # map stays inside the localisation it annotates.)
+    if bool(((smap > 0) & ~mask).any()):
+        bad("severity_map has pixels outside violation_mask")
     # 7. every causal id is a body that exists in the scene.
     #
     # Deliberately checked against the *declared* assets rather than against
@@ -267,14 +281,16 @@ def validate_clip(cdir: str) -> List[str]:
         bad("t_event_frame is not the earliest violator's moment")
 
     # 15. per-pixel attribution names only violators, exactly where the mask is.
-    vid_p = os.path.join(cdir, "violation_ids.npz")
-    if os.path.exists(vid_p):
-        vids = np.load(vid_p)["ids"]
-        if vids.shape != mask.shape or not np.array_equal(vids > 0, mask):
-            bad("violation_ids.npz does not cover exactly violation_mask")
-        stray = set(np.unique(vids[vids > 0]).tolist()) - causal
-        if stray:
-            bad("violation_ids.npz names non-violators %s" % sorted(stray))
+    vids = clip.violation
+    stray = set(np.unique(vids[vids > 0]).tolist()) - set(ids)
+    if stray:
+        bad("masks.npz violation names non-violators %s" % sorted(stray))
+    source, level = clip.causal_source, clip.causal
+    if not np.array_equal(source > 0, level > 0):
+        bad("masks.npz causal_source does not cover exactly causal")
+    stray = set(np.unique(source[source > 0]).tolist()) - set(ids)
+    if stray:
+        bad("masks.npz causal_source names non-violators %s" % sorted(stray))
 
     # 16. MOVi's instance tensors line up with the instance list.
     inst_p = os.path.join(cdir, layout.INSTANCES)

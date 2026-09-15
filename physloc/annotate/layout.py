@@ -18,14 +18,22 @@ import json
 import os
 from typing import Dict, List
 
-#: Bumped from 0 when the layout became MOVi's. A reader checks this before
-#: trusting any other field.
-SCHEMA_VERSION = 1
+from .. import loader as _loader
 
-METADATA = "metadata.json"
-VIDEO = "video.mp4"
+#: 1 when the layout became MOVi's; 2 when the annotations shrank to the two
+#: files below and everything derivable moved into `physloc/loader.py`. A reader
+#: checks this before trusting any other field.
+SCHEMA_VERSION = _loader.SCHEMA_VERSION
+
+METADATA = _loader.METADATA
+VIDEO = _loader.VIDEO
 OVERLAY = "overlay.mp4"
-SEGMENTATIONS = "segmentations.npz"
+SEGMENTATIONS = _loader.SEGMENTATIONS
+#: Invalid clips only. `masks.npz`: the dense maps (`violation`, `causal`,
+#: `causal_source`). `objects.npz`: the per-violator [K,T] table.
+MASKS = _loader.MASKS
+OBJECTS = _loader.OBJECTS
+CLOCKS = _loader.CLOCKS
 #: MOVi's per-instance, per-frame tensors -- positions, quaternions, velocities,
 #: boxes, image positions, visibility -- as [k, s, ...] arrays. In an `.npz`
 #: rather than in `metadata.json` because `pour` alone would be megabytes of

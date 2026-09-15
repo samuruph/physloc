@@ -25,7 +25,6 @@ from ..prompts import compose_prompt
 from ..sim.trajectory import Trajectory
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of
 from . import difficulty as diff_mod
-from . import grids as grids_mod
 from . import masks as masks_mod
 from . import severity as sev_mod
 from . import layout
@@ -357,7 +356,6 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # in the invalid clip owns the pixel.
     for c in violators:
         vids[c["imask"]] = c["id"]
-    rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
 
     # Level 2 is MEASURED, not declared. `static_ids` are the participants the
     # plan named -- the floor a ball sinks through -- and to those we add every
@@ -407,7 +405,6 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         cmask[second], cids[second] = 2, c["id"]
         first = part == 1
         cmask[first], cids[first] = 1, c["id"]
-    dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
     # Every dynamic violator is painted, each with its own gated score. INVALID
@@ -474,7 +471,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     tinfo["t_consequence_end_frame"] = int(
         max(e for _, e in tinfo["consequence_windows"]))
 
-    # ---- per-violator records: metadata.json, timelines.npz, residuals.npz -----
+    # ---- per-violator records: metadata.json and objects.npz ------------------
     smap32 = smap.astype(np.float32)
     violator_meta = []
     for c in violators:
@@ -524,9 +521,6 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                               ).astype(np.float32),
     }
 
-    # ---- 3.6 token grids --------------------------------------------------
-    g = grids_mod.reduce_all(vmask, smap.astype(np.float32),
-                             tier.latent_frames, tier.latent_hw)
 
     # ---- write both clips -------------------------------------------------
     sev_bin = plan_d["intervention"]["severity_bin"]
@@ -580,10 +574,6 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         np.savez_compressed(os.path.join(cdir, "bodies.npz"),
                             **energy_mod.body_state(traj, spec))
         energy_summary = etrace.summary()
-        # Shipped on BOTH twins: the lawful footprint of the bodies the
-        # violation acts on, so "where it should be" is always available
-        # without having to load the other clip.
-        np.savez_compressed(os.path.join(cdir, "reference_mask.npz"), mask=rmask)
         for src, dst in PASS_FILES.items():
             if src in p.files:
                 np.savez_compressed(os.path.join(cdir, "%s.npz" % dst), **{dst: p[src]})
@@ -595,40 +585,25 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             os.path.join(cdir, layout.INSTANCES),
             **movi_mod.instance_arrays(spec, traj, seg_here, cam_track, K))
 
+        # SCHEMA v2: ONLY WHAT CANNOT BE DERIVED, and only on the invalid clip.
+        # `violation` is the id map whose `> 0` is the localisation target;
+        # `causal` and `causal_source` say which pixels are a violator or a body
+        # it affected, and whose; `objects` is the per-violator table every
+        # other annotation is painted or reduced from. v1 shipped eleven files
+        # here and eight were functions of these three arrays -- the
+        # derivations now live in `physloc/loader.py` and nowhere else.
         if label == "invalid":
-            np.savez_compressed(os.path.join(cdir, "violation_mask.npz"), mask=vmask)
-            np.savez_compressed(os.path.join(cdir, "mask_invalid.npz"), mask=imask)
-            np.savez_compressed(os.path.join(cdir, "causal_mask.npz"), mask=cmask)
-            # WHICH violator, per pixel. The masks above say where; with several
-            # violators on their own clocks a consumer also needs to know whose
-            # violation, and whose consequence, each pixel belongs to.
-            np.savez_compressed(os.path.join(cdir, "violation_ids.npz"), ids=vids)
-            np.savez_compressed(os.path.join(cdir, "causal_ids.npz"), ids=cids)
-            np.savez_compressed(os.path.join(cdir, "severity_map.npz"), severity=smap)
-            np.savez_compressed(os.path.join(cdir, "divergence_map.npz"),
-                                divergence=dmap)
-            np.savez_compressed(os.path.join(cdir, "grids.npz"), **g)
-            np.savez_compressed(os.path.join(cdir, "timelines.npz"), **arrays)
-            np.savez_compressed(os.path.join(cdir, "residuals.npz"),
-                                r=r_invalid.astype(np.float32),
-                                z=floor.z(r_invalid).astype(np.float32),
-                                s=s_invalid.astype(np.float32),
-                                law=np.array(law_name),
-                                **violator_residuals)
-        else:
-            zeros_t = np.zeros((T,), np.float32)
+            np.savez_compressed(os.path.join(cdir, layout.MASKS),
+                                violation=vids.astype(np.uint16),
+                                causal=cmask.astype(np.uint8),
+                                causal_source=cids.astype(np.uint16))
             np.savez_compressed(
-                os.path.join(cdir, "timelines.npz"),
-                active=np.zeros((T,), bool), observable=np.zeros((T,), bool),
-                intervening=np.zeros((T,), bool),
-                consequence=np.zeros((T,), bool),
-                occluded=win_mod.occluded_frames(seg_v, primary_id),
-                severity_t=zeros_t)
-            np.savez_compressed(os.path.join(cdir, "residuals.npz"),
-                                r=r_valid.astype(np.float32),
-                                z=floor.z(r_valid).astype(np.float32),
-                                s=s_valid.astype(np.float32),
-                                law=np.array(law_name))
+                os.path.join(cdir, layout.OBJECTS),
+                ids=arrays["violator_ids"],
+                severity=arrays["violator_severity_t"],
+                residual=violator_residuals["violator_r"],
+                score=violator_residuals["violator_s"],
+                **{k: arrays["violator_" + k] for k in layout.CLOCKS})
 
         if write_video:
             _write_mp4(p["rgba"], os.path.join(cdir, layout.VIDEO), tier.fps)
@@ -1003,6 +978,9 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "schema_version": SCHEMA_VERSION,
             "clip_uid": uid, "pair_uid": pair_uid, "twin_uid": twin,
             "label": label, "tier": tier.name, "release": release,
+            # The token grid `loader.Clip.latent_grid` reduces to by default.
+            # Not derivable from the resolution alone: 128 bins to 8, 512 to 16.
+            "latent_frames": tier.latent_frames, "latent_hw": tier.latent_hw,
             "domain": None if is_valid else domain_of(family),
             "family": None if is_valid else family,
             "scenario": scenario, "seed": seed,
@@ -1115,7 +1093,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             # clip drew one moment for all on purpose, `shared` for every plan
             # whose violators act together. The clip-level fields above are the
             # union; these are per body, in `causal_body_ids` order, and the
-            # per-pixel attribution is `violation_ids.npz` / `causal_ids.npz`.
+            # per-pixel attribution is `masks.npz` `violation` / `causal_source`.
             "violator_timing": tinfo.get("violator_timing"),
             "violators": tinfo.get("violators", []),
             "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),

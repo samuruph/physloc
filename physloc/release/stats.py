@@ -110,6 +110,14 @@ def _array(path: str):
         return z[keys[0]] if keys else None
 
 
+def _violation_mask(cdir: str):
+    """The clip's violation mask, or None when it has no v2 annotations."""
+    from .. import loader
+
+    clip = loader.Clip.from_dir(cdir)
+    return clip.violation_mask if clip.has(loader.MASKS) else None
+
+
 def load(root: str) -> List[Dict[str, object]]:
     """Every clip's `meta.json` under a release root.
 
@@ -129,7 +137,7 @@ def load(root: str) -> List[Dict[str, object]]:
             cdir = os.path.dirname(path)
             meta["difficulty"] = D.assess(
                 meta,
-                _array(os.path.join(cdir, "violation_mask.npz")),
+                _violation_mask(cdir),
                 _array(os.path.join(cdir, layout.SEGMENTATIONS)))
         out.append(meta)
     return out

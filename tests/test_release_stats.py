@@ -25,8 +25,13 @@ def _release(tmp_path, metas):
 def test_summarise_counts_what_the_figures_draw(tmp_path):
     from physloc.release import stats
 
+    # One clip in each zone, placed from the cuts so a recalibration does not
+    # silently move a clip across one.
+    area = D.BY_NAME["violation_area"]
     metas = []
-    for foot, cond in ((0.3, "standard"), (0.02, "camera"), (0.001, "multi")):
+    for foot, cond in ((area.easy * 2.0, "standard"),
+                       ((area.easy + area.moderate) / 2.0, "camera"),
+                       (area.moderate / 2.0, "multi")):
         m = _meta(condition=cond, scenario="drop", family="antigravity",
                   complexity={"name": "L0"})
         m["violation"]["difficulty_inputs"]["violation_area"] = foot

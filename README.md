@@ -553,8 +553,10 @@ and condition appears) over three scenarios that between them cover every family
 
 ### Running and checking a config
 
-`bash scripts/run.sh <config>` runs the whole pipeline — generate, validate, coverage video,
-viz, export — and passes extra flags through to `generate`. The steps individually:
+`bash scripts/run.sh <config>` runs the whole pipeline — generate, validate, **stats**, **audit**,
+coverage video, viz, **compare**, export — and passes extra flags through to `generate`. Nothing
+has to be remembered afterwards: a finished run holds its own figures, its own audit and its own
+structure videos. The steps individually:
 
 ```bash
 python -m physloc.cli generate --config review_severity
@@ -565,9 +567,41 @@ python -m physloc.cli viz       out/review_severity      # every grid and sheet,
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
 python -m physloc.cli compare   out/review_L0 out/review_L3 out/review_conditions  # dataset structure
 
-python test_dataset_loader.py out/review_severity --generated        # load it: structure and shapes
-python test_dataset_loader.py out/review_severity --generated --gui  # any clip, any layer or panel
+python test_dataset_loader.py out/review_severity        # load it: structure and shapes
+python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
 ```
+
+### The whole sweep, in one command
+
+`scripts/run_reviews.sh` runs every review config back to back — the overnight job. Each config
+gets `run.sh` in full and a log of its own under `out/logs/`, and one config failing never stops
+the ones after it. It ends with a `compare` across **every** root the sweep produced, which is the
+only place the L0 → L3 ladder can be drawn, since a single review run holds one level.
+
+```bash
+tmux new -s reviews                       # a long run belongs in tmux
+bash scripts/run_reviews.sh               # every config
+bash scripts/run_reviews.sh review_L2 review   # ...or just these
+bash scripts/run_reviews.sh --frames 37   # every config at full clip length, into out/*_f37
+export PHYSLOC_PUSH_OWNER=<user>          # optional: each run lands on the hub as physloc-<config>
+```
+
+Each run leaves everything worth looking at beside its clips:
+
+```
+out/<config>/
+  coverage_strong.mp4     every invalid clip in one video -- open this first
+  audit.txt               the cells whose violation is not visible
+  stats/                  the six figures and stats.json
+  viz/                    every grid and sheet, one folder
+  compare/<level>/        variants and conditions of a cell, side by side
+out/compare/              the same across every run of the sweep, including the level ladder
+out/logs/<config>.txt     what that run printed
+```
+
+`compare` draws at most `PHYSLOC_COMPARE_LIMIT` videos per kind (default 12 per run, 20 across the
+sweep), spread over the scenarios, because every eligible cell is hundreds of videos on a full
+review. It renders nothing new — it reads finished clips.
 
 `stats` checks the run came out in the shape it declares; it reads only `metadata.json`, so it takes
 seconds over a full release. **`generate` writes it at the end of every run and `export` ships it

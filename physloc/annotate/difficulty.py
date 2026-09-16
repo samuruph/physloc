@@ -218,11 +218,15 @@ def camera_travel(camera: Optional[Dict[str, object]]) -> float:
     """
     # MOVi's per-frame `positions`, and the one aim point every PhysLoc camera
     # holds for the whole clip -- see `SceneSpec.camera_end_position`.
+    # `.get(...) is None` rather than `or`: `annotate` passes numpy arrays,
+    # whose truth value is an error.
     cam = camera or {}
-    pos = np.asarray(cam.get("positions") or [], np.float64)
+    pos = cam.get("positions")
+    pos = np.asarray([] if pos is None else pos, np.float64)
     if len(pos) < 2:
         return 0.0
-    aim = np.asarray(cam.get("look_at") or [0.0, 0.0, 0.0], np.float64)
+    aim = cam.get("look_at")
+    aim = np.asarray([0.0, 0.0, 0.0] if aim is None else aim, np.float64)
     standoff = float(np.linalg.norm(pos - aim[None, :], axis=1).mean())
     if standoff < 1e-9:
         return 0.0
@@ -415,3 +419,79 @@ def evaluation_set(metas, level: str) -> List[Dict[str, object]]:
         if d and int(d["rank"]) <= cap:
             out.append(m)
     return out
+
+
+# ------------------------------------------------------------------ relabel
+def violator_values_from_clip(clip, k: int) -> Dict[str, float]:
+    """`violator_values` for the k-th violator of a finished INVALID clip.
+
+    The same five numbers `annotate` measures, read back from what the clip
+    ships: `objects.npz` carries the clocks and the score, the invalid
+    segmentation the violator's own pixels, `traj.npz` whether it was absent,
+    and `masks.npz` its lawful footprint on the frames it had vanished (the
+    `violation` id map is the union of both twins, so on a frame the body is
+    absent from the invalid render its pixels there are the valid ones).
+    """
+    obj = clip.objects
+    vid = int(obj["ids"][k])
+    seg = clip.segmentations
+    T = int(seg.shape[0])
+    where = seg == vid
+    have = where.reshape(T, -1).any(axis=1)
+    traj = clip.trajectory
+    absent = np.zeros((T,), bool)
+    ids = [int(b) for b in traj["body_ids"]]
+    if vid in ids:
+        present = np.asarray(traj["present"][:, ids.index(vid)], bool)[:T]
+        absent[:len(present)] = ~present
+    gone = absent & ~have
+    if gone.any():
+        where = where | ((clip.violation == vid) & gone[:, None, None])
+    res = (clip.metadata.get("metadata") or {}).get("resolution") or seg.shape[1:]
+    pixels = float(int(res[0]) * int(res[1])) or 1.0
+    active = np.asarray(obj["active"][k], bool)
+    n_active = int(active.sum())
+    hidden = np.asarray(obj["occluded"][k], bool)
+    return violator_values(
+        area=float(where.reshape(T, -1).sum(axis=1).max()) / pixels,
+        occlusion=float((hidden & active).sum()) / n_active if n_active else 0.0,
+        duration=float(np.asarray(obj["observable"][k], bool).sum()) / T if T else 0.0,
+        severity=max(0.0, float(np.asarray(obj["score"][k]).max(initial=0.0))),
+        camera=clip.metadata.get("camera"))
+
+
+def relabel(cdir: str) -> Optional[Dict[str, object]]:
+    """Re-derive every difficulty label of one clip directory, in place.
+
+    For clips annotated before a threshold or a factor changed: the clip's
+    label and each violator's are measured again from the arrays beside the
+    metadata, under the CURRENT cuts, and `metadata.json` is rewritten. A
+    valid twin, or a clip without its v2 arrays, is returned untouched.
+    Returns the rewritten metadata, or None if nothing was written.
+    """
+    import json
+    import os
+
+    from .. import loader
+
+    clip = loader.Clip.from_dir(cdir)
+    meta = clip.metadata
+    violation = meta.get("violation")
+    if not violation or not (clip.has(loader.MASKS) and clip.has(loader.OBJECTS)
+                             and clip.has(loader.SEGMENTATIONS)):
+        return None
+    vmask, seg = clip.violation_mask, clip.segmentations
+    violation["difficulty_inputs"] = inputs_for_meta(vmask, seg, meta)
+    meta["difficulty"] = assess(meta, vmask, seg)
+    ids = [int(i) for i in clip.objects["ids"]]
+    for rec in violation.get("violators") or []:
+        iid = int(rec.get("instance_id", -1))
+        if iid in ids:
+            rec["difficulty"] = assess_violator(
+                violator_values_from_clip(clip, ids.index(iid)))
+    path = os.path.join(cdir, loader.METADATA)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(meta, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+    return meta

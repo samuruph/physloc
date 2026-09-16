@@ -199,6 +199,16 @@ def test_camera_travel_is_path_length_over_standoff():
     assert D.camera_travel(cam) == pytest.approx(1.0)
 
 
+def test_camera_travel_takes_the_arrays_annotate_passes():
+    """`annotate` hands over the renderer's track as numpy arrays, and an
+    array's truth value is an error -- `positions or []` failed every clip."""
+    half = 5.0, -np.sqrt(75.0)
+    cam = {"positions": np.asarray([[-half[0], half[1], 0.0],
+                                    [half[0], half[1], 0.0]]),
+           "look_at": np.zeros(3)}
+    assert D.camera_travel(cam) == pytest.approx(1.0)
+
+
 def test_footprint_and_occlusion_come_from_the_arrays_when_given():
     """And that the stored inputs reproduce them exactly.
 

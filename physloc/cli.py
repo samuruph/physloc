@@ -449,6 +449,25 @@ def cmd_stats(a) -> int:
     return 0
 
 
+def cmd_relabel(a) -> int:
+    """Re-derive every difficulty label under a root, in place.
+
+    A clip carries the label its annotation wrote, under the cuts of that day;
+    after a recalibration `stats` would otherwise plot the old ones. This
+    measures each clip again -- and each violator, which clips annotated before
+    per-object labels have none of -- from the arrays beside its metadata.
+    """
+    from .annotate import difficulty as D
+    from .annotate import layout
+
+    n = 0
+    for path in layout.find(a.root):
+        if D.relabel(os.path.dirname(path)) is not None:
+            n += 1
+    print("relabelled %d invalid clips under %s" % (n, a.root))
+    return 0
+
+
 def cmd_randomisation(a) -> int:
     """Count the distinct values the sampler produces on each axis.
 
@@ -1999,6 +2018,11 @@ def _build(suppress: bool = False):
     p.add_argument("root", help="a release root, e.g. out/physloc_v0")
     p.add_argument("--outdir", help="default <root>/stats")
     p.set_defaults(fn=cmd_stats)
+
+    p = add_parser("relabel",
+                   help="re-derive every difficulty label under a root, in place")
+    p.add_argument("root", help="a release root, e.g. out/physloc_v0")
+    p.set_defaults(fn=cmd_relabel)
 
     p = add_parser("randomisation",
                    help="how much the sampler actually varies, per axis")

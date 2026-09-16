@@ -69,8 +69,8 @@ def test_antigravity_does_not_smuggle_in_a_solidity_violation(spec, severity):
     inj = injectors.get("antigravity")
     plan = inj.plan(spec, traj, np.random.RandomState(0), severity)
     out = inj.apply(spec, traj, plan)
-    bi = out.index_of(spec.body("ball").segmentation_id)
-    lowest = (out.pos[:, bi, 2] - spec.body("ball").bounding_radius).min()
+    bi = out.index_of(spec.actors[0].segmentation_id)
+    lowest = (out.pos[:, bi, 2] - spec.actors[0].bounding_radius).min()
     assert lowest > -1e-3, "actor sank %.3f m below the floor" % -lowest
 
 
@@ -115,7 +115,7 @@ def test_severity_bins_are_visibly_different_not_just_numerically(spec):
     """
     traj = _valid_traj(spec)
     inj = injectors.get("antigravity")
-    bi = traj.index_of(spec.body("ball").segmentation_id)
+    bi = traj.index_of(spec.actors[0].segmentation_id)
     lift, turned = {}, {}
     for sev in ("weak", "medium", "strong"):
         plan = inj.plan(spec, traj, np.random.RandomState(0), sev)

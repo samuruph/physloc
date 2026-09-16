@@ -64,7 +64,7 @@ class OccluderPass(Scenario):
         x0 = -speed * (tier.num_frames / float(tier.fps)) * 0.5
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
-            name="ball", kind=kind, position=(x0, y_path, radius),
+            name=C.shape_name(kind), kind=kind, position=(x0, y_path, radius),
             scale=(radius,) * 3, velocity=(speed, 0.0, 0.0), mass=1.0,
             friction=0.02, restitution=0.2,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
@@ -106,10 +106,10 @@ class OccluderPass(Scenario):
                    "occluder_id": self.SEG_SCREEN})
 
     def finalise(self, spec: SceneSpec) -> None:
-        _finalise_occlusion(spec)
+        _finalise_occlusion(spec, self.SEG_BALL)
 
 
-def _finalise_occlusion(spec) -> None:
+def _finalise_occlusion(spec, actor_id: int) -> None:
     """The occluded interval, for the camera the clip is ACTUALLY filmed from.
 
     `_sample` computes it from the hand-framed `CAMERA`, and `_vary` then swings
@@ -122,7 +122,8 @@ def _finalise_occlusion(spec) -> None:
     height and the silhouette are the swapped body's, and anything that is not
     a primitive sphere takes the conservative corner bound a cube does.
     """
-    ball, screen = spec.body("ball"), spec.body("screen")
+    ball = next(b for b in spec.bodies if b.segmentation_id == actor_id)
+    screen = spec.body("screen")
     height = float(ball.centre[2])
     round_ = ball.kind == "sphere"
     silhouette = float(ball.bounding_radius) * (1.0 if round_ else math.sqrt(3.0))

@@ -98,14 +98,14 @@ class Collision(Scenario):
         # at all; do the same here rather than fake a rolling cube.
         striker_spin = (0.0, speed / r_a, 0.0) if kind == "sphere" else (0.0, 0.0, 0.0)
         striker = BodySpec(
-            name="ball_a", kind=kind,
+            name=C.shape_name(kind, "a"), kind=kind,
             position=(striker_x, 0.0, r_a), scale=(r_a,) * 3,
             velocity=(speed, 0.0, 0.0),
             angular_velocity=striker_spin,
             mass=1.0, friction=Collision.BALL_FRICTION, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_A, role="actor")
         target = BodySpec(
-            name="ball_b", kind=kind,
+            name=C.shape_name(kind, "b"), kind=kind,
             position=(target_x, 0.0, r_b), scale=(r_b,) * 3,
             mass=1.0, friction=Collision.BALL_FRICTION, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_B, role="actor")

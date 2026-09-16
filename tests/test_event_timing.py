@@ -128,7 +128,7 @@ def _thrown_out(traj, body_id, frame):
 def test_eligible_frames_end_where_the_body_must_still_be_seen():
     sc, spec = _spec(4)
     traj = mockroll.roll(spec, sc)
-    ball = spec.body("ball")
+    ball = spec.actors[0]
     T = traj.num_frames
     need = _geom.min_visible_frames(spec, T)
     gone = 18
@@ -143,7 +143,7 @@ def test_framing_rejects_a_scene_whose_actor_leaves_early():
     sc, spec = _spec(4)
     traj = mockroll.roll(spec, sc)
     assert sc.framing_ok(spec, traj)
-    assert not sc.framing_ok(spec, _thrown_out(traj, spec.body("ball").segmentation_id,
+    assert not sc.framing_ok(spec, _thrown_out(traj, spec.actors[0].segmentation_id,
                                                TIER.num_frames // 5))
 
 
@@ -170,7 +170,7 @@ def test_a_body_is_hidden_only_when_all_of_it_is():
 def test_a_brief_exit_counts_as_visible_but_leaving_at_once_does_not():
     sc, spec = _spec(4)
     traj = mockroll.roll(spec, sc)
-    ball = spec.body("ball")
+    ball = spec.actors[0]
     bi = traj.index_of(int(ball.segmentation_id))
     need = _geom.min_visible_frames(spec, traj.num_frames)
     head = max(1, int(round(_geom.EVIDENCE_SECONDS * TIER.fps)))
@@ -204,7 +204,7 @@ def test_motion_families_fire_before_the_actor_comes_to_rest():
     sc, spec = _spec(6)
     traj = mockroll.roll(spec, sc)
     T = traj.num_frames
-    bi = traj.index_of(int(spec.body("ball").segmentation_id))
+    bi = traj.index_of(int(spec.actors[0].segmentation_id))
     speed = np.linalg.norm(traj.lin_vel[:, bi, :], axis=1)
     # Make the ball settle a third of the way in, whatever the mock did.
     still = copy.deepcopy(traj)
@@ -235,7 +235,7 @@ def test_motion_events_land_before_rest_at_every_clip_length(fps, frames):
     sc = scenarios.get("drop")
     spec = sc.sample(6, tier, "L0")
     traj = mockroll.roll(spec, sc)
-    bi = traj.index_of(int(spec.body("ball").segmentation_id))
+    bi = traj.index_of(int(spec.actors[0].segmentation_id))
     settle = int(round(1.0 * fps))
     still = copy.deepcopy(traj)
     still.lin_vel[:, bi, :] = 0.0

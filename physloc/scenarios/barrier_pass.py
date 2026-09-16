@@ -98,7 +98,7 @@ class BarrierPass(Scenario):
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         spin = (0.0, speed / radius, 0.0) if kind == "sphere" else (0.0, 0.0, 0.0)
         ball = BodySpec(
-            name="ball", kind=kind, position=(x0, 0.0, radius),
+            name=C.shape_name(kind), kind=kind, position=(x0, 0.0, radius),
             scale=(radius,) * 3, velocity=(speed, 0.0, 0.0),
             # Elastic enough that the lawful rebound is unmistakable -- a ball
             # that hits a wall and stops dead makes a pass-through look like

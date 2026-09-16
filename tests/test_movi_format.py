@@ -119,6 +119,6 @@ def test_instance_arrays_have_movi_shapes_on_a_real_scene():
     assert arr["bboxes"].shape == (k, T, 4)
     assert arr["visibility"].shape == (k, T)
     # The actor, which the scene frames, projects inside the image at frame 0.
-    i = [b.name for b in spec.bodies].index("ball")
+    i = [b.role for b in spec.bodies].index("actor")
     assert 0.0 <= arr["image_positions"][i, 0, 0] <= 1.0
     assert 0.0 <= arr["image_positions"][i, 0, 1] <= 1.0

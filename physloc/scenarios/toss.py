@@ -70,7 +70,7 @@ class Toss(Scenario):
                  float(rng.uniform(-1.5, 1.5))) if kind == "cube"
                 else (0.0, 0.0, 0.0))
         ball = BodySpec(
-            name="ball", kind=kind, position=(x0, 0.0, f.launch_z),
+            name=C.shape_name(kind), kind=kind, position=(x0, 0.0, f.launch_z),
             scale=(radius,) * 3, velocity=(vx, 0.0, f.vz),
             angular_velocity=spin, mass=1.0,
             friction=0.4, restitution=0.6, color=C.hue_rgb(float(rng.uniform(0, 1))),

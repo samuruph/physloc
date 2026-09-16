@@ -740,7 +740,29 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     _pick_hdri(spec, seed)
     _add_backdrop(spec)
     _maybe_move_camera(spec, seed)
+    _honest_condition(spec)
     return spec
+
+
+def _honest_condition(spec: SceneSpec) -> None:
+    """A clip may not claim a camera move it did not get.
+
+    `occluder_pass` refuses camera motion outright -- its occlusion interval is
+    computed once, from one eye, and a moving camera would make that list
+    describe a different clip -- and a level may switch motion off. The
+    condition is drawn before any of that is known, so a `camera` clip of such
+    a scene would have shipped labelled `camera` while standing perfectly
+    still: the condition would have said one thing and every pixel another.
+
+    So the label follows the scene: `camera` becomes `standard` and
+    `camera+multi` becomes `multi`, and the clip records that it was demoted.
+    The difficulty factor is measured from the camera track anyway, so nothing
+    downstream has to know -- this is about the condition being true.
+    """
+    if not has_moving_camera(spec.condition) or spec.camera_end_position is not None:
+        return
+    spec.notes["condition_requested"] = spec.condition
+    spec.condition = "multi" if has_multi(spec.condition) else "standard"
 
 
 def _match_understudies(spec: SceneSpec) -> None:
@@ -1000,8 +1022,38 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
             break
         for lk in crowded:
             rung[lk] += 1
+    # NAME THE SCAN. A body called `cone` that is now a photogrammetry scan of
+    # a dollhouse is as wrong as the `ball` that was a cone, and the name is
+    # what every overlay, tooltip and per-object table prints. `fission`'s
+    # understudy is paired to its parent by `<parent>_split`, so it follows.
+    by_name = {b.name: b for b in spec.bodies}
+    taken = {b.name for b in spec.bodies}
+    for body, aid, *_rest in swaps:
+        old = body.name
+        new = _gso_name(aid)
+        if new in taken and new != old:
+            k = 2
+            while "%s_%d" % (new, k) in taken:
+                k += 1
+            new = "%s_%d" % (new, k)
+        taken.add(new)
+        body.name = new
+        twin = by_name.get(old + "_split")
+        if twin is not None:
+            twin.name = new + "_split"
     spec.notes["gso_assets"] = sorted(
         {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
+
+
+def _gso_name(asset_id: str) -> str:
+    """A scan's id as a body name: `3D_Dollhouse_Swing` -> `3d_dollhouse_swing`.
+
+    Three tokens at most, because the ids run to
+    `Asus_Z97IPLUS_Motherboard_Mini_ITX_LGA1150_Socket` and a name that long is
+    a paragraph in an overlay. The full id stays in `asset_id`.
+    """
+    parts = [p for p in str(asset_id).lower().split("_") if p]
+    return "_".join(parts[:3]) or "scan"
 
 
 #: How much longer than the primitive's longest extent a scan may be drawn. A
@@ -1518,7 +1570,7 @@ CAMERA_MOTION_WEIGHTS = (0.40, 0.40, 0.20)
 #: travels a third of its own standoff has turned it into a different shot --
 #: the actor drifts out of frame, and every guard that fitted a violation to
 #: the frustum fitted it to one the clip no longer has.
-CAMERA_TRAVEL = (0.10, 0.22)
+CAMERA_TRAVEL = (0.14, 0.22)
 
 #: How much a `dolly` changes its distance to the subject, as a fraction.
 #:
@@ -1528,7 +1580,7 @@ CAMERA_TRAVEL = (0.10, 0.22)
 #: (1.35 aspect), and unlike a deformation it scales the floor and every other
 #: body by the same amount, so the scene still says "the camera moved" rather
 #: than "that object changed".
-DOLLY_RANGE = (0.06, 0.12)
+DOLLY_RANGE = (0.10, 0.15)
 
 
 def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:

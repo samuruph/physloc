@@ -362,6 +362,18 @@ FREE_SHAPES = ("sphere", "cube", "cylinder", "cone", "torus")
 SURFACE_SHAPES = ("sphere", "cube")
 
 
+def shape_name(kind: str, suffix: str = "") -> str:
+    """What to CALL a body whose shape was drawn.
+
+    The scenarios used to hardcode the name -- `drop` called its actor "ball"
+    whatever it drew -- so a clip of a falling cone shipped an instance called
+    `ball`, and every overlay, tooltip and per-object table repeated it. The
+    name is the one field a reader trusts without checking `category`, so it
+    follows the draw.
+    """
+    return "%s_%s" % (kind, suffix) if suffix else str(kind)
+
+
 def pick_shape(rng, choices=FREE_SHAPES) -> str:
     """One shape name, drawn off the APPEARANCE stream.
 

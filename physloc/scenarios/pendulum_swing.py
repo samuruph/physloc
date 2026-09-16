@@ -82,7 +82,7 @@ class PendulumSwing(Scenario):
         bob_kind = "sphere" if rng.rand() < 0.6 else "cube"
         start = (pivot[0] + arm * math.sin(theta0), pivot[1],
                  pivot[2] - arm * math.cos(theta0))
-        bob = BodySpec(name="bob", kind=bob_kind, position=start,
+        bob = BodySpec(name=C.shape_name(bob_kind, "bob"), kind=bob_kind, position=start,
                        scale=(r_bob,) * 3, mass=1.0, static=False,
                        friction=0.4, restitution=0.3,
                        color=C.hue_rgb(float(rng.uniform(0, 1))),

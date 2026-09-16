@@ -51,7 +51,7 @@ class RestingTable(Scenario):
         rng.shuffle(xs)
         r0 = float(rng.uniform(0.20, 0.26)) * size
         actor_kind = "sphere" if rng.rand() < 0.6 else "cube"
-        actor = BodySpec(name="mug", kind=actor_kind,
+        actor = BodySpec(name=C.shape_name(actor_kind), kind=actor_kind,
                          position=(xs[0], float(rng.uniform(-0.2, 0.2)), top_z + r0),
                          scale=(r0,) * 3, mass=0.9, friction=0.7, restitution=0.05,
                          color=C.hue_rgb(hue), segmentation_id=self.SEG_ACTOR,

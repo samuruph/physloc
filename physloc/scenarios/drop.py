@@ -46,7 +46,7 @@ class Drop(Scenario):
         # stream -- see `C.pick_shape`.
         kind = C.pick_shape(arng)
         ball = BodySpec(
-            name="ball", kind=kind, position=(0.0, 0.0, drop_height),
+            name=C.shape_name(kind), kind=kind, position=(0.0, 0.0, drop_height),
             scale=(radius, radius, radius), velocity=(vx, vy, 0.0),
             mass=1.0, friction=0.4, restitution=restitution,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_BALL, role="actor")

@@ -87,8 +87,8 @@ DEFAULTS: Dict[str, Any] = {
         # how much a dolly changes its distance. Dolly is tighter because it is
         # the motion that changes APPARENT SIZE, which is the cue
         # `immutability` and `deformation` make their claim about.
-        "travel": [0.10, 0.22],
-        "dolly": [0.06, 0.12],
+        "travel": [0.14, 0.22],
+        "dolly": [0.10, 0.15],
     },
     "difficulty": {
         # THE EASY / MODERATE / HARD CUTS, two per factor, in the order

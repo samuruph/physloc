@@ -49,13 +49,17 @@ def test_l3_scans_are_not_smaller_and_do_not_start_interpenetrating(name):
     for seed in range(6):
         prim = scenarios.get(name).sample(seed, TIER, "L2")
         scan = scenarios.get(name).sample(seed, TIER, "L3")
-        by_name = {b.name: b for b in prim.bodies}
-        was = {id(b): (by_name[b.name].centre, by_name[b.name].extents)
-               for b in scan.bodies if b.name in by_name}
+        # PAIRED BY SEGMENTATION ID, not by name: a swapped body is renamed
+        # after the scan it became (`cone` -> `3d_dollhouse_swing`), and the id
+        # is what identifies the same body across levels anyway.
+        by_id = {b.segmentation_id: b for b in prim.bodies}
+        was = {id(b): (by_id[b.segmentation_id].centre,
+                       by_id[b.segmentation_id].extents)
+               for b in scan.bodies if b.segmentation_id in by_id}
         for b in scan.bodies:
-            if b.kind != "gso" or b.name not in by_name or b.dormant:
+            if b.kind != "gso" or b.segmentation_id not in by_id or b.dormant:
                 continue
-            p = by_name[b.name]
+            p = by_id[b.segmentation_id]
             grew.append(float(np.prod(b.extents)) / float(np.prod(p.extents)))
             assert max(b.extents) <= B.GSO_MAX_ELONGATION * max(p.extents) + 1e-6
         swapped = {id(b): None for b in scan.bodies if b.kind == "gso"}

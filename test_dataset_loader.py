@@ -51,6 +51,12 @@ def shipped_loader(root: str):
     spec = importlib.util.spec_from_file_location("physloc_release_loader", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if not hasattr(module, "FIELDS"):
+        raise SystemExit(
+            "%s was exported before releases shipped as clip folders: its "
+            "loader.py reads tar shards and has no `fields=` or pair mode. "
+            "Re-export the run with `physloc export` (and re-publish it with "
+            "--push-to), then download it again." % root)
     return module
 
 

@@ -27,8 +27,8 @@ difficulty label existed: `load` back-fills it, and reads that clip's masks to
 do so.
 
 The look follows benchmark reports (IntPhys 2, LikePhys and the like) rather
-than a dashboard: part-to-whole as labelled donuts, distributions as smooth
-densities, coverage as a lattice, one quiet palette. Colours are the validated
+than a dashboard: part-to-whole as labelled donuts, distributions as histograms,
+coverage as a lattice, one quiet palette. Colours are the validated
 reference palette of the data-viz method -- categorical slots in a fixed order
 for identity, one blue ramp for anything ordered (levels, difficulty,
 severity), grey for the neutral -- so a colour means the same thing in every
@@ -82,8 +82,8 @@ FIGURES: Tuple[Tuple[str, str], ...] = (
      "Detection difficulty: the label split, the split per complexity level, "
      "which factor set each label, and the rule table labels are computed from."),
     ("5_difficulty_factors.png",
-     "Every difficulty factor, one dot per clip, against the two cuts that "
-     "make its easy, moderate and hard zones."),
+     "Every difficulty factor as a histogram of the release, against the two "
+     "cuts that make its easy, moderate and hard zones."),
     ("6_timing_and_severity.png",
      "When violations fire, how long until they are visible, and how strong "
      "they measure at each severity bin."),
@@ -268,6 +268,30 @@ def _tint(hex_colour: str, t: float) -> str:
     return "#%02x%02x%02x" % tuple(mix)
 
 
+def _shade(hex_colour: str, k: float) -> str:
+    """`hex_colour` scaled towards black -- k < 1 darkens."""
+    c = [int(hex_colour[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(v * float(k)))) for v in c)
+
+
+def _luminance(hex_colour: str) -> float:
+    r, g, b = (int(hex_colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _readable_fill(hex_colour: str) -> str:
+    """The same hue, dark enough to carry WHITE text.
+
+    Every label inside a ring is white, in every figure -- a label whose colour
+    flips with the slice it sits on reads as two different kinds of label. So
+    the fill moves to meet the text rather than the other way round.
+    """
+    out = hex_colour
+    while _luminance(out) > 0.45:
+        out = _shade(out, 0.88)
+    return out
+
+
 def _ink_on(hex_colour: str) -> str:
     """White or ink, whichever reads on this fill."""
     r, g, b = (int(hex_colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
@@ -338,7 +362,8 @@ def _upright(deg: float) -> float:
 
 def _ring_labels(ax, wedges, candidates, r_in: float, r_out: float,
                  colours: Sequence[str], fontsize: float = 7.5,
-                 weight: str = "normal") -> List[int]:
+                 weight: str = "normal",
+                 text_colour: Optional[str] = None) -> List[int]:
     """Write each slice's label INSIDE the slice, where one of its candidate
     strings fits -- along the ring first, then across it. Returns the indices
     of the slices where nothing fitted, for the caller to label outside.
@@ -360,7 +385,7 @@ def _ring_labels(ax, wedges, candidates, r_in: float, r_out: float,
         # Chords: at the middle of the ring for text along it, and near the
         # inner edge (the narrow end) for text across it.
         along = 2.0 * r_mid * np.sin(min(span, np.pi) / 2.0) * k
-        across = 2.0 * (r_in + 0.2 * (r_out - r_in)) * np.sin(min(span, np.pi) / 2.0) * k
+        across = 2.0 * (r_in + 0.45 * (r_out - r_in)) * np.sin(min(span, np.pi) / 2.0) * k
         placed = False
         for text in options:
             tw, th = _text_size(ax, text, fontsize, weight)
@@ -376,8 +401,8 @@ def _ring_labels(ax, wedges, candidates, r_in: float, r_out: float,
             x, y = r_mid * np.cos(np.deg2rad(ang)), r_mid * np.sin(np.deg2rad(ang))
             ax.text(x, y, text, rotation=rot, rotation_mode="anchor",
                     ha="center", va="center", fontsize=fontsize,
-                    fontweight=weight, color=_ink_on(colours[i]),
-                    linespacing=1.05)
+                    fontweight=weight, linespacing=1.05,
+                    color=text_colour or _ink_on(colours[i]))
             placed = True
             break
         if not placed:
@@ -487,90 +512,69 @@ def _stacked_share(ax, rows, counts, names, colours) -> None:
 
 
 # ------------------------------------------------------------- distributions
-def _kde(values, lo: float, hi: float, bounds=(None, None), n: int = 256):
-    """(x, density): a Gaussian KDE with Scott's bandwidth, reflected at any
-    hard bound so a quantity that cannot go below 0 does not leak past it."""
+#: Bars, not a smooth curve, and no scattered dots.
+#:
+#: The first version of this report drew a Gaussian density with one dot per
+#: clip underneath it, the dots' HEIGHT being jitter so they would not overlap.
+#: Nobody could tell what the vertical axis meant -- reasonably, since it meant
+#: nothing -- and dots landing on one vertical line looked like a bug rather
+#: than like several clips sharing a value. A histogram answers the question
+#: people actually asked of it: how many clips are in this range.
+HIST_BINS = 28
+
+
+def _hist(ax, values, lo: float, hi: float, colour: str = ACCENT,
+          bins: int = HIST_BINS, share: bool = False, step: bool = False,
+          label: Optional[str] = None):
+    """Draw a histogram; return (tallest bar, median, how many fell past `hi`)."""
     import numpy as np
 
     v = np.asarray(values, float)
     v = v[np.isfinite(v)]
-    xs = np.linspace(lo, hi, n)
-    if v.size == 0:
-        return xs, np.zeros_like(xs)
-    spread = float(v.std())
-    if spread <= 0:
-        spread = max((hi - lo) * 0.02, 1e-6)
-    # A floor on the bandwidth, so a quantity that comes in whole frames (a lag
-    # of 0, 1/12, 2/12 s) reads as a distribution rather than a comb.
-    bw = max(1.06 * spread * v.size ** (-0.2), (hi - lo) * 0.035)
-    pts = [v]
-    if bounds[0] is not None:
-        pts.append(2.0 * bounds[0] - v)
-    if bounds[1] is not None:
-        pts.append(2.0 * bounds[1] - v)
-    allp = np.concatenate(pts)
-    dens = np.exp(-0.5 * ((xs[:, None] - allp[None, :]) / bw) ** 2).sum(1)
-    dens /= v.size * bw * np.sqrt(2.0 * np.pi)
-    return xs, dens
+    counts, edges = np.histogram(v, bins=bins, range=(float(lo), float(hi)))
+    y = counts / max(1, v.size) if share else counts
+    if step:
+        ax.step(np.append(edges, edges[-1]), np.append(np.append(y, y[-1]), 0),
+                where="post", color=colour, linewidth=2.0, label=label, zorder=4)
+    else:
+        ax.bar((edges[:-1] + edges[1:]) / 2.0, y, width=(edges[1] - edges[0]) * 0.92,
+               color=colour, linewidth=0, zorder=2, label=label)
+    return (float(y.max()) if len(y) else 0.0,
+            float(np.median(v)) if v.size else None,
+            int((v > hi).sum()))
 
 
-#: Dots drawn per distribution. Above this a random subset is drawn and the
-#: panel says so -- thirty thousand dots are a solid block, not data.
-MAX_DOTS = 2500
-DOT = "#0d366b"
+def _median_line(ax, med: Optional[float], fmt: str, _y: float = 0.0,
+                 y_axes: float = 0.62) -> None:
+    """A dashed rule at the median, labelled -- the one summary a bar chart
+    cannot show on its own.
 
-
-def _dots_under(ax, values, xs, ys, lo: float, hi: float, seed: int = 0) -> None:
-    """One dot per clip, at its real value, scattered under the density curve
-    -- so the curve reads as a summary of points you can see."""
-    import numpy as np
-
-    v = np.asarray(values, float)
-    v = v[np.isfinite(v)]
-    inside = v[(v >= lo) & (v <= hi)]
-    rng = np.random.default_rng(seed)
-    if inside.size > MAX_DOTS:
-        inside = rng.choice(inside, MAX_DOTS, replace=False)
-        ax.text(0.99, 0.99, "%d of %d clips drawn" % (MAX_DOTS, v.size),
-                transform=ax.transAxes, ha="right", va="top", fontsize=7,
-                color=MUTED)
-    height = np.interp(inside, xs, ys)
-    ax.scatter(inside, rng.uniform(0.03, 0.93, inside.size) * height,
-               s=6, color=DOT, alpha=0.35, linewidths=0, zorder=4)
-    beyond = int((v > hi).sum())
-    if beyond:
-        ax.text(0.99, 0.66, "+%d beyond the axis >" % beyond,
-                transform=ax.transAxes, ha="right", va="bottom", fontsize=7,
-                color=MUTED, zorder=7,
-                bbox={"boxstyle": "round,pad=0.15", "fc": SURFACE, "ec": "none",
-                      "alpha": 0.8})
-
-
-def _density(ax, values, colour: str, lo: float, hi: float, bounds=(None, None),
-             label: Optional[str] = None, wash: bool = True, dots: bool = True):
-    import numpy as np
-
-    xs, ys = _kde(values, lo, hi, bounds)
-    if wash:
-        ax.fill_between(xs, ys, color=colour, alpha=0.10, linewidth=0)
-    ax.plot(xs, ys, color=colour, linewidth=2.0, solid_capstyle="round",
-            label=label, zorder=5)
-    if dots:
-        _dots_under(ax, values, xs, ys, lo, hi)
-    return xs, ys, float(np.median(values)) if len(values) else None
-
-
-def _median_mark(ax, xs, ys, med, fmt: str) -> None:
-    import numpy as np
+    Placed in AXES coordinates, below the zone names and the cut boxes, and
+    flipped to the left of its own rule in the right-hand fifth of the panel:
+    a `severity` median of 1.00 sits on the axis edge and its label ran off
+    the figure.
+    """
+    import matplotlib.transforms as mtransforms
 
     if med is None:
         return
-    y = float(np.interp(med, xs, ys))
-    ax.plot([med], [y], "o", ms=7, color=ACCENT, markeredgecolor=SURFACE,
-            markeredgewidth=2.0, zorder=6)
-    ax.annotate(("median " + fmt) % med, (med, y), xytext=(9, 6),
-                textcoords="offset points", fontsize=7.8, color=INK, zorder=7,
-                bbox={"boxstyle": "round,pad=0.2", "fc": SURFACE, "ec": "none",
+    ax.axvline(med, color=INK, linewidth=1.0, linestyle=(0, (2, 2)), zorder=6)
+    lo, hi = ax.get_xlim()
+    at = (float(med) - lo) / (hi - lo) if hi > lo else 0.5
+    right = at > 0.8
+    band = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+    ax.text(med, y_axes, ("median " + fmt) % med, transform=band,
+            ha="right" if right else "left", va="center", fontsize=7.6,
+            color=INK, zorder=7,
+            bbox={"boxstyle": "round,pad=0.2", "fc": SURFACE, "ec": "none",
+                  "alpha": 0.9})
+
+
+def _beyond(ax, n: int, y: float = 0.72) -> None:
+    if n:
+        ax.text(0.99, y, "+%d beyond the axis >" % n, transform=ax.transAxes,
+                ha="right", fontsize=7, color=MUTED, zorder=7,
+                bbox={"boxstyle": "round,pad=0.15", "fc": SURFACE, "ec": "none",
                       "alpha": 0.85})
 
 
@@ -653,7 +657,8 @@ def _fig_taxonomy(plt, s, path) -> None:
     order += sorted({fd.get(f, "?") for f in fams} - set(order))
     dom_val = [sum(v for f, v in fams.items() if fd.get(f) == d) for d in order]
     if sum(dom_val):
-        dom_col = [CATEGORICAL[i % len(CATEGORICAL)] for i in range(len(order))]
+        dom_col = [_readable_fill(CATEGORICAL[i % len(CATEGORICAL)])
+                   for i in range(len(order))]
         fam_names, fam_vals, fam_cols = [], [], []
         for d, colour in zip(order, dom_col):
             members = sorted((f for f in fams if fd.get(f) == d),
@@ -661,7 +666,8 @@ def _fig_taxonomy(plt, s, path) -> None:
             for k, f in enumerate(members):
                 fam_names.append(f)
                 fam_vals.append(fams[f])
-                fam_cols.append(_tint(colour, 0.1 + 0.45 * k / max(len(members), 1)))
+                fam_cols.append(_readable_fill(
+                    _tint(colour, 0.1 + 0.45 * k / max(len(members), 1))))
         ax.set_aspect("equal")
         ax.set_xlim(-1.75, 1.75)
         ax.set_ylim(-1.38, 1.3)
@@ -678,17 +684,21 @@ def _fig_taxonomy(plt, s, path) -> None:
                 fontsize=14, fontweight="bold")
         ax.text(0, -0.12, "violated", ha="center", va="center", fontsize=7.5,
                 color=INK2)
-        _ring_labels(ax, inner, [(d, d[:5] + ".") for d in order], 0.3, 0.6,
-                     dom_col, fontsize=7, weight="bold")
+        inner_missed = _ring_labels(ax, inner, [(d, d[:5] + ".") for d in order],
+                                    0.3, 0.6, dom_col, fontsize=7, weight="bold",
+                                    text_colour="white")
         pretty = [f.replace("_", " ") for f in fam_names]
         missed = _ring_labels(
             ax, outer, [("%s\n%d" % (p, v), p, p.replace(" ", "\n"))
                         for p, v in zip(pretty, fam_vals)],
-            0.62, 1.0, fam_cols, fontsize=6.8)
-        if missed:
-            _slice_labels(ax, [outer[i] for i in missed],
-                          ["%s (%d)" % (pretty[i], fam_vals[i]) for i in missed],
-                          1.0)
+            0.62, 1.0, fam_cols, fontsize=6.8, text_colour="white")
+        # Both rings' leftovers in ONE call, so the leaders de-overlap against
+        # each other rather than landing on top of one another.
+        out_w = [outer[i] for i in missed] + [inner[i] for i in inner_missed]
+        out_t = ["%s (%d)" % (pretty[i], fam_vals[i]) for i in missed] + \
+                ["%s (%d)" % (order[i], dom_val[i]) for i in inner_missed]
+        if out_w:
+            _slice_labels(ax, out_w, out_t, 1.0)
         ax.legend([_patch(c) for c in dom_col],
                   ["%s (%d)" % (d, v) for d, v in zip(order, dom_val)],
                   loc="upper center", bbox_to_anchor=(0.5, 0.04), ncol=4,
@@ -996,9 +1006,11 @@ def _fig_difficulty(plt, s, path) -> None:
         if not vals:
             ax.text(cols[6][1], yc, "not measured", va="center", fontsize=7.5,
                     color=MUTED)
-    ax.text(0.0, -0.02, "cuts: fitted = set at the quantiles of the 431-clip review "
-            "corpus; chosen = argued from what the quantity means, where the corpus "
-            "could not answer. Both are frozen once published.",
+    ax.text(0.0, -0.02, "cuts: fitted = searched so the whole release lands near "
+            "30% easy / 40% moderate / 30% hard; chosen = argued from what the "
+            "sampler draws (how many objects a crowded clip holds, how many bodies "
+            "a multi clip violates, what counts as a moving camera). Both are "
+            "frozen once published.",
             va="top", fontsize=7.5, color=MUTED)
     fig.savefig(path, dpi=170)
     plt.close(fig)
@@ -1011,8 +1023,8 @@ def _fig_factors(plt, s, path) -> None:
     fig.subplots_adjust(left=0.035, right=0.985, top=0.8, bottom=0.07,
                         wspace=0.22, hspace=0.62)
     _heading(fig, "Difficulty factors",
-             "one dot per violated clip at its measured value; shaded zones are "
-             "the factor's easy / moderate / hard cuts (see 4_difficulty)")
+             "how many clips hold each value, against the factor's easy / "
+             "moderate / hard zones (the cuts are printed in 4_difficulty)")
     for ax, f in zip(axes.ravel(), fs):
         _factor_panel(ax, f, s["factor_values"].get(f.name) or [])
     guide = axes.ravel()[len(fs)]
@@ -1023,11 +1035,11 @@ def _fig_factors(plt, s, path) -> None:
                  labelcolor=INK2, title="how to read", title_fontsize=9.5,
                  alignment="left")
     guide.text(0.02, 0.5,
-               "curve  smoothed density of the dots\n"
-               "dots   one per clip, height jittered\n"
-               "        under the curve (only x is data)\n"
-               "bars   counts, for whole-number factors\n"
-               "line   a cut, value in the box\n\n"
+               "bars    how many clips fall in that\n"
+               "         range (whole-number factors\n"
+               "         get one bar per value)\n"
+               "line    a cut, its value in the box\n"
+               "dashes  the median\n\n"
                "violation_area: the fraction of the\n"
                "frame the violation covers at its peak",
                transform=guide.transAxes, fontsize=8, color=INK2, va="top",
@@ -1039,6 +1051,7 @@ def _fig_factors(plt, s, path) -> None:
 
 
 def _factor_panel(ax, f, values) -> None:
+    """One factor: how many clips hold each value, against its three zones."""
     import matplotlib.transforms as mtransforms
     import numpy as np
 
@@ -1054,20 +1067,20 @@ def _factor_panel(ax, f, values) -> None:
 
     cuts = sorted([f.easy, f.moderate])
     bounded01 = "0-1" in f.unit or f.unit.startswith("fraction")
+    counts = f.unit == "count"
     if vals.size:
         lo = min(0.0, float(vals.min()))
-        # A long tail is cut at the 95th percentile, so a handful of pour clips
-        # with twenty violators does not squeeze everything else into a sliver.
+        # A long tail is cut at the 95th percentile, so a handful of `pour`
+        # clips with twenty violators do not squeeze everything else into a
+        # sliver. What is past the axis is reported rather than dropped.
         hi = max(float(np.percentile(vals, 95)), cuts[1] * 1.6, cuts[1] + 1e-3)
     else:
         lo, hi = 0.0, cuts[1] * 1.6 + 1e-3
-    # Bars for COUNTS only. Testing the values for whole numbers drew a small
-    # release's occlusion (every clip 0 or 1) as bars on an axis from -0.6.
-    integer = bool(vals.size) and f.unit == "count"
-    if integer:
+    if counts:
         lo, hi = lo - 0.6, hi + 0.6
     if bounded01:
         hi = min(max(hi, cuts[1] * 1.2), 1.0)
+
     if f.easier == "high":
         zones = ((f.easy, hi, 0), (f.moderate, f.easy, 1), (lo, f.moderate, 2))
     else:
@@ -1079,12 +1092,26 @@ def _factor_panel(ax, f, values) -> None:
         if b <= a:
             continue
         ax.axvspan(a, b, color=_tint(ORDINAL3[k], 0.8), linewidth=0, zorder=0)
-        # The zone's name inside it, where it fits.
-        w_pts = (b - a) / (hi - lo) * span_pts
-        if w_pts > 7 * len(D.LEVELS[k]):
+        if (b - a) / (hi - lo) * span_pts > 7 * len(D.LEVELS[k]):
             ax.text((a + b) / 2, 0.975, D.LEVELS[k], transform=band, ha="center",
                     va="top", fontsize=7.2, fontweight="bold",
                     color=_tint(ORDINAL3[2], 0.1 if k == 2 else 0.3), zorder=6)
+
+    top, med, over = 0.0, None, 0
+    if vals.size and counts:
+        ks, cs = np.unique(vals, return_counts=True)
+        keep = (ks >= lo) & (ks <= hi)
+        ax.bar(ks[keep], cs[keep], width=0.62, color=ACCENT, zorder=2)
+        top = float(cs[keep].max()) if keep.any() else 0.0
+        for k, c in zip(ks[keep], cs[keep]):
+            ax.text(k, c + top * 0.02, "%d" % c, ha="center", va="bottom",
+                    fontsize=7, color=INK, zorder=6)
+        med, over = float(np.median(vals)), int((vals > hi).sum())
+    elif vals.size:
+        top, med, over = _hist(ax, vals, lo, hi)
+    ax.set_ylabel("clips", fontsize=7.5)
+    ax.set_ylim(0, (top or 1.0) * 1.42)
+
     for c in cuts:
         if lo < c < hi:
             ax.axvline(c, color=INK2, linewidth=0.9, zorder=3)
@@ -1092,31 +1119,11 @@ def _factor_panel(ax, f, values) -> None:
                     fontsize=6.8, color=INK, zorder=7,
                     bbox={"boxstyle": "round,pad=0.18", "fc": SURFACE,
                           "ec": GRID, "lw": 0.6})
-    if integer:
-        ks, cs = np.unique(vals, return_counts=True)
-        keep = (ks >= lo) & (ks <= hi)
-        ax.bar(ks[keep], cs[keep], width=0.62, color=ACCENT, zorder=2)
-        peak = float(cs.max())
-        for k, c in zip(ks[keep], cs[keep]):
-            ax.text(k, c + peak * 0.02, "%d" % c, ha="center", va="bottom",
-                    fontsize=7, color=INK, zorder=6)
-        ax.set_ylabel("clips", fontsize=7.5)
-        ax.set_ylim(0, peak * 1.45)
-        beyond = int((vals > hi).sum())
-        if beyond:
-            ax.text(0.99, 0.62, "+%d beyond the axis >" % beyond,
-                    transform=ax.transAxes, ha="right", fontsize=7, color=MUTED,
-                    zorder=7)
-    elif vals.size:
-        bounds = (0.0 if lo >= 0 else None, 1.0 if bounded01 else None)
-        _xs, ys, _med = _density(ax, vals, ACCENT, lo, hi, bounds)
-        ax.set_yticks([])
-        ax.set_ylim(0, float(ys.max()) * 1.35 if ys.max() > 0 else 1.0)
-    else:
-        ax.set_yticks([])
+    _median_line(ax, med, "%g" if counts else "%.3g", y_axes=0.62)
+    _beyond(ax, over, 0.44)
     ax.set_xlim(lo, hi)
-    _quiet(ax, "")
-    ax.spines["left"].set_visible(integer)
+    _quiet(ax, "y")
+    ax.tick_params(labelsize=7.5)
 
 
 def _fig_timing(plt, s, path) -> None:
@@ -1126,10 +1133,10 @@ def _fig_timing(plt, s, path) -> None:
     from ..injectors._geom import EVENT_BAND
 
     fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.6))
-    fig.subplots_adjust(left=0.02, right=0.955, top=0.72, bottom=0.12, wspace=0.14)
+    fig.subplots_adjust(left=0.045, right=0.985, top=0.72, bottom=0.12, wspace=0.18)
     _heading(fig, "Timing and severity",
-             "one dot per violated clip at its real value; the curve is their "
-             "smoothed density, the big dot its median")
+             "how many violated clips fall in each range; the dashed rule is "
+             "the median")
 
     ax = axes[0]
     _panel_title(ax, "When violations fire",
@@ -1139,14 +1146,14 @@ def _fig_timing(plt, s, path) -> None:
     ax.axvspan(EVENT_BAND[0], EVENT_BAND[1], color=_tint(NEUTRAL, 0.55),
                linewidth=0, zorder=0)
     if vals:
-        xs, ys, med = _density(ax, vals, ACCENT, 0.0, 1.0, (0.0, 1.0))
-        _median_mark(ax, xs, ys, med, "%.2f")
-        ax.set_ylim(0, float(ys.max()) * 1.25)
+        top, med, _over = _hist(ax, vals, 0.0, 1.0)
+        ax.set_ylim(0, top * 1.35)
+        _median_line(ax, med, "%.2f", y_axes=0.78)
     ax.set_xlim(0, 1)
     ax.xaxis.set_major_formatter(
         __import__("matplotlib").ticker.PercentFormatter(1.0, decimals=0))
-    _quiet(ax, "")
-    ax.set_yticks([])
+    ax.set_ylabel("clips", fontsize=8)
+    _quiet(ax, "y")
 
     ax = axes[1]
     vals = s.get("observability_lag_seconds") or []
@@ -1156,49 +1163,38 @@ def _fig_timing(plt, s, path) -> None:
                  "%d%% are visible on the event frame itself" % round(at_once))
     if vals:
         hi = max(float(np.percentile(vals, 98)) * 1.2, 0.25)
-        xs, ys, med = _density(ax, vals, ACCENT, 0.0, hi, (0.0, None))
-        _median_mark(ax, xs, ys, med, "%.2f s")
+        top, med, over = _hist(ax, vals, 0.0, hi)
         ax.set_xlim(0, hi)
-        ax.set_ylim(0, float(ys.max()) * 1.25)
+        ax.set_ylim(0, top * 1.35)
+        _median_line(ax, med, "%.2f s", y_axes=0.78)
+        _beyond(ax, over)
     else:
         _empty(ax, "no events")
-    _quiet(ax, "")
-    ax.set_yticks([])
+    ax.set_ylabel("clips", fontsize=8)
+    _quiet(ax, "y")
 
     ax = axes[2]
     _panel_title(ax, "Measured severity by bin",
-                 "peak bounded residual (0 = lawful, 1 = saturated); the ladder "
-                 "should\nclimb weak -> strong. Dots per bin in the strips below.")
+                 "peak bounded residual (0 = lawful, 1 = saturated); the ladder\n"
+                 "should climb weak -> strong. Each bin as a share of ITS clips.")
     pk = s.get("peak_score_by_bin") or {}
     present = [b for b in BINS if len(pk.get(b) or []) >= 2]
     if present:
-        peak = 0.0
-        curves = []
+        top = 0.0
         for b in present:
-            xs, ys = _kde(pk[b], 0.0, 1.0, (0.0, 1.0))
-            curves.append((b, xs, ys))
-            peak = max(peak, float(ys.max()))
-        rng = np.random.default_rng(0)
-        strip = peak * 0.13
-        for j, (b, xs, ys) in enumerate(curves):
-            colour = ORDINAL3[BINS.index(b)]
             v = np.asarray(pk[b], float)
-            ax.plot(xs, ys, color=colour, linewidth=2.2, zorder=5,
-                    label="%s  n=%d, median %.2f" % (b, v.size, float(np.median(v))))
-            yc = -strip * (j + 0.8)
-            shown = v if v.size <= MAX_DOTS else rng.choice(v, MAX_DOTS, replace=False)
-            ax.scatter(shown, yc + rng.uniform(-0.36, 0.36, shown.size) * strip,
-                       s=5, color=colour, alpha=0.45, linewidths=0, zorder=4)
-            ax.text(1.005, yc, b, va="center", fontsize=7, color=INK2,
-                    transform=__import__("matplotlib").transforms
-                    .blended_transform_factory(ax.transAxes, ax.transData))
-        ax.axhline(0, color=GRID, linewidth=1.0)
+            t, _med, _over = _hist(ax, v, 0.0, 1.0, colour=ORDINAL3[BINS.index(b)],
+                                   bins=20, share=True, step=True,
+                                   label="%s  n=%d, median %.2f"
+                                         % (b, v.size, float(np.median(v))))
+            top = max(top, t)
         ax.legend(loc="upper left", fontsize=7.8, labelcolor=INK2, handlelength=1.4)
         ax.set_xlim(0, 1)
-        ax.set_ylim(-strip * (len(curves) + 0.4), peak * 1.5)
-        _quiet(ax, "")
-        ax.spines["left"].set_visible(False)
-        ax.set_yticks([])
+        ax.set_ylim(0, top * 1.45)
+        ax.yaxis.set_major_formatter(
+            __import__("matplotlib").ticker.PercentFormatter(1.0, decimals=0))
+        ax.set_ylabel("share of that bin's clips", fontsize=8)
+        _quiet(ax, "y")
     else:
         _empty(ax, "fewer than two clips per bin")
     fig.savefig(path, dpi=170)

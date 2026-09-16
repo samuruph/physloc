@@ -161,7 +161,21 @@ class _App:
         v = meta.get("violation") or {}
         obj = c.objects
         row = {int(iid): k for k, iid in enumerate(obj["ids"])}
+        # A `multi` clip's violators differ -- one obvious, one behind a screen
+        # -- so each carries its own easy / moderate / hard beside the clip's.
+        own = {int(o.get("instance_id", -1)): (o.get("difficulty") or {})
+               for o in (v.get("violators") or [])}
         static = {int(x["id"]): x for x in meta.get("instances", [])}
+
+        # Per-body energy, so an object's own trace sits beside its speed and
+        # severity: `by_body` is [T, bodies] against `body_ids`.
+        energy: Dict[int, list] = {}
+        if c.has(loader.ENERGY):
+            e = c.energy
+            if "by_body" in e and "body_ids" in e:
+                by = np.asarray(e["by_body"], np.float64)
+                energy = {int(b): _rounded(by[:, j], 4)
+                          for j, b in enumerate(e["body_ids"]) if j < by.shape[1]}
 
         objects = []
         if c.has(loader.INSTANCES):
@@ -176,7 +190,9 @@ class _App:
                          "violator": iid in row,
                          "pos": _rounded(inst["positions"][j]),
                          "vel": _rounded(inst["velocities"][j]),
-                         "vis": np.asarray(inst["visibility"][j]).astype(int).tolist()}
+                         "vis": np.asarray(inst["visibility"][j]).astype(int).tolist(),
+                         "energy": energy.get(iid)}
+                entry["difficulty"] = own.get(iid) or None
                 if iid in row:
                     k = row[iid]
                     entry["severity"] = _rounded(obj["severity"][k])
@@ -641,7 +657,9 @@ function list() {
     const what = c.label === "valid" ? "valid twin" : pretty(c.family);
     li.innerHTML = `<span class="dot ${c.label}"></span><span class="t">${esc(pretty(c.scenario))} &middot; ${esc(what)}</span>` +
       `<span class="s">${esc(c.level)} &middot; seed ${esc(c.seed)} &middot; ${esc(c.condition)}${c.severity_bin ? " &middot; " + esc(c.severity_bin) : ""}</span>`;
-    li.onclick = () => openClip(i, S.t);
+    // A CLIP OF ITS OWN STARTS AT ITS FIRST FRAME. Only the same scene's
+    // siblings keep the playhead, where holding the frame is the comparison.
+    li.onclick = () => openClip(i);
     ul.append(li);
   }
   if (S.shown.length > LIMIT) {
@@ -944,8 +962,10 @@ function objectRows(o, t) {
   const sp = o.vel ? Math.hypot(...o.vel[t]) : null;
   const rows = [["role", o.role], ["category", o.category], ["material", o.material],
     ["mass", o.mass != null ? fmt(o.mass, 3) + " kg" : null], ["speed", sp != null ? fmt(sp) + " m/s" : null],
+    ["energy", o.energy ? fmt(o.energy[t], 2) + " J" : null],
     ["height", o.pos ? fmt(o.pos[t][2]) + " m" : null], ["visible", o.vis ? (o.vis[t] ? o.vis[t] + " px" : "hidden") : null]];
   if (o.violator) rows.push(["severity", fmt(o.severity[t])], ["clock", o.active[t] ? (o.occluded[t] ? "active, hidden" : o.observable[t] ? "active, visible" : "active") : "inactive"]);
+  if (o.difficulty) rows.push(["difficulty", o.difficulty.level + " (" + (o.difficulty.binding_factors || []).map(pretty).join(", ") + ")"]);
   return rows.filter(([, v]) => v != null && v !== "");
 }
 function tip(id) {
@@ -1088,8 +1108,11 @@ function objectCard(rebuild) {
     let h = "";
     if (o) {
       h += `<div class="card"><h4><span class="swatch" style="background:${o.colour}"></span>${esc(pretty(o.name))} <span class="badge">#${o.id}</span>` +
-        (o.violator ? `<span class="badge invalid">violator</span>` : "") + `</h4><div class="kv" id="objkv"></div>` +
+        (o.violator ? `<span class="badge invalid">violator</span>` : "") +
+        (o.difficulty ? `<span class="badge ${o.difficulty.level}" title="this object's own detection difficulty">${o.difficulty.level}</span>` : "") +
+        `</h4><div class="kv" id="objkv"></div>` +
         `<div class="sparklab"><span>speed, m/s</span><span id="spmax"></span></div><canvas class="spark" id="spSpeed"></canvas>` +
+        (o.energy ? `<div class="sparklab"><span>energy, J</span><span id="enmax"></span></div><canvas class="spark" id="spEnergy"></canvas>` : "") +
         (o.violator ? `<div class="sparklab"><span>severity</span><span>0 - 1</span></div><canvas class="spark" id="spSev"></canvas>` : "") +
         `<div class="kv" style="margin-top:10px">` +
         [["asset", o.asset], ["friction", o.friction != null ? fmt(o.friction) : null], ["restitution", o.restitution != null ? fmt(o.restitution) : null],
@@ -1102,7 +1125,9 @@ function objectCard(rebuild) {
     const order = [...c.objects].sort((a, b) => (b.violator - a.violator) || a.id - b.id);
     h += `<div class="group"><h5>In this clip (${order.length})</h5><div class="objlist">` +
       order.slice(0, 300).map(x => `<div class="obj${x.id === S.pinned ? " on" : ""}" data-obj="${x.id}"><span class="swatch" style="background:${x.colour}"></span>` +
-        `${esc(pretty(x.name))} <span class="badge">#${x.id}</span><span class="role">${x.violator ? "violator" : esc(x.role || "")}</span></div>`).join("") + `</div></div>`;
+        `${esc(pretty(x.name))} <span class="badge">#${x.id}</span>` +
+        (x.difficulty ? `<span class="badge ${x.difficulty.level}">${x.difficulty.level}</span>` : "") +
+        `<span class="role">${x.violator ? "violator" : esc(x.role || "")}</span></div>`).join("") + `</div></div>`;
     P.innerHTML = h;
     P.querySelectorAll("[data-obj]").forEach(b => b.onclick = () => pin(+b.dataset.obj));
     $("#unpin")?.addEventListener("click", () => pin(S.pinned));
@@ -1116,6 +1141,11 @@ function objectCard(rebuild) {
   const speed = o.vel.map(v => Math.hypot(...v)), top = Math.max(1e-6, ...speed);
   $("#spmax").textContent = "max " + fmt(top);
   spark($("#spSpeed"), speed.map(s => s / top), o.colour);
+  if (o.energy) {
+    const hi = Math.max(1e-9, ...o.energy.map(Math.abs));
+    $("#enmax").textContent = "max " + fmt(hi);
+    spark($("#spEnergy"), o.energy.map(e => e / hi), "#8fe3a0");
+  }
   if (o.violator) spark($("#spSev"), o.severity, "#f7931e", o.active);
 }
 function spark(c, ys, colour, band) {
@@ -1186,7 +1216,7 @@ function wire() {
       e.preventDefault();
       const at = S.shown.indexOf(S.cur), d = k === "ArrowDown" || k === "j" ? 1 : -1;
       const next = S.shown[Math.max(0, Math.min(S.shown.length - 1, (at < 0 ? 0 : at + d)))];
-      if (next != null && next !== S.cur) openClip(next, S.t);
+      if (next != null && next !== S.cur) openClip(next);
     }
     else if (k === "e" && S.clip.violation) { play(false); setT(Math.max(0, S.clip.violation.t_event_frame)); }
     else if (k === "t") {

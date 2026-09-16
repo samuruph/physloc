@@ -473,6 +473,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- per-violator records: metadata.json and objects.npz ------------------
     smap32 = smap.astype(np.float32)
+    # The camera factor is the same for every body in the clip, so measure the
+    # track once. `movi.camera_track` is the poses the renderer keyframed.
+    pixels = float(tier.resolution * tier.resolution) or 1.0
+    cam_block = {"positions": movi_mod.camera_track(spec, T)["positions"],
+                 "look_at": list(spec.camera_look_at)}
     violator_meta = []
     for c in violators:
         t = int(np.clip(c["t_event"], 0, T - 1))
@@ -481,7 +486,25 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         rendered = masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2))
         where = masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"]
         c["severity_t"] = np.where(where, smap32, 0.0).reshape(T, -1).max(axis=1)
+        # THIS VIOLATOR'S OWN DIFFICULTY, on its own evidence: its mask at its
+        # biggest, how much of its own window it spends fully hidden, how long
+        # it is observable, and its own residual. A `multi` clip's violators
+        # differ -- one large and obvious, one behind a screen -- and one label
+        # for the clip cannot say that. The clip keeps its own label; this is
+        # the per-object one an object detector is scored against.
+        own_peak = sev_mod.peak(c["score"]["r_invalid"], c["score"]["s_invalid"],
+                                c["score"]["floor"], law_name)
+        own_hidden = win_mod.occluded_frames(seg_i, c["id"])
+        n_active = int(c["active"].sum())
+        own_values = diff_mod.violator_values(
+            area=float(where.reshape(T, -1).sum(axis=1).max()) / pixels,
+            occlusion=(float((own_hidden & c["active"]).sum()) / n_active
+                       if n_active else 0.0),
+            duration=float(c["own_obs"].sum()) / float(T) if T else 0.0,
+            severity=float(own_peak.get("score") or 0.0),
+            camera=cam_block)
         violator_meta.append({
+            "difficulty": diff_mod.assess_violator(own_values),
             "instance_id": c["id"],
             "t_event_frame": t,
             "t_observable_frame": t_obs,

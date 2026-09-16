@@ -105,64 +105,75 @@ class Factor:
             op, self.easy, op, self.moderate, flip, self.moderate)
 
 
-#: THE TABLE. `scripts/fit_difficulty.py` reproduces every number below, and
-#: they are FROZEN once published: a benchmark whose difficulty labels move
-#: between releases cannot be compared with itself, so a refit is a new
-#: release rather than a bug fix.
+#: THE TABLE. The cuts are chosen so that the FULL v0 release comes out near
+#: 30% easy / 40% moderate / 30% hard -- estimated by mixing the 872 violated
+#: clips of the review corpus in the release's own proportions (six in ten
+#: `standard`, one in ten each of the other conditions, a third per severity
+#: bin) and searching interpretable values. They are FROZEN once published: a
+#: benchmark whose difficulty labels move between releases cannot be compared
+#: with itself, so a refit is a new release rather than a bug fix.
 #:
-#: Where each pair came from, because they were not all set the same way and a
-#: reader deserves to know which. **fitted** means the tertiles of the observed
-#: distribution over the 431 invalid clips of the review corpus
-#: (`scripts/fit_difficulty.py`, 2026-09-09). **chosen** means the corpus could
-#: not answer -- the review configs hold one window setting, so `duration`
-#: barely varies in them -- and the boundary is argued from what the quantity
-#: means instead. A fitted threshold is a description of this dataset; a chosen
-#: one is a claim about detection, and the two age differently.
+#: **Why the hard zones are narrow.** The clip takes its WORST factor, so seven
+#: factors each failing a third of the time would make almost every clip hard --
+#: measured at 77% under the first cut table. A 30% hard share over seven
+#: factors means each factor alone may call only a few per cent hard, and the
+#: cuts below say what "a few per cent" is on each scale.
+#:
+#: **fitted** means the value was searched against that release estimate;
+#: **chosen** means it states a rule about the sampler that the corpus cannot
+#: argue with -- how many objects a crowded clip draws, how many bodies a
+#: `multi` clip violates, what counts as a moving camera. A fitted cut
+#: describes this dataset; a chosen one is a claim about detection.
 FACTORS: Sequence[Factor] = (
-    # FITTED. p25 = 0.012, p50 = 0.029, p75 = 0.066 of the frame.
+    # FITTED. Easy at 0.8% of the frame and hard below 0.3%: on a 512 x 512
+    # release frame that is about 2100 px and 790 px, so `hard` is a violation
+    # smaller than a 28 px square.
     Factor("violation_area",
            "how much of the frame does the violation cover, at its biggest?",
-           "fraction of frame", "high", 0.05, 0.012, "fitted"),
-    # FITTED, on the 15% of clips that have any occlusion at all: their median
-    # is 0.67. `easy` is 0.05 rather than 0 to allow a frame of slop at the
-    # edge of a window -- exact zero would make one clipped frame a demotion.
+           "fraction of frame", "high", 0.008, 0.003, "fitted"),
+    # FITTED. A fifth of the window behind an occluder is still a clip you can
+    # watch; past half of it, the evidence is mostly missing.
     Factor("occlusion",
            "how much of the violation happens while the violator is hidden?",
-           "fraction of the violation window", "low", 0.05, 0.5, "fitted"),
-    # CHOSEN. The corpus is concentrated at 0.68 -- one window setting across
-    # every review config -- so its tertiles would encode the config rather
-    # than the difficulty. Argued instead: on a 2.97 s release clip, under 15%
-    # observable is under half a second, which is hard by any standard; under
-    # 35% is a third of the evidence a full-length violation gives you. This is
-    # the factor that will bite hardest at release, where `instant` families
-    # and re-occlusion shorten the window.
+           "fraction of the violation window", "low", 0.20, 0.50, "fitted"),
+    # CHOSEN. On a 2.03 s release clip, under 15% observable is under a third
+    # of a second, which is hard by any standard; under 35% is a third of the
+    # evidence a full-length violation gives you. This is the factor that will
+    # bite hardest at release, where `instant` families and re-occlusion
+    # shorten the window.
     Factor("duration",
            "how long is the violation observable?",
            "fraction of the clip", "high", 0.35, 0.15, "chosen"),
-    # FITTED, rounded. p25 = 0.57, p50 = 0.94, and a third of the corpus sits
-    # at exactly 1.0, so the easy boundary is 0.90 rather than the p67 of 1.0 --
-    # a threshold AT the mode puts half the mode on each side of it.
+    # FITTED. The bounded residual saturates fast, so most clips sit near 1.0
+    # and the interesting boundary is at the bottom: below 0.03 the physics is
+    # barely off lawful, which is a violation nobody can see rather than one
+    # that is merely subtle.
     Factor("severity",
            "how far from lawful does the physics actually get?",
-           "bounded residual, 0-1", "high", 0.90, 0.40, "fitted"),
-    # CHOSEN, against `EXTRA_OBJECTS` = 3-10 rather than against the corpus,
-    # which is 60% `standard` and so mostly reports 1. A crowded clip draws
-    # 3-10 extras, so these boundaries put the small draws in `moderate` and
-    # the big ones in `hard`, which is the distinction the condition exists to
-    # create.
+           "bounded residual, 0-1", "high", 0.10, 0.03, "fitted"),
+    # CHOSEN, against `EXTRA_OBJECTS` = 3-10 rather than against the corpus: a
+    # `standard` clip holds one or two bodies, and a crowded one draws 3-10
+    # extras. So a plain scene is easy, a crowded one is moderate, and only the
+    # biggest draws reach hard.
     Factor("object_count",
            "how many objects must a model consider?",
-           "count", "low", 2, 6, "chosen"),
-    # CHOSEN, likewise: `multi` violates 2..N-1 of N actors.
+           "count", "low", 3, 10, "chosen"),
+    # CHOSEN. One violation is easy, TWO is moderate and three or more is hard.
+    # Two is deliberately not hard: the pair families (`newton2_mass` exchanging
+    # momentum between two balls, `fission`) name both bodies of one event, and
+    # they are 15% of `standard` clips -- calling them hard would spend the
+    # whole hard budget on clips nobody considers hard.
     Factor("violators",
            "how many of them are violating?",
-           "count", "low", 1, 3, "chosen"),
-    # FITTED on the 24 clips that move: p10 = 0.091, median 0.136, max 0.201.
-    # `easy` is 0.02 rather than 0 so that a camera which is static in intent
-    # is not demoted by floating-point drift in its own keyframes.
+           "count", "low", 1, 2, "chosen"),
+    # CHOSEN. Static is easy; any real camera move is at least moderate. The
+    # hard boundary sits above what the sampler draws (`CAMERA_TRAVEL` tops out
+    # at 0.22 of the standoff), so a moving camera does not on its own make a
+    # clip hard -- it makes it moderate, and something else has to go wrong for
+    # hard.
     Factor("camera_motion",
            "how far does the camera move?",
-           "path length / standoff", "low", 0.02, 0.12, "fitted"),
+           "path length / standoff", "low", 0.02, 0.20, "chosen"),
 )
 
 BY_NAME = {f.name: f for f in FACTORS}
@@ -301,6 +312,52 @@ def measure(meta: Dict[str, object],
             "duration": duration, "severity": severity,
             "object_count": object_count, "violators": violators,
             "camera_motion": camera_motion}
+
+
+#: The factors a SINGLE violator can be scored on, in the same order.
+#:
+#: **Per object, KITTI-style.** A clip label describes the clip, and a `multi`
+#: clip whose three violators are a large obvious one, a small one and one
+#: behind a screen is not well described by any single word. So each violator
+#: also carries its own label, measured on ITS mask, ITS occlusion, ITS
+#: observable window and ITS residual -- which is what an object detector is
+#: scored against, and what makes "ignore the harder violators at this level"
+#: expressible.
+#:
+#: `object_count` and `violators` are absent on purpose: they count what is in
+#: the scene, which is a property of the clip and not of any one body in it.
+#: `camera_motion` stays, because the camera moves for every object equally.
+VIOLATOR_FACTORS = ("violation_area", "occlusion", "duration", "severity",
+                    "camera_motion")
+
+
+def assess_violator(values: Dict[str, Optional[float]]) -> Dict[str, object]:
+    """One violator's own easy / moderate / hard, from its own measurements.
+
+    `values` carries `VIOLATOR_FACTORS`; anything missing is `moderate`, for
+    the reason `Factor.level` gives. The label is the worst factor, exactly as
+    the clip's is, so the two are read the same way.
+    """
+    levels = {n: BY_NAME[n].level(values.get(n)) for n in VIOLATOR_FACTORS}
+    rank = max(levels.values())
+    return {
+        "level": LEVELS[rank],
+        "rank": rank,
+        "binding_factors": sorted(n for n, v in levels.items() if v == rank),
+        "factors": {n: {"value": (None if values.get(n) is None
+                                  else round(float(values[n]), 6)),
+                        "level": LEVELS[v]}
+                    for n, v in sorted(levels.items())},
+    }
+
+
+def violator_values(area: Optional[float], occlusion: Optional[float],
+                    duration: Optional[float], severity: Optional[float],
+                    camera: Optional[Dict[str, object]]) -> Dict[str, float]:
+    """The five raw numbers `assess_violator` wants, named."""
+    return {"violation_area": area, "occlusion": occlusion,
+            "duration": duration, "severity": severity,
+            "camera_motion": camera_travel(camera)}
 
 
 def assess(meta: Dict[str, object],

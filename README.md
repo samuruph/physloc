@@ -380,13 +380,13 @@ Every **invalid** clip carries one label (a valid twin has nothing to detect):
 <!-- physloc:difficulty -->
 | factor | the question it asks | unit | easy | moderate | hard |
 |---|---|---|---|---|---|
-| `violation_area` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.05 | &ge; 0.012 | &lt; 0.012 |
-| `occlusion` | how much of the violation happens while the violator is hidden? | fraction of the violation window | &le; 0.05 | &le; 0.5 | &gt; 0.5 |
+| `violation_area` | how much of the frame does the violation cover, at its biggest? | fraction of frame | &ge; 0.008 | &ge; 0.003 | &lt; 0.003 |
+| `occlusion` | how much of the violation happens while the violator is hidden? | fraction of the violation window | &le; 0.2 | &le; 0.5 | &gt; 0.5 |
 | `duration` | how long is the violation observable? | fraction of the clip | &ge; 0.35 | &ge; 0.15 | &lt; 0.15 |
-| `severity` | how far from lawful does the physics actually get? | bounded residual, 0-1 | &ge; 0.9 | &ge; 0.4 | &lt; 0.4 |
-| `object_count` | how many objects must a model consider? | count | &le; 2 | &le; 6 | &gt; 6 |
-| `violators` | how many of them are violating? | count | &le; 1 | &le; 3 | &gt; 3 |
-| `camera_motion` | how far does the camera move? | path length / standoff | &le; 0.02 | &le; 0.12 | &gt; 0.12 |
+| `severity` | how far from lawful does the physics actually get? | bounded residual, 0-1 | &ge; 0.1 | &ge; 0.03 | &lt; 0.03 |
+| `object_count` | how many objects must a model consider? | count | &le; 3 | &le; 10 | &gt; 10 |
+| `violators` | how many of them are violating? | count | &le; 1 | &le; 2 | &gt; 2 |
+| `camera_motion` | how far does the camera move? | path length / standoff | &le; 0.02 | &le; 0.2 | &gt; 0.2 |
 <!-- /physloc:difficulty -->
 
 A clip is `easy` only when it is easy on **every** factor (KITTI's construction, not a weighted
@@ -395,6 +395,38 @@ score):
 - **It says why** — `binding_factors` names the factors that set the label.
 - **The sets nest** — easy ⊂ moderate ⊂ hard, so "moderate" means every clip with `rank <= 1`.
 - **Nothing cancels** — a tiny violation area is not offset by a static camera.
+
+### Where the cuts come from
+
+They are set so the **whole release lands near 30 / 40 / 30**, estimated by mixing the 872
+violated clips of the review corpus in the release's own proportions (six in ten `standard`, one
+in ten each of the other conditions, a third per severity bin). An earlier table, whose cuts sat
+at that corpus's tertiles, produced **3 / 40 / 77** on the same estimate: with the worst factor
+winning, seven factors that each fail a third of the time make nearly every clip hard. A 30% hard
+share therefore means each factor alone may call only a few per cent hard.
+
+The three scene factors are set from what the sampler draws, so each condition lands where it
+should without the label ever reading the condition:
+
+| condition | lands at | because |
+|---|---|---|
+| `standard` | ~50 / 37 / 13 | one or two bodies, a static camera: only the evidence factors bite |
+| `camera` | ~0 / 88 / 12 | any real move is past `camera_motion`'s easy cut, and the sampler never reaches its hard one |
+| `distractors` | ~0 / 86 / 14 | 3–10 extras put `object_count` past 3, and only the biggest draws pass 10 |
+| `multi` | ~0 / 43 / 57 | two violators is moderate, three or more is hard |
+| `camera+multi` | 0 / 0 / 100 | both apply |
+
+Two violators is deliberately **not** hard: the pair families (`newton2_mass` exchanging momentum
+between two balls, `fission`) name both bodies of a single event and are 15% of `standard` clips.
+
+### Each violator also carries its own label
+
+A `multi` clip whose violators are one large obvious body, one small one and one behind a screen
+is not described by any single word, so every violator carries its own label under
+`violation.violators[k].difficulty`, measured on **its** mask, **its** occlusion, **its**
+observable window and **its** residual — which is what an object detector is scored against.
+`object_count` and `violators` are left out of it: they count what is in the scene, which is a
+property of the clip and not of any one body in it.
 
 ```python
 df[df.difficulty_rank <= 1]                        # the "moderate" evaluation set

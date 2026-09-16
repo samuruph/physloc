@@ -109,7 +109,7 @@ def test_the_sets_nest():
     benchmark that reports three numbers.
     """
     metas = []
-    for foot in (0.3, 0.02, 0.001):
+    for foot in (0.3, 0.005, 0.001):    # easy, moderate, hard by area
         m = _meta()
         m["violation"]["difficulty_inputs"]["violation_area"] = foot
         m["difficulty"] = D.assess(m)
@@ -251,3 +251,45 @@ def test_the_cuts_are_reachable_from_a_config():
 
     with pytest.raises(KeyError):
         params.resolved({"difficulty": {"nonesuch": [1, 2]}})
+
+
+# --------------------------------------------------------- per-violator label
+def _own(**over):
+    """One violator's own measurements, easy on every factor."""
+    values = {"violation_area": 0.2, "occlusion": 0.0, "duration": 0.9,
+              "severity": 1.0, "camera_motion": 0.0}
+    values.update(over)
+    return values
+
+
+def test_a_violator_is_scored_on_its_own_evidence():
+    """The clip label describes the clip; this describes one body in it."""
+    assert D.assess_violator(_own())["level"] == "easy"
+    hidden = D.assess_violator(_own(occlusion=0.9))
+    assert hidden["level"] == "hard"
+    assert hidden["binding_factors"] == ["occlusion"]
+    assert hidden["factors"]["duration"]["level"] == "easy"
+
+
+def test_a_violator_label_does_not_count_the_others():
+    """`object_count` and `violators` describe the scene, not a body in it --
+    a `multi` clip's easy violator is still easy however many peers it has."""
+    assert "object_count" not in D.VIOLATOR_FACTORS
+    assert "violators" not in D.VIOLATOR_FACTORS
+    assert set(D.VIOLATOR_FACTORS) == set(D.violator_values(0.1, 0.0, 0.5, 0.8, None))
+
+
+def test_a_violator_and_its_clip_read_the_same_way():
+    """Same cuts, same worst-factor rule, so the two labels are comparable."""
+    for name in D.VIOLATOR_FACTORS:
+        f = D.BY_NAME[name]
+        bad = f.moderate * 0.5 if f.easier == "high" else f.moderate + 10.0
+        got = D.assess_violator(_own(**{name: bad}))
+        assert got["level"] == "hard", (name, got)
+        assert name in got["binding_factors"]
+
+
+def test_an_unmeasured_violator_factor_is_moderate():
+    got = D.assess_violator(_own(violation_area=None))
+    assert got["factors"]["violation_area"]["level"] == "moderate"
+    assert got["level"] == "moderate"

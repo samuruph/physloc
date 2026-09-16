@@ -54,6 +54,6 @@ defaults:
 
 generate:
   keep_going: true
-  workers: 8 #4
+  workers: auto
   workdir: out/work_L0
   outdir: out/review_L0

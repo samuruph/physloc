@@ -891,14 +891,14 @@ rendering; a real run finishes roughly 10% over it.
 <!-- physloc:costs -->
 | config | levels | cells | renders | workers | wall clock |
 |---|---|---|---|---|---|
-| `review_severity` | L0 | 166 | 511 | 8 | **36 min** |
-| `review_conditions` | L0 | 6 | 80 | 8 | **6 min** |
-| `review_L0` | L0 | 166 | 179 | 8 | **12 min** |
-| `review_L1` | L1 | 166 | 179 | 8 | **12 min** |
-| `review_L2` | L2 | 166 | 179 | 8 | **1.3 h** |
-| `review_L3` | L3 | 166 | 179 | 8 | **1.3 h** |
-| `review_ladder` | L0+L1+L2+L3 | 166 | 3580 | 8 | **9.4 h** |
-| `review` | L0 | 166 | 511 | 8 | **36 min** |
+| `review_severity` | L0 | 166 | 511 | 32 | **30 min** |
+| `review_conditions` | L0 | 6 | 80 | 32 | **6 min** |
+| `review_L0` | L0 | 166 | 179 | 32 | **12 min** |
+| `review_L1` | L1 | 166 | 179 | 32 | **12 min** |
+| `review_L2` | L2 | 166 | 179 | 32 | **1.2 h** |
+| `review_L3` | L3 | 166 | 179 | 32 | **1.2 h** |
+| `review_ladder` | L0+L1+L2+L3 | 12 | 320 | 32 | **48 min** |
+| `review` | L0 | 166 | 511 | 32 | **30 min** |
 | `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
 | `v0_L0` | L0 | 166 | 5110 | 32 | 99 h (**4.1 days**) |
 | `v0_L1` | L1 | 166 | 2555 | 32 | 50 h (**2.1 days**) |

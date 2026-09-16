@@ -336,7 +336,12 @@ def _patch(colour: str):
 
 # ----------------------------------------------------- labels inside a ring
 def _points_per_unit(ax) -> float:
-    """Points per data unit along x -- rings are drawn with an equal aspect."""
+    """Points per data unit along x -- rings are drawn with an equal aspect.
+
+    The aspect is applied first: until then the axes fill their whole grid
+    cell, and a ring measured in that box is wider than the one drawn, which
+    passed labels that then spilled over their slice."""
+    ax.apply_aspect()
     a = ax.transData.transform((0.0, 0.0))
     b = ax.transData.transform((1.0, 0.0))
     return float(b[0] - a[0]) * 72.0 / ax.figure.dpi
@@ -523,10 +528,47 @@ def _stacked_share(ax, rows, counts, names, colours) -> None:
 HIST_BINS = 28
 
 
+def _density(values, lo: float, hi: float, points: int = 256):
+    """A Gaussian kernel density of `values` on [lo, hi], or None.
+
+    Silverman's bandwidth, never narrower than a sixtieth of the axis so a
+    release where most clips share one value draws a peak rather than a
+    spike. REFLECTED at 0 and, for a quantity that cannot exceed 1, at 1:
+    every value plotted here is a share, a duration or a score, and a kernel
+    that leaks past a hard bound draws mass where no clip can be.
+    Every value counts, including those past a trimmed axis, so the tail
+    the axis hides still shapes the curve up to its edge.
+    """
+    import numpy as np
+
+    v = np.asarray(values, float)
+    v = v[np.isfinite(v)]
+    if v.size < 3 or hi <= lo:
+        return None
+    spread = min(float(np.std(v)),
+                 float(np.subtract(*np.percentile(v, [75, 25]))) / 1.34) \
+        or float(np.std(v))
+    bw = max(0.9 * spread * v.size ** -0.2, (hi - lo) / 60.0)
+    mirrored = [v]
+    if float(v.min()) >= 0.0:
+        mirrored.append(-v)
+    if float(v.max()) <= 1.0 and hi >= 1.0:
+        mirrored.append(2.0 - v)
+    pool = np.concatenate(mirrored)
+    x = np.linspace(lo, hi, points)
+    z = (x[:, None] - pool[None, :]) / bw
+    y = np.exp(-0.5 * z * z).sum(axis=1) / (v.size * bw * np.sqrt(2.0 * np.pi))
+    return x, y
+
+
 def _hist(ax, values, lo: float, hi: float, colour: str = ACCENT,
           bins: int = HIST_BINS, share: bool = False, step: bool = False,
-          label: Optional[str] = None):
-    """Draw a histogram; return (tallest bar, median, how many fell past `hi`)."""
+          label: Optional[str] = None, curve: bool = True):
+    """Draw a histogram with its density on top; return (tallest mark,
+    median, how many fell past `hi`).
+
+    The curve is in the bars' own units -- clips per bin, or a share per bin
+    -- so it sits on them rather than on an axis of its own."""
     import numpy as np
 
     v = np.asarray(values, float)
@@ -535,11 +577,24 @@ def _hist(ax, values, lo: float, hi: float, colour: str = ACCENT,
     y = counts / max(1, v.size) if share else counts
     if step:
         ax.step(np.append(edges, edges[-1]), np.append(np.append(y, y[-1]), 0),
-                where="post", color=colour, linewidth=2.0, label=label, zorder=4)
+                where="post", color=_tint(colour, 0.35), linewidth=1.1,
+                zorder=3)
     else:
         ax.bar((edges[:-1] + edges[1:]) / 2.0, y, width=(edges[1] - edges[0]) * 0.92,
-               color=colour, linewidth=0, zorder=2, label=label)
-    return (float(y.max()) if len(y) else 0.0,
+               color=_tint(colour, 0.25) if curve else colour, linewidth=0,
+               zorder=2, label=None if step else label)
+    top = float(y.max()) if len(y) else 0.0
+    dens = _density(v, lo, hi) if curve else None
+    if dens is not None:
+        x, d = dens
+        d = d * (edges[1] - edges[0]) * (1.0 if share else v.size)
+        ax.plot(x, d, color=_shade(colour, 0.75) if not step else colour,
+                linewidth=2.0, zorder=5, label=label if step else None,
+                solid_capstyle="round")
+        top = max(top, float(d.max()))
+    elif step:
+        ax.plot([], [], color=colour, linewidth=2.0, label=label)
+    return (top,
             float(np.median(v)) if v.size else None,
             int((v > hi).sum()))
 
@@ -637,6 +692,14 @@ def _fig_overview(plt, s, path) -> None:
     plt.close(fig)
 
 
+#: The narrowest a sunburst slice is drawn, as a share of the circle: wide
+#: enough for a one-word label written across the ring. Measured against
+#: `_ring_labels` at the figure's size -- a bold domain name wants about 12
+#: degrees on the inner ring, a two-line family name about 11 on the outer.
+DOMAIN_MIN_SHARE = 0.036
+FAMILY_MIN_SHARE = 0.036
+
+
 def _fig_taxonomy(plt, s, path) -> None:
     """Domain -> family sunburst, and clips per scenario grouped by medium."""
     import numpy as np
@@ -650,7 +713,7 @@ def _fig_taxonomy(plt, s, path) -> None:
 
     ax = fig.add_subplot(gs[0, 0])
     _panel_title(ax, "Domain and family",
-                 "violated clips: domain on the inner ring, its families outside")
+                 "violated clips: domain inside, families outside; thin slices drawn wider, counts exact")
     fams = s.get("families") or {}
     fd = s.get("family_domain") or {}
     order = [d for d in T.DOMAINS if any(fd.get(f) == d for f in fams)]
@@ -659,39 +722,56 @@ def _fig_taxonomy(plt, s, path) -> None:
     if sum(dom_val):
         dom_col = [_readable_fill(CATEGORICAL[i % len(CATEGORICAL)])
                    for i in range(len(order))]
-        fam_names, fam_vals, fam_cols = [], [], []
+        # EVERY LABEL INSIDE ITS RING. A slice is drawn at least a minimum
+        # share of the circle -- families first, then a domain whose families
+        # still add up to less is widened as a whole -- so `optical` at 1.7%
+        # of the clips carries its own name the way `equilibrium` does, rather
+        # than hanging off a leader line. The printed counts stay exact; only
+        # the angle of a thin slice is generous.
+        total = float(sum(dom_val))
+        fam_names, fam_vals, fam_cols, fam_draw = [], [], [], []
+        dom_draw = []
         for d, colour in zip(order, dom_col):
             members = sorted((f for f in fams if fd.get(f) == d),
                              key=lambda f: -fams[f])
-            for k, f in enumerate(members):
+            draw = [max(float(fams[f]), FAMILY_MIN_SHARE * total)
+                    for f in members]
+            grow = max(1.0, DOMAIN_MIN_SHARE * total / max(sum(draw), 1e-9))
+            draw = [v * grow for v in draw]
+            dom_draw.append(sum(draw))
+            for k, (f, v) in enumerate(zip(members, draw)):
                 fam_names.append(f)
                 fam_vals.append(fams[f])
+                fam_draw.append(v)
                 fam_cols.append(_readable_fill(
                     _tint(colour, 0.1 + 0.45 * k / max(len(members), 1))))
         ax.set_aspect("equal")
-        ax.set_xlim(-1.75, 1.75)
-        ax.set_ylim(-1.38, 1.3)
         ax.axis("off")
-        inner, _ = ax.pie(dom_val, radius=0.6, colors=dom_col, startangle=90,
-                          counterclock=False,
-                          wedgeprops={"width": 0.3, "edgecolor": SURFACE,
-                                      "linewidth": 2.0})
-        outer, _ = ax.pie(fam_vals, radius=1.0, colors=fam_cols, startangle=90,
+        inner, _ = ax.pie(dom_draw, radius=0.62, colors=dom_col, startangle=90,
                           counterclock=False,
                           wedgeprops={"width": 0.38, "edgecolor": SURFACE,
+                                      "linewidth": 2.0})
+        outer, _ = ax.pie(fam_draw, radius=1.0, colors=fam_cols, startangle=90,
+                          counterclock=False,
+                          wedgeprops={"width": 0.36, "edgecolor": SURFACE,
                                       "linewidth": 1.5})
+        # The ring fills the panel's height: the space a leader line needed
+        # is better spent making every slice wide enough to be written in.
+        # After `pie`, which sets limits of its own.
+        ax.set_xlim(-1.3, 1.3)
+        ax.set_ylim(-1.04, 1.04)
         ax.text(0, 0.05, "%d" % s["invalid"], ha="center", va="center",
                 fontsize=14, fontweight="bold")
         ax.text(0, -0.12, "violated", ha="center", va="center", fontsize=7.5,
                 color=INK2)
         inner_missed = _ring_labels(ax, inner, [(d, d[:5] + ".") for d in order],
-                                    0.3, 0.6, dom_col, fontsize=7, weight="bold",
+                                    0.24, 0.62, dom_col, fontsize=7, weight="bold",
                                     text_colour="white")
         pretty = [f.replace("_", " ") for f in fam_names]
         missed = _ring_labels(
             ax, outer, [("%s\n%d" % (p, v), p, p.replace(" ", "\n"))
                         for p, v in zip(pretty, fam_vals)],
-            0.62, 1.0, fam_cols, fontsize=6.8, text_colour="white")
+            0.64, 1.0, fam_cols, fontsize=6.8, text_colour="white")
         # Both rings' leftovers in ONE call, so the leaders de-overlap against
         # each other rather than landing on top of one another.
         out_w = [outer[i] for i in missed] + [inner[i] for i in inner_missed]
@@ -701,7 +781,7 @@ def _fig_taxonomy(plt, s, path) -> None:
             _slice_labels(ax, out_w, out_t, 1.0)
         ax.legend([_patch(c) for c in dom_col],
                   ["%s (%d)" % (d, v) for d, v in zip(order, dom_val)],
-                  loc="upper center", bbox_to_anchor=(0.5, 0.04), ncol=4,
+                  loc="upper center", bbox_to_anchor=(0.5, -0.01), ncol=4,
                   fontsize=7.5, handlelength=0.9, handleheight=0.9,
                   columnspacing=1.0, labelcolor=INK2)
     else:
@@ -1038,6 +1118,7 @@ def _fig_factors(plt, s, path) -> None:
                "bars    how many clips fall in that\n"
                "         range (whole-number factors\n"
                "         get one bar per value)\n"
+               "curve   the same clips, smoothed\n"
                "line    a cut, its value in the box\n"
                "dashes  the median\n\n"
                "violation_area: the fraction of the\n"

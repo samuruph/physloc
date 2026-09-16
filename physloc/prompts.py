@@ -76,22 +76,24 @@ SCENARIO_PROMPTS: Dict[str, str] = {
             "piling up",
 }
 
-#: scenario -> the one body whose `kind`/`color` fill that scenario's
-#: template. A scenario absent here has a template with no `{color}`/`{shape}`
-#: slot at all -- see the module docstring for why `stack_topple` and `pour`
-#: are the two.
-SUBJECTS: Dict[str, str] = {
-    "drop": "ball",
-    "collision": "ball_a",
-    "ramp_slide": "block",
-    "toss": "ball",
-    "occluder_pass": "ball",
-    "barrier_pass": "ball",
-    "pyramid_impact": "cube",
-    "pendulum_swing": "bob",
-    "resting_table": "mug",
-    "rolling_ramp": "block",
-    "shadow_track": "body",
+#: scenario -> the segmentation id of the one body whose `kind`/`color` fill
+#: that scenario's template. An id and not a name: a body is named after the
+#: shape it drew (`cone`, `sphere_a`) or the scan it became at L3, while its id
+#: is fixed by the scenario. A scenario absent here has a template with no
+#: `{color}`/`{shape}` slot at all -- see the module docstring for why
+#: `stack_topple` and `pour` are the two.
+SUBJECTS: Dict[str, int] = {
+    "drop": 2,            # Drop.SEG_BALL
+    "collision": 2,       # Collision.SEG_A, the striker
+    "ramp_slide": 2,      # RampSlide.SEG_BLOCK
+    "toss": 2,            # Toss.SEG_BALL
+    "occluder_pass": 2,   # OccluderPass.SEG_BALL
+    "barrier_pass": 2,    # BarrierPass.SEG_BALL
+    "pyramid_impact": 2,  # PyramidImpact.SEG_CUBE
+    "pendulum_swing": 2,  # PendulumSwing.SEG_BOB
+    "resting_table": 2,   # RestingTable.SEG_ACTOR
+    "rolling_ramp": 2,    # RollingRamp.SEG_BLOCK
+    "shadow_track": 2,    # ShadowTrack.SEG_ACTOR
 }
 
 #: `kind` -> the noun a prompt uses for it. Kubric's two primitives, so two
@@ -119,11 +121,11 @@ def compose_prompt(scenario: str, spec_d: dict) -> str:
     """The caption for one sampled clip: `SCENARIO_PROMPTS[scenario]` filled
     in from whichever body `SUBJECTS[scenario]` names, if any."""
     template = SCENARIO_PROMPTS[scenario]
-    subject_name = SUBJECTS.get(scenario)
-    if subject_name is None:
+    subject_id = SUBJECTS.get(scenario)
+    if subject_id is None:
         return template
-    bodies = {b["name"]: b for b in spec_d.get("bodies", [])}
-    body = bodies[subject_name]
+    bodies = {int(b["segmentation_id"]): b for b in spec_d.get("bodies", [])}
+    body = bodies[subject_id]
     shape = SHAPE_NOUN.get(body["kind"], body["kind"])
     color = color_name(body["color"])
     article = "an" if color[0] in "aeiou" else "a"

@@ -112,8 +112,8 @@ class ShadowTrack(Scenario):
         """Translate the actor, and put its shadow where the light says it goes."""
         n = traj.num_frames
         t = np.arange(n, dtype=np.float64) * traj.dt
-        actor = spec.body("body")
-        ja = spec.index_of("body")
+        ja = _index(spec, self.SEG_ACTOR)
+        actor = spec.bodies[ja]
 
         p = np.asarray(actor.position, np.float64)[None, :] + \
             np.asarray(actor.velocity, np.float64)[None, :] * t[:, None]
@@ -162,7 +162,7 @@ class ShadowTrack(Scenario):
         * **opacity** -- a half-transparent body casts a half-strength shadow,
           so a dissolve fades both together.
         """
-        ja, js = spec.index_of("body"), spec.index_of("shadow")
+        ja, js = _index(spec, self.SEG_ACTOR), _index(spec, self.SEG_SHADOW)
         p = np.asarray(traj.pos[:, ja, :], np.float64)
         traj.pos[:, js, :] = project(p, spec.notes["light_dir"],
                                      float(spec.notes["surface_top"]),
@@ -195,3 +195,12 @@ def _unit(v: np.ndarray) -> np.ndarray:
 
 
 register(ShadowTrack())
+
+
+def _index(spec, segmentation_id: int) -> int:
+    """A body's position in `spec.bodies`, by id: L3 renames a body after the
+    scan it became, so its name is not a stable handle."""
+    for i, b in enumerate(spec.bodies):
+        if int(b.segmentation_id) == int(segmentation_id):
+            return i
+    raise KeyError(segmentation_id)

@@ -1,11 +1,10 @@
-"""Packaging a release: the shards, the index, and the split that must not leak.
+"""Packaging a release: the clip folders, the index, and the split that must not leak.
 
 Built on a synthetic clip tree rather than a generated release, so the test
 runs anywhere and does not need docker, a renderer, or an hour.
 """
 import json
 import os
-import tarfile
 
 import numpy as np
 import pytest
@@ -23,7 +22,7 @@ def _clip(root, pair, name, label, family=None, seed=7):
             "pair_uid": pair,
             "twin_uid": "%s/valid" % pair,
             "label": label,
-            "scenario": pair.split("/")[1],
+            "scenario": pair.split("/")[2],
             "family": family,
             "domain": "identity",
             "physics_medium": "rigid",
@@ -63,13 +62,13 @@ def _clip(root, pair, name, label, family=None, seed=7):
 def release(tmp_path):
     root = str(tmp_path / "rel")
     for i in range(12):
-        pair = "physloc_v0/drop/%04d" % i
+        pair = "physloc_v0/L0/drop/%04d_standard" % i
         _clip(root, pair, "valid", "valid")
         _clip(root, pair, "invalid_permanence_strong", "invalid", "permanence")
     return root
 
 
-def test_export_writes_shards_index_card_and_splits(release, tmp_path):
+def test_export_writes_clips_index_card_and_splits(release, tmp_path):
     out = str(tmp_path / "pack")
     res = X.export(release, out)
     assert res["clips"] == 24 and res["pairs"] == 12
@@ -77,7 +76,45 @@ def test_export_writes_shards_index_card_and_splits(release, tmp_path):
         assert os.path.exists(os.path.join(out, name))
     assert any(os.path.exists(os.path.join(out, n))
                for n in ("index.parquet", "index.jsonl"))
-    assert res["shards"]["main"] >= 1
+    assert os.path.exists(os.path.join(
+        out, "clips", "physloc_v0", "L0", "drop", "0000_standard",
+        "invalid_permanence_strong", "masks.npz"))
+    assert not os.path.exists(os.path.join(out, "shards"))
+
+
+def test_the_shipped_loader_reads_the_export(release, tmp_path):
+    """What a user downloads is read by the loader that came with it, in the
+    same layout the generator writes -- one form, one reader."""
+    import importlib.util
+
+    out = str(tmp_path / "pack")
+    X.export(release, out)
+    spec = importlib.util.spec_from_file_location(
+        "shipped_loader", os.path.join(out, "loader.py"))
+    L = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(L)
+    ds = L.PhysLocDataset(out, fields=("violation",))
+    assert len(ds) == 24
+    pairs = L.PhysLocDataset(out, unit="pair", fields=("path_info",))
+    assert len(pairs) == 12
+    item = pairs[0]
+    assert item["valid"]["label"] == "valid"
+    assert [c["label"] for c in item["invalid"]] == ["invalid"]
+    total = sum(len(L.PhysLocDataset(out, split=n, fields=()))
+                for n, _ in X.SPLIT_FRACTIONS)
+    assert total == 24
+
+
+def test_a_second_export_replaces_the_first(release, tmp_path):
+    out = str(tmp_path / "pack")
+    X.export(release, out)
+    os.makedirs(os.path.join(out, "shards"))
+    stray = os.path.join(out, "clips", "physloc_v0", "L0", "drop", "9999_standard",
+                         "valid")
+    os.makedirs(stray)
+    X.export(release, out)
+    assert not os.path.exists(stray)
+    assert not os.path.exists(os.path.join(out, "shards"))
 
 
 def test_a_twin_pair_is_never_split_apart(release, tmp_path):
@@ -117,30 +154,20 @@ def test_splits_are_reproducible():
     assert X.assign_splits(uids) == X.assign_splits(reversed(uids))
 
 
-def test_raw_passes_stay_out_of_the_core_shards(release, tmp_path):
+def test_raw_passes_are_opt_in(release, tmp_path):
     """`depth`, `flow` and `object_coords` are ~86% of the bytes. Someone
     training on the masks should not download them to get there."""
     out = str(tmp_path / "pack")
     X.export(release, out)
-    names = []
-    for shard in sorted(os.listdir(os.path.join(out, "shards"))):
-        with tarfile.open(os.path.join(out, "shards", shard)) as tf:
-            names += tf.getnames()
-    assert names
-    assert any(n.endswith(".masks.npz") for n in names)
-    assert not any(n.endswith(".depth.npz") for n in names), (
-        "a raw geometry pass leaked into the core shards")
+    names = [n for _, _, fs in os.walk(os.path.join(out, "clips")) for n in fs]
+    assert "masks.npz" in names
+    assert "depth.npz" not in names, "a raw geometry pass leaked into the export"
 
-
-def test_with_passes_ships_them_separately(release, tmp_path):
-    out = str(tmp_path / "pack")
+    out = str(tmp_path / "with")
     res = X.export(release, out, with_passes=True)
-    assert any(k.endswith("_passes") for k in res["shards"]), res["shards"]
-    pass_shards = [n for n in os.listdir(os.path.join(out, "shards"))
-                   if "-passes-" in n]
-    assert pass_shards
-    with tarfile.open(os.path.join(out, "shards", pass_shards[0])) as tf:
-        assert any(n.endswith(".depth.npz") for n in tf.getnames())
+    assert res["with_passes"]
+    names = [n for _, _, fs in os.walk(os.path.join(out, "clips")) for n in fs]
+    assert "depth.npz" in names
 
 
 def test_the_index_carries_what_a_filter_needs(release, tmp_path):
@@ -173,13 +200,15 @@ def test_every_split_ships_the_same_files(release, tmp_path):
     done at publication time from `splits/held_out.txt` without regenerating.
     """
     out = str(tmp_path / "pack")
-    res = X.export(release, out)
+    X.export(release, out)
     per_split = {}
-    for shard in sorted(os.listdir(os.path.join(out, "shards"))):
-        split = shard.split("-")[0]
-        with tarfile.open(os.path.join(out, "shards", shard)) as tf:
-            per_split.setdefault(split, set()).update(
-                n.split(".", 1)[1] for n in tf.getnames())
+    for name, _ in X.SPLIT_FRACTIONS:
+        with open(os.path.join(out, "splits", "%s.txt" % name)) as fh:
+            for uid in filter(None, (l.strip() for l in fh)):
+                cdir = os.path.join(out, "clips", *uid.split("/"))
+                if uid.endswith("/valid"):
+                    continue
+                per_split.setdefault(name, set()).update(os.listdir(cdir))
     assert len(per_split) > 1, "expected more than one split to be populated"
     kinds = list(per_split.values())
     assert all(k == kinds[0] for k in kinds), (

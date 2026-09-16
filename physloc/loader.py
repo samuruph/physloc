@@ -2,12 +2,17 @@
 
 Deliberately imports nothing from `physloc`, so a consumer in another
 environment (LikePhys-PhysLoc, a training repo) can import this file by path or
-copy it, and read a release without installing the generator.
+copy it, and read a release without installing the generator. Every exported
+release ships a copy as `loader.py`, so the data carries the code that reads it.
 
-Two on-disk forms are read with the same `Clip`:
+ONE on-disk form, the same for a generator run and a downloaded release:
 
     <root>/clips/<release>/<level>/<scenario>/<seed>_<condition>/<valid|invalid_<family>_<bin>>/
-    <root>/shards/*.tar          the `physloc export` form, read in place
+        metadata.json  video.mp4  segmentations.npz  instances.npz  ...
+        masks.npz  objects.npz                      (invalid clips only)
+
+Plain folders, so any clip can be opened, played and copied without this file,
+and a download can be restricted to the files one needs.
 
 **Schema v2 stores only what cannot be derived.** An invalid clip ships two
 annotation files, `masks.npz` and `objects.npz`; everything else a model trains
@@ -24,20 +29,24 @@ holds the one implementation of each function:
                          the primary violator's row)
     latent_grid        = masks and severity reduced to the VAE token grid
 
-    >>> ds = PhysLocDataset("out/physloc_v0_mini", family="permanence")
-    >>> clip = ds.clips[0]
-    >>> clip.video.shape, clip.violation_mask.shape, clip.objects["severity"].shape
-    ((25, 128, 128, 3), (25, 128, 128), (1, 25))
+ONE dataset class, `PhysLocDataset`. Choose what each item carries with
+`fields=` (see `FIELDS`), which clips with filters, and whether an item is a
+clip or a whole scene with `unit=`:
+
+    >>> ds = PhysLocDataset("data/physloc-mini", family="permanence",
+    ...                     fields=("video", "violation_mask", "severity_map"))
+    >>> item = ds[0]
+    >>> item["video"].shape, item["violation_mask"].shape
+    ((25, 128, 128, 3), (25, 128, 128))
+    >>> scenes = PhysLocDataset("data/physloc-mini", unit="pair", fields=("video_path",))
+    >>> scenes[0]["valid"]["video_path"], len(scenes[0]["invalid"])
 """
 from __future__ import annotations
 
 import glob
-import io
 import json
 import os
-import tarfile
-import tempfile
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 
@@ -63,10 +72,55 @@ CLOCKS = ("active", "intervening", "consequence", "observable", "occluded")
 #: Depth marks the background with a huge sentinel (~1.1e10), not inf.
 DEPTH_BACKGROUND = 1e6
 
-#: What `Clip.sample()` returns when not told otherwise: what a model trains and
-#: is scored on. Dense passes are never decoded unless asked for.
-DEFAULT_KEYS = ("video", "violation_mask", "severity_map", "causal", "timeline",
-                "objects")
+#: Everything an item can carry, and what it is. Pick with `fields=`; nothing
+#: is read until an item asks for it, and a dense pass is never decoded unless
+#: named. `uid`, `pair_uid` and `label` are in every item regardless.
+FIELDS: Dict[str, str] = {
+    "video": "uint8 [T,H,W,3], decoded frames",
+    "video_path": "str, the clip's video.mp4 -- for players and viewers",
+    "prompt": "str, the clip's caption",
+    "metadata": "dict, the whole metadata.json",
+    "path_info": "dict, release/level/scenario/seed/condition/label/family/bin",
+    "segmentations": "uint16 [T,H,W], instance ids, 0 = background",
+    "violation": "uint16 [T,H,W], the violator's id or 0 (both twins)",
+    "violation_mask": "bool [T,H,W], the localisation target",
+    "visible_violation": "bool [T,H,W], the part visible in this video",
+    "severity_map": "float32 [T,H,W] in [0,1]",
+    "reference_mask": "bool [T,H,W], where the violators lawfully are",
+    "causal": "uint8 [T,H,W], 1 a violator, 2 a body it affected",
+    "causal_source": "uint16 [T,H,W], the violator each causal pixel is from",
+    "divergence": "float32 [T,H,W], |valid - invalid|; inspection only",
+    "objects": "dict, per violator [K,T]: severity, clocks, residual, score",
+    "timeline": "dict, per frame [T]: the clocks and peak severity",
+    "latent_grid": "dict, mask and severity on the VAE token grid",
+    "instances": "dict, MOVi per-instance tensors [k,T,...]",
+    "camera": "dict, intrinsics and per-frame pose",
+    "trajectory": "dict, the simulator rollout [T,B,...]",
+    "bodies": "dict, per-body constants",
+    "energy": "dict, energy per frame and per body",
+    "energy_map": "float32 [T,H,W], energy painted per pixel",
+}
+FIELDS.update({name: "dense pass (%s.npz), only if the release ships it" % name
+               for name in PASSES})
+
+#: What an item carries when `fields` is not given: what a model trains and is
+#: scored on.
+DEFAULT_FIELDS = ("video", "violation_mask", "severity_map", "causal", "timeline",
+                  "objects", "metadata")
+#: The name this had before `fields`; kept so older callers still work.
+DEFAULT_KEYS = DEFAULT_FIELDS
+
+#: The file each field reads, for an error that says what to download.
+FIELD_FILES: Dict[str, str] = {
+    "video": VIDEO, "video_path": VIDEO, "segmentations": SEGMENTATIONS,
+    "violation": MASKS, "violation_mask": MASKS, "visible_violation": MASKS,
+    "severity_map": OBJECTS, "reference_mask": OBJECTS, "causal": MASKS,
+    "causal_source": MASKS, "divergence": VIDEO, "objects": OBJECTS,
+    "timeline": OBJECTS, "latent_grid": MASKS, "instances": INSTANCES,
+    "trajectory": TRAJECTORY, "bodies": BODIES, "energy": ENERGY,
+    "energy_map": ENERGY_MAP,
+}
+FIELD_FILES.update({name: name + ".npz" for name in PASSES})
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +223,7 @@ def divergence(video_valid: np.ndarray, video_invalid: np.ndarray) -> np.ndarray
 
 
 # ---------------------------------------------------------------------------
-# Where a clip's files come from: a directory, or members of a tar shard
+# A clip's files
 # ---------------------------------------------------------------------------
 
 class _DirSource:
@@ -179,49 +233,51 @@ class _DirSource:
     def has(self, name: str) -> bool:
         return os.path.exists(os.path.join(self.path, name))
 
+    def _file(self, name: str) -> str:
+        path = os.path.join(self.path, name)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                "%s is missing from %s -- a download that skipped it cannot "
+                "provide the fields that read it" % (name, self.path))
+        return path
+
     def read(self, name: str) -> bytes:
-        with open(os.path.join(self.path, name), "rb") as fh:
+        with open(self._file(name), "rb") as fh:
             return fh.read()
 
     def npz(self, name: str, allow_pickle: bool = False):
-        return np.load(os.path.join(self.path, name), allow_pickle=allow_pickle)
+        return np.load(self._file(name), allow_pickle=allow_pickle)
 
     def video_path(self) -> str:
-        return os.path.join(self.path, VIDEO)
-
-
-class _TarSource:
-    """One clip's members inside tar shards, read by offset -- nothing is extracted.
-
-    A clip can span two tars, its core shard and the optional passes shard, so
-    every member remembers which tar it is in."""
-
-    def __init__(self, members: Dict[str, tuple]):
-        self.members = members           # file name -> (tar path, data offset, size)
-
-    def has(self, name: str) -> bool:
-        return name in self.members
-
-    def read(self, name: str) -> bytes:
-        path, offset, size = self.members[name]
-        with open(path, "rb") as fh:
-            fh.seek(offset)
-            return fh.read(size)
-
-    def npz(self, name: str, allow_pickle: bool = False):
-        return np.load(io.BytesIO(self.read(name)), allow_pickle=allow_pickle)
-
-    def video_path(self) -> str:
-        tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        tmp.write(self.read(VIDEO))
-        tmp.close()
-        return tmp.name
+        return self._file(VIDEO)
 
 
 def _decode_video(path: str) -> np.ndarray:
-    import imageio.v3 as iio
-    frames = iio.imread(path)
-    return np.asarray(frames[..., :3], np.uint8)
+    """uint8 [T,H,W,3]. imageio when it is installed, OpenCV otherwise -- a
+    training environment usually has one of them and rarely both."""
+    try:
+        import imageio.v3 as iio
+    except ImportError:
+        iio = None
+    if iio is not None:
+        frames = iio.imread(path)
+        return np.asarray(frames[..., :3], np.uint8)
+    try:
+        import cv2
+    except ImportError as exc:
+        raise ImportError("decoding video needs imageio (with pyav or "
+                          "imageio-ffmpeg) or opencv-python") from exc
+    cap = cv2.VideoCapture(path)
+    frames = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    cap.release()
+    if not frames:
+        raise IOError("could not decode %s" % path)
+    return np.stack(frames).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +339,7 @@ class Clip:
     @property
     def twin(self) -> Optional["Clip"]:
         """The valid clip of this pair (None for a valid clip or a lone clip)."""
-        if self._twin is None and not self.is_valid and isinstance(self._src, _DirSource):
+        if self._twin is None and not self.is_valid:
             path = os.path.join(os.path.dirname(self._src.path), "valid")
             if os.path.exists(os.path.join(path, METADATA)):
                 self._twin = Clip.from_dir(path)
@@ -299,8 +355,8 @@ class Clip:
     # ---- what the renderer made ------------------------------------------
     @property
     def video_path(self) -> str:
-        """A path to this clip's `video.mp4`, for tools that open the file
-        themselves -- a temporary copy when the clip is read from a shard."""
+        """The path of this clip's `video.mp4`, for tools that open the file
+        themselves."""
         return self._src.video_path()
 
     @property
@@ -438,21 +494,34 @@ class Clip:
         return self._cached("divergence", lambda: divergence(self.twin.video, self.video))
 
     # ---- batching --------------------------------------------------------
-    def sample(self, keys: Sequence[str] = DEFAULT_KEYS) -> Dict[str, Any]:
-        """A dict of the requested arrays plus `uid`, `label` and `metadata`.
+    @property
+    def path(self) -> str:
+        """The clip's directory."""
+        return self._src.path
 
-        A key is any array property above (`video`, `violation_mask`, ...), a
-        pass name (`depth`, ...) or `latent_grid`.
-        """
-        out: Dict[str, Any] = {"uid": self.uid, "label": self.label,
-                               "metadata": self.metadata}
-        for key in keys:
-            if key in PASSES:
-                out[key] = self.pass_(key)
-            elif key == "latent_grid":
-                out[key] = self.latent_grid()
-            else:
-                out[key] = getattr(self, key)
+    @property
+    def path_info(self) -> Dict[str, Optional[str]]:
+        """Release, level, scenario, seed, condition, label, family and bin,
+        read from the directory name -- no file is opened."""
+        return _path_fields(self.path)
+
+    def get(self, name: str) -> Any:
+        """One field by name (see `FIELDS`)."""
+        if name in PASSES:
+            return self.pass_(name)
+        if name == "latent_grid":
+            return self.latent_grid()
+        if name not in FIELDS:
+            raise KeyError("unknown field %r; known: %s" % (name, sorted(FIELDS)))
+        return getattr(self, name)
+
+    def sample(self, fields: Sequence[str] = DEFAULT_FIELDS) -> Dict[str, Any]:
+        """A dict of the requested fields plus `uid`, `pair_uid` and `label`."""
+        info = self.path_info
+        out: Dict[str, Any] = {"uid": info["uid"], "pair_uid": info["pair_uid"],
+                               "label": info["label"]}
+        for name in fields:
+            out[name] = self.get(name)
         return out
 
     def release(self) -> None:
@@ -490,8 +559,8 @@ class Pair:
 
 #: Filters readable from a clip's path alone, so indexing a release never opens
 #: a metadata file: clips/<release>/<level>/<scenario>/<seed>_<condition>/<leaf>.
-def _path_fields(uid: str) -> Dict[str, Optional[str]]:
-    parts = uid.split("/")
+def _path_fields(path: str) -> Dict[str, Optional[str]]:
+    parts = path.replace(os.sep, "/").rstrip("/").split("/")
     release, level, scenario, seedcond, leaf = parts[-5:]
     seed, _, condition = seedcond.partition("_")
     if leaf == "valid":
@@ -503,106 +572,185 @@ def _path_fields(uid: str) -> Dict[str, Optional[str]]:
     return {"release": release, "level": level, "scenario": scenario, "seed": seed,
             "condition": condition.replace("-", "+"), "label": label,
             "family": family, "severity_bin": sev,
-            "pair_uid": "/".join(parts[-5:-1])}
+            "uid": "/".join(parts[-5:]), "pair_uid": "/".join(parts[-5:-1])}
 
 
-def _index_dirs(root: str) -> List[tuple]:
-    base = os.path.join(root, "clips") if os.path.isdir(os.path.join(root, "clips")) else root
-    rows = []
-    for mp in sorted(glob.glob(os.path.join(base, "**", METADATA), recursive=True)):
-        cdir = os.path.dirname(mp)
-        uid = os.path.relpath(cdir, base).replace(os.sep, "/")
-        rows.append((uid, _DirSource(cdir)))
-    return rows
+def _clips_dir(root: str) -> str:
+    """`<root>/clips`, or `root` itself when it is already that directory."""
+    inner = os.path.join(root, "clips")
+    if os.path.isdir(inner):
+        return inner
+    if os.path.isdir(root):
+        return root
+    raise FileNotFoundError("no PhysLoc release at %s" % root)
 
 
-def _index_tars(paths: Iterable[str]) -> List[tuple]:
-    grouped: Dict[str, Dict[str, tuple]] = {}
-    for path in sorted(paths):
-        with tarfile.open(path) as tf:
-            for m in tf.getmembers():
-                if not m.isfile():
-                    continue
-                key, _, name = m.name.partition(".")
-                grouped.setdefault(key, {})[name] = (path, m.offset_data, m.size)
-    return [(key.replace("__", "/"), _TarSource(files))
-            for key, files in sorted(grouped.items())]
+def _index_dirs(root: str) -> List[str]:
+    base = _clips_dir(root)
+    # Exactly five levels below clips/, which is the layout; a glob this
+    # specific does not walk into anything else a download may hold.
+    pattern = os.path.join(base, "*", "*", "*", "*", "*", METADATA)
+    return sorted(os.path.dirname(p) for p in glob.glob(pattern))
+
+
+def _no_clips_message(root: str) -> str:
+    if glob.glob(os.path.join(root, "shards", "*.tar")):
+        return ("%s holds tar shards, the form releases were exported in before "
+                "they shipped as folders. Re-export it with `physloc export`, "
+                "or unpack the shards into %s/clips/." % (root, root))
+    if glob.glob(os.path.join(root, "**", "meta.json"), recursive=True):
+        return ("%s holds meta.json/rgb.mp4 clips, schema v1; this loader reads "
+                "schema v%d (metadata.json/video.mp4). Re-export it with a "
+                "current `physloc export`." % (root, SCHEMA_VERSION))
+    return ("no clips under %s: expected "
+            "clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/"
+            "metadata.json" % root)
+
+
+def _as_set(value: Any) -> set:
+    if isinstance(value, (str, int)) or value is None:
+        return {None if value is None else str(value)}
+    return {None if v is None else str(v) for v in value}
 
 
 class PhysLocDataset:
     """Every clip under `root`, filtered, indexable, and grouped into pairs.
 
-    `root` is a generated release (it has `clips/`) or an exported one (it has
-    `shards/`, read in place; the optional `passes-*` shards are merged when
-    present). Filters take a value or a collection of values:
+    `root` is a downloaded release or a generator run: anything with `clips/`
+    in the layout above.
+
+    `fields`  what each item carries -- names from `FIELDS`. Checked here, so a
+              typo fails at construction rather than an hour into a run.
+    `unit`    "clip" (default): one item per clip. "pair": one item per scene,
+              `{"pair_uid", "prompt", "valid": <clip item>, "invalid": [...]}`;
+              filters then choose the INVALID clips, the valid one is always
+              kept because it is what they are compared against, and a scene
+              with no invalid clip left is dropped.
+    `split`   reads `splits/<name>.txt` (clip or pair uids), which an exported
+              release ships.
+    filters   any of `FILTERS`, each a value or a collection of values:
 
         PhysLocDataset(root, label="invalid", family=("permanence", "solidity"),
                        level="L0", condition="standard", split="main")
-
-    `split` reads `splits/<name>.txt` (clip or pair uids) and so needs an
-    exported root.
     """
 
-    FILTERS = ("label", "family", "scenario", "level", "condition", "severity_bin")
+    FILTERS = ("release", "label", "family", "scenario", "level", "condition",
+               "severity_bin", "seed")
+    UNITS = ("clip", "pair")
 
-    def __init__(self, root: str, keys: Sequence[str] = DEFAULT_KEYS,
-                 split: Optional[str] = None, **filters: Any):
+    def __init__(self, root: str, fields: Optional[Sequence[str]] = None,
+                 split: Optional[str] = None, unit: str = "clip",
+                 keys: Optional[Sequence[str]] = None, **filters: Any):
         unknown = set(filters) - set(self.FILTERS)
         if unknown:
             raise TypeError("unknown filter(s) %s; known: %s"
                             % (sorted(unknown), self.FILTERS))
+        if unit not in self.UNITS:
+            raise ValueError("unit must be one of %s, not %r" % (self.UNITS, unit))
+        chosen = tuple(fields if fields is not None
+                       else keys if keys is not None else DEFAULT_FIELDS)
+        bad = [f for f in chosen if f not in FIELDS]
+        if bad:
+            raise KeyError("unknown field(s) %s; known: %s" % (bad, sorted(FIELDS)))
         self.root = root
-        self.keys = tuple(keys)
-        shards = sorted(glob.glob(os.path.join(root, "shards", "*.tar")))
-        rows = _index_tars(shards) if shards else _index_dirs(root)
-        want = {k: ({v} if isinstance(v, str) or v is None else set(v))
-                for k, v in filters.items()}
+        self.selected = chosen
+        self.unit = unit
+        want = {k: _as_set(v) for k, v in filters.items()}
         in_split = None
         if split is not None:
+            path = os.path.join(root, "splits", "%s.txt" % split)
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    "no split %r at %s; an exported release ships splits/"
+                    % (split, path))
             # `physloc export` lists clip uids; a pair uid names every clip of
             # its pair. Pairs never straddle a split, so either selects the same.
-            with open(os.path.join(root, "splits", "%s.txt" % split)) as fh:
+            with open(path) as fh:
                 in_split = {line.strip() for line in fh if line.strip()}
 
+        dirs = _index_dirs(root)
+        if not dirs:
+            raise FileNotFoundError(_no_clips_message(root))
+
         self.clips: List[Clip] = []
-        self._fields: List[Dict[str, Optional[str]]] = []
-        for uid, source in rows:
-            f = _path_fields(uid)
-            if any(f.get(k) not in v for k, v in want.items()):
+        self._info: List[Dict[str, Optional[str]]] = []
+        kept_valid: Dict[str, Clip] = {}
+        for cdir in dirs:
+            f = _path_fields(cdir)
+            if in_split is not None and f["uid"] not in in_split \
+                    and f["pair_uid"] not in in_split:
                 continue
-            if in_split is not None and uid not in in_split and f["pair_uid"] not in in_split:
+            matches = all(f.get(k) in v for k, v in want.items())
+            if unit == "pair" and f["label"] == "valid":
+                # Judged on everything but the invalid-only filters.
+                scene = {k: v for k, v in want.items()
+                         if k not in ("label", "family", "severity_bin")}
+                if all(f.get(k) in v for k, v in scene.items()):
+                    kept_valid[f["pair_uid"]] = Clip.from_dir(cdir)
                 continue
-            self.clips.append(Clip(source))
-            self._fields.append(f)
+            if not matches:
+                continue
+            self.clips.append(Clip.from_dir(cdir))
+            self._info.append(f)
+        if unit == "pair":
+            for uid, clip in kept_valid.items():
+                self.clips.append(clip)
+                self._info.append(_path_fields(clip.path))
         self._link_twins()
+        self._pairs = ([p for p in self._group() if p.valid is not None and p.invalids]
+                       if unit == "pair" else None)
 
     def _link_twins(self) -> None:
-        valid = {f["pair_uid"]: c for c, f in zip(self.clips, self._fields)
+        valid = {f["pair_uid"]: c for c, f in zip(self.clips, self._info)
                  if f["label"] == "valid"}
-        for c, f in zip(self.clips, self._fields):
+        for c, f in zip(self.clips, self._info):
             if f["label"] == "invalid" and f["pair_uid"] in valid:
                 c._twin = valid[f["pair_uid"]]
 
-    def __len__(self) -> int:
-        return len(self.clips)
-
-    def __getitem__(self, i: int) -> Dict[str, Any]:
-        return self.clips[i].sample(self.keys)
-
-    def fields(self, i: int) -> Dict[str, Optional[str]]:
-        """Level, scenario, seed, condition, label, family and bin of clip `i`,
-        read from its path."""
-        return dict(self._fields[i])
-
-    def pairs(self) -> List[Pair]:
+    def _group(self) -> List["Pair"]:
         out: Dict[str, Pair] = {}
-        for c, f in zip(self.clips, self._fields):
+        for c, f in zip(self.clips, self._info):
             p = out.setdefault(f["pair_uid"], Pair(f["pair_uid"], None))
             if f["label"] == "valid":
                 p.valid = c
             else:
                 p.invalids.append(c)
-        return list(out.values())
+        return [out[k] for k in sorted(out)]
+
+    # ---- access ----------------------------------------------------------
+    def __len__(self) -> int:
+        return len(self._pairs) if self._pairs is not None else len(self.clips)
+
+    def __getitem__(self, i: int) -> Dict[str, Any]:
+        if self._pairs is None:
+            return self.clips[i].sample(self.selected)
+        pair = self._pairs[i]
+        return {"pair_uid": pair.pair_uid, "prompt": pair.prompt,
+                "valid": pair.valid.sample(self.selected),
+                "invalid": [c.sample(self.selected) for c in pair.invalids]}
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        for i in range(len(self)):
+            yield self[i]
+
+    def info(self, i: int) -> Dict[str, Optional[str]]:
+        """Release, level, scenario, seed, condition, label, family and bin of
+        clip `i` (of `self.clips`), read from its path."""
+        return dict(self._info[i])
+
+    def pairs(self) -> List["Pair"]:
+        """Every scene, its valid clip and its invalid clips. In pair mode,
+        only complete ones -- the same list `__getitem__` indexes."""
+        return list(self._pairs) if self._pairs is not None else self._group()
+
+    def release(self) -> None:
+        """Drop every clip's cached arrays."""
+        for c in self.clips:
+            c.release()
+
+    def __repr__(self) -> str:
+        return "PhysLocDataset(%s, %d %ss, fields=%s)" % (
+            self.root, len(self), self.unit, list(self.selected))
 
 
 def collate(samples: Sequence[Dict[str, Any]]) -> Dict[str, Any]:

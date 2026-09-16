@@ -1,27 +1,30 @@
-"""Package a generated release for distribution -- WebDataset shards + a card.
+"""Package a generated release for distribution -- the clip folders, an index and a card.
 
-The generator writes one directory per clip, twenty-odd files each. That is the
-right shape for producing and inspecting clips and the wrong shape for handing
-to anyone else: a thousand directories is slow to download, impossible to
-stream, and tells a reader nothing about what is in it.
-
-This turns that tree into what a dataset host expects:
+A release ships in the SAME layout the generator writes and the loader reads,
+so a download is usable as it lands and every consumer reads it one way:
 
     physloc_v0/
       README.md                     the dataset card, with YAML front-matter
       LICENSE
-      loader.py                     reads the shards in place; numpy only
+      loader.py                     reads this folder; numpy only
       index.parquet                 one row per clip, for the dataset viewer
-      splits/{train,val,test}.txt   grouped by pair_uid
-      shards/core-{000..NNN}.tar    rgb + annotations, the default download
-      shards/passes-{000..NNN}.tar  depth/flow/coords, optional and much larger
+      taxonomy.json  stats/         what the release is, and its distributions
+      splits/{main,held_out,debug}.txt   clip uids, grouped by pair_uid
+      clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/
+          metadata.json video.mp4 masks.npz objects.npz segmentations.npz ...
 
-**Two shard sets, and the split is the whole point.** Measured on a debug
-sweep: `flow_fwd`, `depth` and `object_coords` are 86% of the bytes, at
-~3.2 MB per clip against ~1 KB for each annotation. At v0 geometry the raw
-passes are ~57x that. Someone training on `violation_mask` and `severity_map`
-should not download a hundred gigabytes of optical flow to get them, and
-someone who wants the flow should not have to guess whether it exists.
+Folders rather than tar shards: any clip can be opened, played and copied
+without special tooling, and a download can be cut to the files one needs --
+`--include "*/metadata.json" --include "*/video.mp4"` fetches the videos and
+nothing else. What that costs is file count: about nine files a clip, and the
+Hub advises under 100k files a repository, so a release past ~10k clips should
+be published in parts (per level is the natural cut).
+
+**The raw geometry passes are opt-in.** Measured on a debug sweep, `flow_fwd`,
+`depth` and `object_coords` are 86% of the bytes, at ~3.2 MB per clip against
+~1 KB for each annotation, and ~57x that at v0 geometry. `--with-passes` adds
+them to each clip folder; a consumer who does not want them excludes
+`*/depth.npz` and friends from the download.
 
 Splits group by `pair_uid`, never by clip. A valid twin and its invalid
 siblings share a scene, a seed and a bit-identical prefix, so putting them on
@@ -35,28 +38,21 @@ import hashlib
 import json
 import os
 import shutil
-import tarfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .. import loader
 from ..annotate import layout
 
-#: Files that go in the core shards -- what a model trains on.
-#: Files that go in the core shards -- what a model trains on. Masks, severity,
+#: Files every exported clip carries -- what a model trains on. Masks, severity,
 #: timelines and grids are not files: `physloc/loader.py` derives them from
 #: `masks.npz`, `objects.npz` and `segmentations.npz`.
 CORE_FILES = (layout.METADATA, layout.VIDEO, layout.MASKS, layout.OBJECTS,
               layout.SEGMENTATIONS, layout.INSTANCES, "energy.npz",
               "bodies.npz", "traj.npz")
 
-#: Files that go in the optional shards -- the raw geometry passes.
+#: Files `--with-passes` adds -- the raw geometry passes.
 PASS_FILES = tuple("%s.npz" % name for name in layout.PASSES.values()) + (
     "energy_map.npz",)
-
-#: Roughly how large a shard should get before starting another. 400 MB is the
-#: usual WebDataset advice: big enough that sequential reads dominate, small
-#: enough to retry cheaply on a bad connection.
-SHARD_BYTES = 400 * 1024 * 1024
 
 #: Fractions of PAIRS, not clips.
 #:
@@ -252,43 +248,23 @@ def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
     }
 
 
-def _write_shards(clips: Sequence[Tuple[str, Dict]], outdir: str, prefix: str,
-                  members: Sequence[str], max_bytes: int) -> List[str]:
-    """Pack each clip into a tar as one WebDataset sample.
+def _copy_clip(cdir: str, dest: str, members: Sequence[str]) -> int:
+    """Copy one clip's `members` into `dest`; returns how many were present.
 
-    A sample's key is its `clip_uid` with slashes replaced, so every file of one
-    clip shares a stem and `webdataset` groups them without being told how.
-    """
-    os.makedirs(outdir, exist_ok=True)
-    written: List[str] = []
-    tar = None
-    size = 0
-    try:
-        for cdir, meta in clips:
-            key = str(layout.identity(meta)["clip_uid"]).replace("/", "__")
-            present = [(m, os.path.join(cdir, m)) for m in members
-                       if os.path.exists(os.path.join(cdir, m))]
-            if not present:
-                continue
-            need = sum(os.path.getsize(p) for _, p in present)
-            if tar is None or (size and size + need > max_bytes):
-                if tar is not None:
-                    tar.close()
-                path = os.path.join(outdir, "%s-%03d.tar" % (prefix, len(written)))
-                written.append(path)
-                tar = tarfile.open(path, "w")
-                size = 0
-            for name, path in present:
-                tar.add(path, arcname="%s.%s" % (key, name))
-            size += need
-    finally:
-        if tar is not None:
-            tar.close()
-    return written
+    Copied, not linked: the generator rewrites `metadata.json` in place when a
+    clip is re-annotated or relabelled, and a hard link would carry that edit
+    into a release that was already packaged."""
+    os.makedirs(dest, exist_ok=True)
+    n = 0
+    for name in members:
+        src = os.path.join(cdir, name)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(dest, name))
+            n += 1
+    return n
 
 
 def export(root: str, outdir: str, with_passes: bool = False,
-           shard_bytes: int = SHARD_BYTES,
            license_name: str = "CC-BY-4.0") -> Dict[str, object]:
     """Package the release at `root` into `outdir`. Returns a summary."""
     clip_dirs = _clip_dirs(root)
@@ -312,21 +288,18 @@ def export(root: str, outdir: str, with_passes: bool = False,
         with open(os.path.join(outdir, "splits", "%s.txt" % name), "w") as fh:
             fh.write("\n".join(members) + ("\n" if members else ""))
 
-    # SHARDED BY SPLIT, so a consumer can fetch one without the others -- but
-    # every split gets the same files, so the boundary can be moved later and
-    # any clip can be scored.
-    shard_dir = os.path.join(outdir, "shards")
-    shards: Dict[str, List[str]] = {}
-    for name, _ in SPLIT_FRACTIONS:
-        part = [(d, m) for d, m in clips
-                if splits.get(str(layout.identity(m).get("pair_uid"))) == name]
-        if not part:
-            continue
-        shards[name] = _write_shards(part, shard_dir, name, CORE_FILES,
-                                     shard_bytes)
-        if with_passes:
-            shards["%s_passes" % name] = _write_shards(
-                part, shard_dir, "%s-passes" % name, PASS_FILES, shard_bytes)
+    # THE CLIPS, in the layout the loader reads. Every split gets the same
+    # files, so the boundary can be moved later and any clip can be scored.
+    # A stale tree from an earlier export would leave clips this one dropped.
+    clip_root = os.path.join(outdir, "clips")
+    if os.path.isdir(clip_root):
+        shutil.rmtree(clip_root)
+    members = CORE_FILES + (PASS_FILES if with_passes else ())
+    files = 0
+    for cdir, meta in clips:
+        uid = str(layout.identity(meta)["clip_uid"])
+        files += _copy_clip(cdir, os.path.join(clip_root, *uid.split("/")),
+                            members)
 
     index_path = _write_index(rows, outdir, clips)
     _write_taxonomy(outdir, rows)
@@ -340,12 +313,17 @@ def export(root: str, outdir: str, with_passes: bool = False,
         report(root, stats_dir)
     except (Exception, SystemExit):                            # noqa: BLE001
         stats_dir = None
-    _write_card(rows, outdir, license_name, shards, stats_dir)
+    _write_card(rows, outdir, license_name, with_passes, stats_dir)
     _write_license(outdir, license_name)
     # The loader ships with the data: schema v2 stores two annotation files and
     # derives the rest, so the card's `from loader import ...` has to work on a
     # fresh download with nothing but numpy installed.
     shutil.copyfile(loader.__file__, os.path.join(outdir, "loader.py"))
+    # An export from before releases shipped as folders left tar shards here,
+    # and a loader that finds both would be reading two copies.
+    stale = os.path.join(outdir, "shards")
+    if os.path.isdir(stale):
+        shutil.rmtree(stale)
     counts = {n: sum(1 for r in rows if r["split"] == n)
               for n, _ in SPLIT_FRACTIONS}
     notes = []
@@ -369,7 +347,8 @@ def export(root: str, outdir: str, with_passes: bool = False,
         "clips": len(clips),
         "pairs": len({r["pair_uid"] for r in rows}),
         "notes": notes,
-        "shards": {k: len(v) for k, v in shards.items()},
+        "files": files,
+        "with_passes": bool(with_passes),
         "index": index_path,
         "splits": counts,
         "outdir": outdir,
@@ -615,7 +594,7 @@ def _count(rows, field):
 
 
 def _write_card(rows: List[Dict], outdir: str, license_name: str,
-                shards: Dict[str, List[str]],
+                with_passes: bool = False,
                 stats_dir: Optional[str] = None) -> None:
     """The dataset card. YAML front-matter first, because the hub parses it."""
     from collections import Counter
@@ -641,15 +620,10 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
     index_kind = ("parquet" if os.path.exists(os.path.join(outdir, "index.parquet"))
                   else "jsonl")
 
-    # THE VIEWER NEEDS `configs`. Without it the hub shows a repository of
-    # opaque tar and parquet files and nothing renders. Two configs, because
-    # they answer different questions:
-    #
-    #   `index`  parquet, one row per clip -- sortable, filterable, instant.
-    #            Listed FIRST so it is the default: it is guaranteed to render,
-    #            where a webdataset config can fail on an unfamiliar member and
-    #            take the whole viewer down with it.
-    #   `clips`  the shards themselves -- mp4 previews and the annotations.
+    # THE VIEWER NEEDS `configs`. Without it the hub shows a folder tree and
+    # nothing renders. One config, `index`: parquet, one row per clip, with the
+    # mp4 embedded -- sortable, filterable, playable. The clip folders are the
+    # data and are downloaded rather than previewed.
     splits_present = [n for n, _ in SPLIT_FRACTIONS
                       if any(r["split"] == n for r in rows)]
     cfg = ["configs:",
@@ -659,21 +633,6 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         cfg.append("  - split: %s" % n)
         cfg.append("    path: index.parquet")
         break                      # the index carries every split in one file
-    # NO webdataset config for the shards, on purpose.
-    #
-    # Declaring one made the hub's viewer fail the whole config with
-    # `SplitsNotFoundError`, and a dataset page showing a broken config is
-    # worse than one showing a working table. The likely reason is that samples
-    # do not have a homogeneous key set -- a valid clip has no
-    # `violation_mask`, `severity_map` or `causal_mask`, because there is no
-    # violation in it -- and webdataset feature inference expects every sample
-    # to carry the same members. Splitting the shards by label would test that,
-    # and is worth doing before claiming it.
-    #
-    # The shards are still in the repository and still the data; they are just
-    # downloaded rather than previewed. The index is what makes the dataset
-    # navigable, and it renders.
-
     lines = [
         "---",
         "license: %s" % license_name.lower(),
@@ -762,17 +721,22 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         *stats_lines,
         "## Files",
         "",
-        "- `shards/<split>-*.tar` -- RGB video and every annotation, one set "
-        "per split. **This is the data.** The hub previews `index` rather than "
-        "these, so browse the table to find what you want and stream the shard "
-        "to get it.",
-        ("- `shards/<split>-passes-*.tar` -- depth, optical flow, normals, "
-         "object coordinates. Far larger: about 86% of the bytes, so they ship "
-         "separately rather than inside the download everyone needs."
-         if any(k.endswith("_passes") for k in shards) else
+        "- `clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/` -- "
+        "one folder per clip, `valid` or `invalid_<family>_<bin>`: "
+        "`video.mp4`, `metadata.json`, `segmentations.npz`, `instances.npz`, "
+        "`traj.npz`, `bodies.npz`, `energy.npz`, and on invalid clips "
+        "`masks.npz` and `objects.npz`. **This is the data**, in the same "
+        "layout the generator writes.",
+        ("- The raw geometry passes (`depth.npz`, `forward_flow.npz`, "
+         "`backward_flow.npz`, `normal.npz`, `object_coordinates.npz`, "
+         "`energy_map.npz`) sit in the same folders -- about 86% of the bytes, "
+         "so exclude them from a download unless you need them."
+         if with_passes else
          "- The raw geometry passes (depth, optical flow, normals, object "
          "coordinates) are **not** in this release. They are about 86% of the "
          "bytes and are packaged only on request."),
+        "- `loader.py` -- reads this folder (numpy only; imageio or OpenCV for "
+        "the video).",
         "- `index.%s` -- one row per clip: uids, scenario, family, severity, "
         "windows, camera motion, actor shape and material." % index_kind,
         "- `splits/*.txt` -- clip uids per split.",
@@ -794,25 +758,48 @@ def _write_card(rows: List[Dict], outdir: str, license_name: str,
         "submit to -- strip the annotations from `splits/held_out.txt` at that "
         "point; nothing here has to be regenerated to do it.",
         "",
-        "## Reading a clip",
+        "## Downloading",
         "",
-        "`loader.py` (numpy only) reads the shards in place and derives every "
-        "annotation below:",
+        "```bash",
+        "hf download <this repo> --repo-type dataset --local-dir physloc",
+        "# only what a video model needs:",
+        "hf download <this repo> --repo-type dataset --local-dir physloc \\",
+        "    --include \"*.py\" --include \"*.txt\" --include \"*/metadata.json\" "
+        "--include \"*/video.mp4\"",
+        "```",
+        "",
+        "## Reading it",
+        "",
+        "`loader.py` ships in this folder and is the one reader: import it from "
+        "here in any project, or copy it. It derives every annotation below "
+        "from the stored files. `fields` picks what an item carries, filters "
+        "pick the clips, and `unit=\"pair\"` gives one item per scene -- its "
+        "valid clip and every invalid clip made from it.",
         "",
         "```python",
-        "from loader import PhysLocDataset",
+        "import sys; sys.path.insert(0, \"physloc\")   # the downloaded folder",
+        "from loader import PhysLocDataset, FIELDS, collate",
         "",
         # A split THIS release has. `main` was hard-coded, and a small
         # release that only fills `debug` answered the card's own example
         # with zero clips -- measured on a fresh download of physloc-mini.
-        'ds = PhysLocDataset(".", label="invalid", split="%s")'
+        'ds = PhysLocDataset("physloc", label="invalid", split="%s",'
         % (splits_present[0] if splits_present else "main"),
-        "clip = ds.clips[0]",
-        "clip.video             # uint8 [T,H,W,3]",
-        "clip.violation_mask    # bool [T,H,W]   the localisation target",
-        "clip.severity_map      # float32 [T,H,W]",
-        'clip.objects["severity"]  # [K,T], one row per violating object',
+        '                    fields=("video", "violation_mask", "severity_map"))',
+        "item = ds[0]",
+        'item["video"]           # uint8 [T,H,W,3]',
+        'item["violation_mask"]  # bool [T,H,W]   the localisation target',
+        'item["severity_map"]    # float32 [T,H,W]',
+        "",
+        'scenes = PhysLocDataset("physloc", unit="pair", fields=("video_path",))',
+        'scenes[0]["valid"], scenes[0]["invalid"]   # one scene, both sides',
+        "",
+        "clip = ds.clips[0]       # or everything, lazily, from one clip",
+        'clip.objects["severity"] # [K,T], one row per violating object',
         "```",
+        "",
+        "`sorted(FIELDS)` lists every field. Each clip folder also opens "
+        "without the loader: `video.mp4` plays in any player.",
         "",
         "## The annotations, and what they are not",
         "",
@@ -863,8 +850,19 @@ def upload(outdir: str, repo_id: str, private: bool = False,
     api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=private,
                     exist_ok=True)
-    # Bytecode appears the moment anyone imports the shipped `loader.py` from
-    # inside the folder, and it has no business on the hub.
-    api.upload_folder(repo_id=repo_id, repo_type="dataset", folder_path=outdir,
-                      ignore_patterns=["__pycache__/*", "*.pyc"])
+    # THE LARGE-FOLDER UPLOAD: a release is thousands of clip folders, and one
+    # commit of that many files is what the Hub refuses; this one commits in
+    # batches and resumes where an interrupted run stopped. Bytecode appears the
+    # moment anyone imports the shipped `loader.py` from inside the folder, and
+    # it has no business on the hub.
+    api.upload_large_folder(repo_id=repo_id, repo_type="dataset",
+                            folder_path=outdir, private=private,
+                            ignore_patterns=["**/__pycache__/**", "*.pyc",
+                                             ".cache/**"])
+    # A repository first published as tar shards still holds them, and every
+    # download would carry the data twice.
+    if any(f.startswith("shards/") for f in api.list_repo_files(
+            repo_id=repo_id, repo_type="dataset")):
+        api.delete_folder("shards", repo_id=repo_id, repo_type="dataset",
+                          commit_message="Remove the tar shards; clips ship as folders")
     return "https://huggingface.co/datasets/%s" % repo_id

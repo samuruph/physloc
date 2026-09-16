@@ -154,32 +154,46 @@ The full field reference is [docs/schema.md](docs/schema.md).
 
 ### Loading the dataset
 
-`physloc/loader.py` needs only numpy (and imageio for the video), so another environment can import
-it by path. It reads a generated release (`clips/`) or an exported one (`shards/`, read in place):
+One form on disk and one reader. A generator run and a downloaded release have the same layout —
+`clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/`, one plain folder per clip — and
+[`physloc/loader.py`](physloc/loader.py) reads both. It needs only numpy (plus imageio or OpenCV to
+decode video) and imports nothing from `physloc`, and every export ships a copy as `loader.py`, so
+any other repository reads a download with the loader that came with it:
 
 ```python
-from physloc.loader import PhysLocDataset, collate
+import sys; sys.path.insert(0, "data/physloc-mini")      # a downloaded release
+from loader import PhysLocDataset, FIELDS, collate        # or: from physloc.loader import ...
 
-ds = PhysLocDataset("out/physloc_mini", label="invalid", family="permanence")  # filters optional
-clip = ds.clips[0]
+ds = PhysLocDataset("data/physloc-mini", label="invalid", family="permanence",
+                    fields=("video", "violation_mask", "severity_map", "objects"))
+item = ds[0]                 # {"uid", "pair_uid", "label", + the fields asked for}
+item["video"]                # uint8   [T,H,W,3]
+item["violation_mask"]       # bool    [T,H,W]   where
+item["severity_map"]         # float32 [T,H,W]   how badly
+item["objects"]["severity"]  # float32 [K,T]     per violating object
 
-clip.video                   # uint8   [T,H,W,3]
-clip.violation_mask          # bool    [T,H,W]   where
-clip.severity_map            # float32 [T,H,W]   how badly
-clip.objects["severity"]     # float32 [K,T]     per violating object
-clip.timeline["active"]      # bool    [T]       when
-clip.metadata["violation"]["violators"]          # each violator's moment and windows
+scenes = PhysLocDataset("data/physloc-mini", unit="pair", fields=("video_path",))
+scenes[0]["valid"], scenes[0]["invalid"]          # one scene: its valid clip, every invalid one
 
-for pair in ds.pairs():      # a valid clip and every invalid clip made from its scene
-    print(pair.prompt, pair.valid.uid, [c.family for c in pair.invalids])
+clip = ds.clips[0]           # everything, lazily, from one clip
+clip.timeline["active"]      # bool [T]  when
+clip.metadata["violation"]["violators"]           # each violator's moment and windows
 
-batch = collate([ds[i] for i in range(8)])       # stacks arrays, pads objects to the largest K
+batch = collate([ds[i] for i in range(8)])        # stacks arrays, pads objects to the largest K
 ```
 
-Filters are `label`, `family`, `scenario`, `level`, `condition`, `severity_bin` and, on an exported
-release, `split`. `ds[i]` returns the arrays named in `keys` (default: `video`, `violation_mask`,
-`severity_map`, `causal`, `timeline`, `objects`); dense passes are decoded only when asked for, and
-`torch_dataset(ds)` wraps the dataset for a `DataLoader`.
+- **`fields`** picks what an item carries — any of `sorted(FIELDS)`: the video (`video`, or
+  `video_path` for a player), the stored and derived annotations, `instances`, `camera`,
+  `trajectory`, `energy`, the dense passes, `metadata`, `path_info`. It is checked when the dataset
+  is built, and a field whose file a download skipped fails naming that file. Default: `video`,
+  `violation_mask`, `severity_map`, `causal`, `timeline`, `objects`, `metadata`.
+- **Filters** — `release`, `label`, `family`, `scenario`, `level`, `condition`, `severity_bin`,
+  `seed`, each a value or a collection — are read from the path, so indexing opens no file.
+  `split="main"` reads an exported release's `splits/`.
+- **`unit="pair"`** makes an item a scene: filters then choose the invalid clips, the valid clip is
+  always kept, and scenes with nothing left are dropped. This is what LikePhys-style evaluation
+  wants.
+- `torch_dataset(ds)` wraps it for a `DataLoader` (`collate_fn=collate`).
 
 To check a dataset by eye:
 
@@ -951,7 +965,12 @@ Packaging always happens; **uploading only when asked**. `run.sh` does both when
 `PHYSLOC_PUSH_TO` is set (`PHYSLOC_PUSH_PRIVATE=1` for a private repository), or set
 `PHYSLOC_PUSH_OWNER` once and every run publishes as `<owner>/physloc-<run>`. A push replaces the
 card and index at that repository id. What lands: the dataset card, `index.parquet` with inline
-video, `taxonomy.json`, `splits/`, `LICENSE` and the WebDataset shards.
+video, `taxonomy.json`, `stats/`, `splits/`, `LICENSE`, `loader.py` and `clips/` — the clip
+folders in the layout above (`--with-passes` adds the dense passes to them). A consumer can download
+a subset, e.g. only videos: `hf download <repo> --repo-type dataset --include "*.py" --include
+"*.txt" --include "*/metadata.json" --include "*/video.mp4"`. About nine files per clip, and the Hub
+advises under 100k files per repository, so publish a release past ~10k clips in parts (one per
+level).
 
 ---
 

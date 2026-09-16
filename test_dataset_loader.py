@@ -7,9 +7,10 @@
         --layers violation,reference,bbox3d --panels rgb,valid,segmentation,camera
     python test_dataset_loader.py --gui                            # browser viewer, port 8765
 
-**What a user gets is the exported release**, not a generator run: `README.md`,
-`loader.py`, `index.parquet`, `splits/` and `shards/*.tar`. So the default is to
-download it from the Hub, and the summary reads it through the `loader.py`
+**What a user gets is the exported release**: `README.md`, `loader.py`,
+`index.parquet`, `splits/` and `clips/`, the same clip folders a generator run
+writes. So the default is to download it from the Hub, and the summary reads it
+through the `loader.py`
 SHIPPED INSIDE the download -- not `physloc/loader.py` from this repository --
 so a stale or broken shipped loader fails here instead of on someone else's
 machine. `data/` is gitignored, and a repeated download only fetches what
@@ -57,7 +58,7 @@ def summarize(loader, ds) -> None:
     print("%d clips in %d pairs under %s" % (len(ds), len(ds.pairs()), ds.root))
     print("loader: %s (schema %s)" % (loader.__file__, loader.SCHEMA_VERSION))
     for field in ("level", "scenario", "family", "condition", "label"):
-        counts = Counter(ds.fields(i)[field] or "-" for i in range(len(ds)))
+        counts = Counter(ds.info(i)[field] or "-" for i in range(len(ds)))
         print("  %-9s %s" % (field, ", ".join("%s %d" % kv for kv in sorted(counts.items()))))
     splits = os.path.join(ds.root, "splits")
     if os.path.isdir(splits):
@@ -94,6 +95,16 @@ def summarize(loader, ds) -> None:
         for name, a in (value.items() if isinstance(value, dict) else [(key, value)]):
             if hasattr(a, "shape"):
                 print("  %-28s %s" % (name if name == key else key + "." + name, list(a.shape)))
+
+    print("\nfields= picks what an item carries; any of:\n  %s"
+          % ", ".join(sorted(loader.FIELDS)))
+    scenes = loader.PhysLocDataset(ds.root, unit="pair", fields=("video_path",))
+    if len(scenes):
+        item = scenes[0]
+        print("\nunit=\"pair\": %d scenes; the first, %s, has its valid clip and "
+              "%d invalid:" % (len(scenes), item["pair_uid"], len(item["invalid"])))
+        for c in [item["valid"]] + item["invalid"][:3]:
+            print("  %-8s %s" % (c["label"], c["video_path"]))
 
 
 def render(root: str, which: str, layers, panels, out: str) -> None:

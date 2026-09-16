@@ -93,6 +93,7 @@ def test_a_clip_path_names_its_identity():
     assert f == {"release": "mini", "level": "L1", "scenario": "drop", "seed": "0005",
                  "condition": "camera+multi", "label": "invalid",
                  "family": "newton2_mass", "severity_bin": "strong",
+                 "uid": "mini/L1/drop/0005_camera-multi/invalid_newton2_mass_strong",
                  "pair_uid": "mini/L1/drop/0005_camera-multi"}
 
 
@@ -168,11 +169,9 @@ def test_a_batch_collates(dataset):
     assert batch["objects"]["valid"].ndim == 2
 
 
-def test_exported_shards_read_back_identically(dataset, tmp_path):
+def test_an_export_reads_back_identically(dataset, tmp_path):
     from physloc.release import export
 
-    # WITH the passes: a clip then spans two tars, its core and its passes
-    # shard, and reading every member from the last tar opened returned garbage.
     out = str(tmp_path / "pack")
     export.export(RELEASE, out, with_passes=True)
     packed = L.PhysLocDataset(out)
@@ -188,3 +187,48 @@ def test_exported_shards_read_back_identically(dataset, tmp_path):
         assert np.array_equal(other.violation, clip.violation)
         assert np.array_equal(other.severity_map, clip.severity_map)
         assert np.array_equal(other.reference_mask, clip.reference_mask)
+
+
+def test_fields_are_checked_and_selected(dataset):
+    with pytest.raises(KeyError):
+        L.PhysLocDataset(RELEASE, fields=("violaton_mask",))
+    ds = L.PhysLocDataset(RELEASE, label="invalid",
+                          fields=("violation_mask", "video_path", "path_info"))
+    item = ds[0]
+    assert set(item) == {"uid", "pair_uid", "label", "violation_mask",
+                         "video_path", "path_info"}
+    assert item["label"] == "invalid" and os.path.exists(item["video_path"])
+    assert item["path_info"]["uid"] == item["uid"] == ds.clips[0].path_info["uid"]
+
+
+def test_pair_mode_keeps_the_valid_clip_of_every_filtered_scene(dataset):
+    family = next(c.family for c in dataset.clips if not c.is_valid)
+    ds = L.PhysLocDataset(RELEASE, unit="pair", family=family,
+                          fields=("violation",))
+    assert len(ds) > 0
+    for item in ds:
+        assert item["valid"]["label"] == "valid"
+        assert item["invalid"]
+        assert all(c["uid"].rsplit("_", 1)[0].endswith(family)
+                   for c in item["invalid"])
+        assert all(c["pair_uid"] == item["pair_uid"] for c in item["invalid"])
+
+
+def test_a_missing_file_names_itself(tmp_path):
+    import shutil
+
+    src = next(p for p in L._index_dirs(RELEASE) if not p.endswith("/valid"))
+    info = L._path_fields(src)
+    dst = tmp_path.joinpath("clips", *info["uid"].split("/"))
+    shutil.copytree(src, dst)
+    os.remove(dst / L.MASKS)
+    ds = L.PhysLocDataset(str(tmp_path), fields=("violation_mask",))
+    with pytest.raises(FileNotFoundError, match="masks.npz"):
+        ds[0]
+
+
+def test_a_folder_without_clips_says_why(tmp_path):
+    os.makedirs(tmp_path / "shards")
+    (tmp_path / "shards" / "main-000.tar").write_bytes(b"")
+    with pytest.raises(FileNotFoundError, match="tar shards"):
+        L.PhysLocDataset(str(tmp_path))

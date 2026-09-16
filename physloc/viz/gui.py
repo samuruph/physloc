@@ -149,7 +149,7 @@ class _App:
 
     # ---- JSON --------------------------------------------------------------
     def index(self) -> Dict[str, object]:
-        clips = [dict(self.ds.fields(i), i=i, uid=c.uid) for i, c in enumerate(self.ds.clips)]
+        clips = [dict(self.ds.info(i), i=i, uid=c.uid) for i, c in enumerate(self.ds.clips)]
         return {"clips": clips, "layers": overlay.LAYERS, "panels": overlay.PANELS,
                 "token": self.token,
                 "root": os.path.basename(os.path.normpath(self.root))}

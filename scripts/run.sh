@@ -188,7 +188,7 @@ fi
 echo "== randomisation: is the sampler actually varying? (renders nothing) =="
 $PV randomisation --seeds 24 || true
 
-echo "== export: package it as a dataset -- shards, index, card, splits =="
+echo "== export: package it as a dataset -- clip folders, index, card, splits =="
 # Publishing is opt-in and env-driven, not a flag, because everything after the
 # config name is forwarded to `generate` and `generate` has no idea what a
 # HuggingFace repo is. It is deliberately a separate switch from generating:

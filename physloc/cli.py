@@ -415,7 +415,6 @@ def _print_release_size(cells, a) -> None:
 def cmd_export(a) -> int:
     from .release.export import export
     out = export(a.root, a.outdir, with_passes=a.with_passes,
-                 shard_bytes=max(1, int(a.shard_mb)) * 1024 * 1024,
                  license_name=a.license)
     if a.push_to:
         from .release.export import upload
@@ -1995,16 +1994,15 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_config_path)
 
     p = add_parser("export",
-                   help="package a release as WebDataset shards + a card")
+                   help="package a release as clip folders + index + card")
     p.add_argument("root", nargs="?", default="out/release",
                    help="a generated release directory (the one with clips/)")
     p.add_argument("--outdir", required=True,
                    help="where to write the packaged dataset")
     p.add_argument("--with-passes", action="store_true",
-                   help="also shard depth/flow/normals/object coords -- about "
+                   help="also ship depth/flow/normals/object coords -- about "
                         "86%% of the bytes, hence opt-in")
     p.add_argument("--license", default="CC-BY-4.0")
-    p.add_argument("--shard-mb", type=int, default=400)
     p.add_argument("--push-to", metavar="REPO_ID",
                    help="after packaging, upload to this HuggingFace dataset "
                         "repo (e.g. samueleruf/physloc-v0). Needs "

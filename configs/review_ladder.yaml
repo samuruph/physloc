@@ -79,10 +79,13 @@ defaults:
   #   config exists to produce.
   variants: 10
 
-  # Two scenarios and three families, so the run is minutes rather than hours.
+  # Four scenarios and three families: 12 cells, 320 renders, about 1.2 h on
+  # 8 workers at --frames 37 (all 32 cells of these families was 3.5 h).
   # Breadth of FAMILY is `review_severity`'s job and breadth of CELL is
-  # `review`'s; this one spends its budget on levels and conditions.
-  # scenario: drop,stack_topple
+  # `review`'s; this one spends its budget on levels and conditions. The four
+  # cover one body, two bodies, a stack and the granular medium. Price a change
+  # first: python -m physloc.cli taxonomy --config review_ladder --frames 37
+  scenario: drop,collision,stack_topple,pour
   family: solidity,support,continuity
 
 generate:

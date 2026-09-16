@@ -83,7 +83,7 @@ defaults:
   # Breadth of FAMILY is `review_severity`'s job and breadth of CELL is
   # `review`'s; this one spends its budget on levels and conditions.
   # scenario: drop,stack_topple
-  # family: solidity,support,continuity
+  family: solidity,support,continuity
 
 generate:
   keep_going: true

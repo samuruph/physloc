@@ -56,11 +56,11 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
 #: and above the extras, so adding it cannot renumber anything else.
 SEG_BACKDROP = 900
 
-#: The visible HDRI ground sits just below the physical support plane. Keeping
-#: them exactly coplanar caused z-fighting and made resting meshes look sliced
-#: by the background surface.
-HDRI_GROUND_GAP = 0.01
-
+#: The HDRI dome's usable floor is vastly wider than the compact studio slab.
+#: At photographic levels the slab is camera-hidden, so it must cover that
+#: whole visible support area; otherwise an actor can roll off the invisible
+#: 12 m edge and appear to fall through the HDRI ground.
+HDRI_GROUND_HALF_EXTENT = 40.0
 
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
     """A plain cube slab, at EVERY level. THE THING THE OBJECTS LAND ON.
@@ -81,8 +81,10 @@ def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
     collides everywhere and `backdrop()` adds the dome, render-only, at the
     levels that light themselves from an HDRI.
     """
+    half_extent = (HDRI_GROUND_HALF_EXTENT if cx.background == "hdri"
+                   else size)
     return BodySpec(name="floor", kind="cube", position=(0.0, 0.0, -0.1),
-                    scale=(size, size, 0.1), mass=0.0, static=True,
+                    scale=(half_extent, half_extent, 0.1), mass=0.0, static=True,
                     friction=0.6, restitution=0.4, color=(0.32, 0.33, 0.36),
                     segmentation_id=seg_id, role="floor")
 
@@ -104,17 +106,17 @@ def backdrop(cx: Complexity) -> Optional[BodySpec]:
     consult it, because "is there a static surface under this body" is a
     question about colliders, not about staging.
 
-    ONE VISIBLE CONSEQUENCE, checked in a render rather than assumed. At L2 and
-    L3 this is the ground the camera sees; the physical slab is camera-hidden.
-    Its inner surface sits one centimetre below the collision plane so resting
-    meshes are not clipped by a coplanar HDRI surface. The ground therefore
-    belongs to the photographic environment instead of appearing as a grey
-    rectangle floating inside it.
+    ONE VISIBLE CONSEQUENCE: at L2 and L3 the dome and the collision slab meet
+    at exactly the same support plane.  The slab is camera-hidden, so camera
+    rays see the HDRI ground without a gap or a black hole below a resting
+    object; collision rays still see the identical cube slab used at every
+    level.  Do not offset this dome downwards: that exposes the world background
+    between the visible ground and the physical support and makes objects appear
+    to float above (or fall into) an otherwise photographic environment.
     """
     if cx.background != "hdri":
         return None
-    return BodySpec(name="backdrop", kind="dome",
-                    position=(0.0, 0.0, -HDRI_GROUND_GAP),
+    return BodySpec(name="backdrop", kind="dome", position=(0.0, 0.0, 0.0),
                     mass=0.0, static=True, collides=False,
                     friction=0.6, restitution=0.4,
                     segmentation_id=SEG_BACKDROP, role="backdrop")

@@ -17,7 +17,7 @@ import pytest
 
 from physloc import scenarios
 from physloc.scenarios import TIERS
-from physloc.scenarios._common import HDRI_GROUND_GAP
+from physloc.scenarios._common import HDRI_GROUND_HALF_EXTENT
 from physloc.scenarios._hdri import HDRI_IDS
 from physloc.scenarios.base import COMPLEXITY
 
@@ -55,9 +55,9 @@ def test_only_the_hdri_levels_get_an_environment(name):
 def test_hdri_ground_is_the_only_visible_ground(name):
     """The HDRI dome depicts the ground; the slab only supplies collisions.
 
-    Drawing both at the same height caused competing surfaces and clipped the
-    lower part of resting objects. The photographic surface is offset slightly
-    below the physical plane, while non-HDRI levels retain their visible slab.
+    The physical and photographic ground must be coplanar.  If the dome is
+    lowered beneath the collision slab, its missing support strip exposes the
+    black world background and grounded objects appear to float or sink.
     """
     sc = scenarios.get(name)
     for level, cx in COMPLEXITY.items():
@@ -71,8 +71,9 @@ def test_hdri_ground_is_the_only_visible_ground(name):
             assert all(not body.visible_camera for body in floors)
             collision_plane = max(body.position[2] + body.scale[2]
                                   for body in floors)
-            assert backdrops[0].position[2] == pytest.approx(
-                collision_plane - HDRI_GROUND_GAP)
+            assert backdrops[0].position[2] == pytest.approx(collision_plane)
+            assert all(min(body.scale[:2]) >= HDRI_GROUND_HALF_EXTENT
+                       for body in floors)
         else:
             assert not backdrops
             assert all(body.visible_camera for body in floors)
@@ -121,6 +122,14 @@ def test_choosing_an_environment_does_not_shift_a_physics_draw():
         for x, y in zip(plain_b, lit_b):
             for f in ("kind", "position", "scale", "mass", "friction",
                       "restitution", "velocity", "material"):
+                # The HDRI's visible ground reaches far past the compact studio
+                # slab, so L2/L3 deliberately widen this camera-hidden support
+                # collider. Its top plane and physical material are unchanged.
+                if x.role == "floor" and f == "scale":
+                    assert y.scale[0] >= x.scale[0]
+                    assert y.scale[1] >= x.scale[1]
+                    assert y.scale[2] == x.scale[2]
+                    continue
                 assert getattr(x, f) == getattr(y, f), (
                     "%s: %s.%s moved when the environment arrived"
                     % (name, x.name, f))

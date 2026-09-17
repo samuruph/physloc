@@ -1191,8 +1191,10 @@ def _add_backdrop(spec: SceneSpec) -> None:
     body = C.backdrop(COMPLEXITY[spec.complexity])
     if body is not None:
         # The dome is the visible HDRI ground. Keep the cube slab solely as
-        # the identical physical collider used at every level; drawing both
-        # creates competing surfaces and can slice resting objects visually.
+        # the identical physical collider used at every level.  Both surfaces
+        # are deliberately coplanar: lowering the camera-visible dome creates
+        # a black gap at the contact plane and makes supported bodies look as
+        # though they are sinking into the HDRI floor.
         for floor in (item for item in spec.bodies if item.role == "floor"):
             floor.visible_camera = False
         spec.bodies.append(body)

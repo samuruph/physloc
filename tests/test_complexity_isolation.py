@@ -16,8 +16,9 @@ is about what a level DOES, not about which seeds it is given.
 
 L0 -> L1 is MATERIALS, so mass is the one physical quantity that is supposed to
 move across it -- mass is `density x volume`, and giving an object a material is
-giving it a density. L1 -> L2 is the ENVIRONMENT, which changes no physics at
-all.
+giving it a density. L1 -> L2 is the ENVIRONMENT. Its camera-hidden floor
+collider is wider so it covers the visible HDRI ground, but its support plane
+and all actor physics are unchanged within the studio region.
 """
 from __future__ import annotations
 

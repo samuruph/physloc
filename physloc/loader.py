@@ -14,6 +14,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import sys
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
@@ -290,7 +291,11 @@ class Sample:
         try:
             import h5py
         except ImportError as exc:
-            raise ImportError("PhysLoc schema v3 requires h5py") from exc
+            raise ImportError(
+                "PhysLoc schema v3 requires h5py. This interpreter is %s; "
+                "activate the physloc conda env or select "
+                "/home/ec2-user/miniconda3/envs/physloc/bin/python in VS Code."
+                % sys.executable) from exc
         process = os.getpid()
         if self._h5 is None or self._h5_pid != process:
             if self._h5 is not None:

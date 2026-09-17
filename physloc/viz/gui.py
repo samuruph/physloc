@@ -663,8 +663,7 @@ function list() {
     const what = c.label === "valid" ? "valid twin" : pretty(c.family);
     li.innerHTML = `<span class="dot ${c.label}"></span><span class="t">${esc(pretty(c.scenario))} &middot; ${esc(what)}</span>` +
       `<span class="s">${esc(c.level)} &middot; seed ${esc(c.seed)} &middot; ${esc(c.condition)}${c.severity_bin ? " &middot; " + esc(c.severity_bin) : ""}</span>`;
-    // A CLIP OF ITS OWN STARTS AT ITS FIRST FRAME. Only the same scene's
-    // siblings keep the playhead, where holding the frame is the comparison.
+    // A clip selected from the list starts at its first frame.
     li.onclick = () => openClip(i);
     ul.append(li);
   }
@@ -723,7 +722,7 @@ function header() {
     const b = document.createElement("button");
     b.className = "sib" + (x.i === S.cur ? " on" : "");
     b.textContent = x.label === "valid" ? "valid" : pretty(x.family) + (x.severity_bin && x.severity_bin !== "strong" ? " " + x.severity_bin : "");
-    b.onclick = () => openClip(x.i, S.t);
+    b.onclick = () => openClip(x.i);
     box.append(b);
   }
 }

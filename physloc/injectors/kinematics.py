@@ -307,7 +307,8 @@ class AntiGravity(_GravityScale):
         live = self._all_actors(spec)
         if not live:
             return []
-        if spec.notes.get("randomize_violation_target"):
+        if (spec.notes.get("randomize_violation_target")
+                and not spec.notes.get("group_fraction")):
             airborne = []
             for body in live:
                 bi = traj.index_of(int(body.segmentation_id))

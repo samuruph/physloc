@@ -305,3 +305,22 @@ def test_a_violation_of_the_shadow_survives_rescripting(family):
     assert np.array_equal(out.pos[:, spec.index_of("shadow_caster"), :], before)
     assert np.array_equal(out.scale_mul[:, spec.index_of("shadow_caster"), :],
                           scale_before)
+
+
+def test_pendulum_rod_relaxes_at_dissolve_onset():
+    sc = scenarios.get("pendulum_swing")
+    spec = sc.sample(777, TIERS["debug"], "L0")
+    traj = mockroll.roll(spec, sc)
+    inj = injectors.get("dissolve")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    assert plan is not None
+    out = inj.apply(spec, traj, plan)
+    # The first fade frame is still optically present; this distinguishes
+    # immediate unloading from merely noticing final disappearance.
+    jb, jr = out.index_of(2), out.index_of(4)
+    assert out.present[plan.t_event, jb]
+    sc.rescript(spec, out, plan)
+    pivot = np.asarray(spec.notes["pivot"], np.float64)
+    expected = pivot + np.array([0.0, 0.0, -0.5 * spec.notes["arm"]])
+    assert np.allclose(out.pos[plan.t_event, jr], expected)
+    assert np.allclose(out.lin_vel[plan.t_event:, jr], 0.0)

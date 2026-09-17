@@ -220,16 +220,21 @@ class PendulumSwing(Scenario):
         """
         jb = traj.index_of(self.SEG_BOB)
         jr = traj.index_of(self.SEG_ROD)
-        absent = ~np.asarray(traj.present[:, jb], bool)
-        if not absent.any():
+        detached = ~np.asarray(traj.present[:, jb], bool)
+        # Dissolve starts removing the load on its first fade frame. The bob is
+        # still optically present while fading, but the rope must already act
+        # like an unloaded rope rather than following a translucent weight.
+        if getattr(plan, "family", "") == "dissolve":
+            detached[max(0, int(plan.t_event)):] = True
+        if not detached.any():
             return
         pivot = np.asarray(spec.notes["pivot"], np.float64)
         arm = float(spec.notes["arm"])
         centre = pivot + np.array([0.0, 0.0, -0.5 * arm])
-        traj.pos[absent, jr, :] = centre.astype(np.float32)
-        traj.quat[absent, jr, :] = np.array([1.0, 0.0, 0.0, 0.0], np.float32)
-        traj.lin_vel[absent, jr, :] = 0.0
-        traj.ang_vel[absent, jr, :] = 0.0
+        traj.pos[detached, jr, :] = centre.astype(np.float32)
+        traj.quat[detached, jr, :] = np.array([1.0, 0.0, 0.0, 0.0], np.float32)
+        traj.lin_vel[detached, jr, :] = 0.0
+        traj.ang_vel[detached, jr, :] = 0.0
 
     @staticmethod
     def _carry_rod(pb, rod, pivot, direction, arm) -> None:

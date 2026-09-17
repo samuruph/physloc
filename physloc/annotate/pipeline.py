@@ -257,6 +257,37 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                 "s_valid": sev_mod.bounded_score(r_v, fl, strong, baseline=r_v)}
 
     primary = _score(primary_id, {})
+    # A granular medium is the whole mass, not one representative bead.  The
+    # masks already union every causal grain; scoring only ``primary_id`` made
+    # the scalar severity and every painted grain inherit whichever collision
+    # happened to that one bead.  Aggregate per-body scores by physical mass so
+    # a large affected share raises the value and an isolated outlier cannot
+    # speak for the pour.
+    if (getattr(spec, "physics_medium", "rigid") == "granular"
+            and not plan_d.get("violators") and len(dynamic_ids) > 1):
+        medium_scores = [_score(int(bid), {}) for bid in dynamic_ids]
+        weights = np.asarray([
+            float(traj_i.mass[traj_i.index_of(int(bid))])
+            for bid in dynamic_ids], np.float64)
+        if float(weights.sum()) <= 0.0:
+            weights[:] = 1.0
+        weights /= float(weights.sum())
+
+        # np.sum has no ``weights`` argument; keep the weighted reduction
+        # explicit and shape-stable for both timeline arrays and scalars.
+        def _weighted(key):
+            values = np.stack([np.asarray(s[key], np.float64)
+                               for s in medium_scores])
+            return np.tensordot(weights, values, axes=(0, 0))
+
+        rv, ri = _weighted("r_valid"), _weighted("r_invalid")
+        primary = {
+            "r_valid": rv, "r_invalid": ri,
+            "floor": sev_mod.NoiseFloor.calibrate([rv]),
+            "r_strong": float(_weighted("r_strong")),
+            "s_invalid": _weighted("s_invalid"),
+            "s_valid": _weighted("s_valid"),
+        }
     r_valid, r_invalid = primary["r_valid"], primary["r_invalid"]
     floor, r_strong = primary["floor"], primary["r_strong"]
     s_invalid, s_valid = primary["s_invalid"], primary["s_valid"]

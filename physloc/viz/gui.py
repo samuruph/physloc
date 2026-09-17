@@ -291,7 +291,11 @@ html,body{height:100%}
 body{margin:0;font:13px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   background:var(--bg);color:var(--text);display:grid;overflow:hidden;height:100vh;
   grid-template-columns:var(--left) minmax(0,1fr) var(--right);transition:grid-template-columns .18s}
+body{position:relative}
 body.no-left{--left:0px} body.no-right{--right:0px}
+.resize-handle{position:absolute;top:0;bottom:0;width:9px;z-index:12;cursor:col-resize}
+#resizeLeft{left:calc(var(--left) - 4px)} #resizeRight{right:calc(var(--right) - 4px)}
+.resize-handle:hover,.resize-handle.dragging{background:rgba(106,166,255,.16)}
 button{font:inherit;color:inherit}
 ::-webkit-scrollbar{width:8px;height:8px} ::-webkit-scrollbar-thumb{background:#2a2e38;border-radius:8px}
 .icon{background:transparent;border:1px solid transparent;border-radius:8px;height:30px;min-width:30px;
@@ -441,6 +445,7 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
   <div class="count"><span id="count"></span><button class="link" id="clear">Reset filters</button></div>
   <ul id="clips"></ul>
 </aside>
+<div class="resize-handle" id="resizeLeft" title="Resize sample list"></div>
 <main>
   <div class="top">
     <button class="icon" id="toggleLeft" title="Sample list  ( [ )"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
@@ -472,6 +477,7 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
     <div class="legend" id="legend"></div>
   </div>
 </main>
+<div class="resize-handle" id="resizeRight" title="Resize inspector"></div>
 <aside id="right">
   <div class="tabs"><button data-tab="view" class="on">View</button><button data-tab="clip">Sample</button><button data-tab="object">Objects</button></div>
   <div class="pane on" id="pane-view"></div>
@@ -1188,6 +1194,26 @@ function setRight(on) { const small = matchMedia("(max-width:1180px)").matches; 
 const leftOn = () => matchMedia("(max-width:860px)").matches ? document.body.classList.contains("show-left") : !document.body.classList.contains("no-left");
 const rightOn = () => matchMedia("(max-width:1180px)").matches ? document.body.classList.contains("show-right") : !document.body.classList.contains("no-right");
 
+function wireResizer(id, side, min, max) {
+  const handle = $(id);
+  handle.onpointerdown = e => {
+    if ((side === "left" && !leftOn()) || (side === "right" && !rightOn())) return;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    const move = ev => {
+      const width = side === "left" ? ev.clientX : innerWidth - ev.clientX;
+      document.body.style.setProperty("--" + side, Math.max(min, Math.min(max, width)) + "px");
+      layout();
+    };
+    handle.onpointermove = move;
+    handle.onpointerup = () => {
+      handle.releasePointerCapture(e.pointerId);
+      handle.onpointermove = null;
+      handle.classList.remove("dragging");
+    };
+  };
+}
+
 function wire() {
   $("#play").innerHTML = ICON_PLAY;
   $("#play").onclick = () => play();
@@ -1196,6 +1222,8 @@ function wire() {
   $("#loop").onclick = () => { S.loop = !S.loop; $("#loop").classList.toggle("on", S.loop); };
   $("#toggleLeft").onclick = () => setLeft(!leftOn());
   $("#toggleRight").onclick = () => setRight(!rightOn());
+  wireResizer("#resizeLeft", "left", 190, 480);
+  wireResizer("#resizeRight", "right", 240, 480);
   $("#helpBtn").onclick = () => $("#help").classList.add("on");
   $("#help").onclick = () => $("#help").classList.remove("on");
   document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));

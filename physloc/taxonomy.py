@@ -145,8 +145,8 @@ FAMILIES: Dict[str, Family] = {
         "m_penetration_depth", "sustained", "penetration", "solidity", "rigid_body",
         requires=('contact',)),
     "superelastic": Family(
-        "contact", "restitution e > 1",
-        "energy_gain_ratio", "repeated", "energy_at_contact", None, "rigid_body",
+        "contact", "restitution e > 1 for the first impact",
+        "energy_gain_ratio", "instant", "energy_at_contact", None, "rigid_body",
         requires=('impact',), detectable="event"),
     # -- dynamics ----------------------------------------------------------
     "phantom_impulse": Family(

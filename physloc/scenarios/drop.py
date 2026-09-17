@@ -64,8 +64,14 @@ class Drop(Scenario):
             bodies=[floor, ball, C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx),
             camera_position=(5.2, -4.4, 2.4), camera_look_at=(0.0, 0.0, 1.0),
-            floor_level=0.0, complexity=complexity,            notes={"radius": radius, "drop_height": drop_height,
-                   "restitution": restitution, "actor_kind": kind},
+            floor_level=0.0, complexity=complexity,
+            notes={"radius": radius, "drop_height": drop_height,
+                   "restitution": restitution, "actor_kind": kind,
+                   # Appearance and identity changes belong at the landing,
+                   # with one frame of family-keyed variation around it.
+                   "event_anchor": {"body_ids": [self.SEG_BALL],
+                                    "partner_ids": [self.SEG_FLOOR],
+                                    "offset": 0, "jitter": 1}},
         )
 
 

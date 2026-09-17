@@ -83,7 +83,9 @@ class RestingTable(Scenario):
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,
             notes={"table_top": top_z, "actor_radius": r0,
-                   "actor_kind": actor_kind})
+                   "actor_kind": actor_kind,
+                   "violation_target_ids": [self.SEG_ACTOR] + list(self.SEG_PROPS),
+                   "randomize_violation_target": True})
 
 
 register(RestingTable())

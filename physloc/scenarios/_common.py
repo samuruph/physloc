@@ -410,6 +410,10 @@ PATH_SAMPLES = 6
 #: something a tenth the size is a speck, and a benchmark level called
 #: "distractors" should contain things that actually compete for attention.
 DISTRACTOR_SIZE = (0.35, 1.60)
+# Multi-condition peers are possible violators, so speck-sized examples must
+# be rare rather than a fifth of the population.  They still span more than a
+# twofold area range and therefore cover small, medium and large targets.
+PEER_SIZE = (0.65, 1.45)
 
 #: How fast a MOVING distractor goes, as a fraction of the actor's own speed
 #: (or of a walking pace when the actor starts at rest). Static clutter is easy
@@ -569,7 +573,8 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
             # comparable to the thing it competes with for attention, which is
             # what MOVi does by drawing its distractors from the same size
             # distribution as its objects.
-            r = actor_r * float(rng.uniform(*DISTRACTOR_SIZE))
+            size_band = PEER_SIZE if role == "actor" else DISTRACTOR_SIZE
+            r = actor_r * float(rng.uniform(*size_band))
             # The band starts OUTSIDE the exclusion, not at a fixed fraction of
             # the frame. A falling actor's keep-clear column can be wider than
             # the inner edge of a fixed band, and then most candidates are

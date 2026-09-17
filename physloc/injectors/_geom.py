@@ -366,10 +366,62 @@ def default_event_frame(spec, num_frames: int) -> Optional[int]:
     `phantom_impulse` chose frame 13, where the push sends one violator behind
     the screen and another out of shot.
     """
+    # Some scenarios have a causal landmark that the arbitrary event band must
+    # respect: a drop lands, a pour first reaches its floor, a striker reaches
+    # its target.  The scenario declares the bodies and partner(s), while this
+    # helper finds the landmark from the rollout carried by `event_context`.
+    # A small, family-keyed band around it preserves timing variation without
+    # allowing identity/appearance events to drift to a settled aftermath.
+    anchored = anchored_event_frame(spec, num_frames)
+    if anchored is not None:
+        return anchored
     t0 = occluded_midpoint(spec) if event_attempt() == 0 else None
     if t0 is None:
         return band_frame(spec, num_frames)
     return int(t0) if 1 <= t0 < num_frames - 1 else None
+
+
+def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
+    """A jittered frame around a scenario-declared physical landmark.
+
+    ``notes["event_anchor"]`` is deliberately data, not a scenario-name
+    switch.  It accepts ``body_ids``, optional ``partner_ids``, an ``offset``
+    (negative means before contact), and ``jitter`` in frames.  Contacts are
+    measured from the lawful rollout in the current event context, so this
+    composes with every injector that uses the normal event helper.
+    """
+    cfg = spec.notes.get("event_anchor") or {}
+    _, _, traj = _EVENT_KEY.get()
+    if not cfg or traj is None or not len(getattr(traj, "contacts", ())):
+        return None
+    bodies = {int(i) for i in cfg.get("body_ids", ())}
+    partners = {int(i) for i in cfg.get("partner_ids", ())}
+    if not bodies:
+        return None
+    found = []
+    c = traj.contacts
+    for k in range(len(c)):
+        a, b = int(c.body_a[k]), int(c.body_b[k])
+        hit = ((a in bodies and (not partners or b in partners))
+               or (b in bodies and (not partners or a in partners)))
+        if hit and 1 <= int(c.frame[k]) < int(num_frames) - 1:
+            found.append(int(c.frame[k]))
+    if not found:
+        return None
+    centre = min(found) + int(cfg.get("offset", 0))
+    jitter = max(0, int(cfg.get("jitter", 0)))
+    if jitter:
+        # One stable draw per family/attempt, shared by the severity bins.
+        centre += int(round((2.0 * scene_fraction(spec) - 1.0) * jitter))
+    return int(np.clip(centre, 1, int(num_frames) - 2))
+
+
+def contact_run(traj, body_id: int, partner_id: int) -> Optional[Tuple[int, int]]:
+    """First and last frames of contact for one declared pair."""
+    frames = [int(traj.contacts.frame[k]) for k in range(len(traj.contacts))
+              if {int(traj.contacts.body_a[k]), int(traj.contacts.body_b[k])}
+              == {int(body_id), int(partner_id)}]
+    return (min(frames), max(frames)) if frames else None
 
 
 def _bodies_by_id(spec, body_ids) -> List:

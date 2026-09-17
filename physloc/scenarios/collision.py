@@ -131,7 +131,12 @@ class Collision(Scenario):
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
                    "identical_actors": True, "target_at_rest": True,
                    "striker_id": self.SEG_A, "target_id": self.SEG_B,
-                   "actor_kind": kind})
+                   "actor_kind": kind,
+                   # Non-contact interventions happen just before the meeting,
+                   # leaving time for their causal effect on the second ball.
+                   "event_anchor": {"body_ids": [self.SEG_A],
+                                    "partner_ids": [self.SEG_B],
+                                    "offset": -2, "jitter": 1}})
 
 
 register(Collision())

@@ -111,7 +111,14 @@ def mass_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     adds continuously dialable families alongside them.
     """
     present = traj.present[:, b].astype(np.float64)
-    return 1.0 - present
+    missing = 1.0 - present
+    # Returning after an absence is the second permanence discontinuity.  It
+    # must score on that frame even though the body is present again; the
+    # injector's event windows gate the sustained ``missing`` signal down to
+    # precisely the disappearance and reappearance frames.
+    returned = np.zeros_like(missing)
+    returned[1:] = (present[1:] > 0.5) & (present[:-1] <= 0.5)
+    return np.maximum(missing, returned)
 
 
 @register("position_continuity")

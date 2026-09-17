@@ -107,6 +107,11 @@ class PyramidImpact(Scenario):
             floor_level=0.0, complexity=complexity,
             notes={"radius": r, "apex_z": apex_z, "drop_height": drop,
                    "pyramid_ids": list(self.SEG_BALLS),
+                   # Stage arbitrary violations immediately before the cube's
+                   # first impact, while retaining a narrow random window.
+                   "event_anchor": {"body_ids": [self.SEG_CUBE],
+                                    "partner_ids": list(self.SEG_BALLS),
+                                    "offset": -1, "jitter": 1},
                    # The falling cube is the actor, but it is not the
                    # interesting body to break. What a video generator gets
                    # wrong here is the *scatter*: a struck sphere driven

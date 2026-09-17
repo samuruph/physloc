@@ -118,6 +118,41 @@ def test_families_on_one_scene_no_longer_all_fire_together():
     assert differ >= 6
 
 
+@pytest.mark.parametrize("name", ["drop", "collision", "pyramid_impact"])
+def test_declared_physical_anchor_keeps_appearance_events_near_contact(name):
+    sc, spec = _spec(7, name)
+    traj = mockroll.roll(spec, sc)
+    cfg = spec.notes["event_anchor"]
+    bodies, partners = set(cfg["body_ids"]), set(cfg["partner_ids"])
+    contacts = [int(traj.contacts.frame[k]) for k in range(len(traj.contacts))
+                if ((int(traj.contacts.body_a[k]) in bodies
+                     and int(traj.contacts.body_b[k]) in partners)
+                    or (int(traj.contacts.body_b[k]) in bodies
+                        and int(traj.contacts.body_a[k]) in partners))]
+    if not contacts:
+        pytest.skip("mock rollout did not produce the declared contact")
+    plan = injectors.get("deformation").plan(
+        spec, traj, np.random.RandomState(1), "strong")
+    assert plan is not None
+    centre = min(contacts) + int(cfg["offset"])
+    assert abs(plan.t_event - centre) <= int(cfg["jitter"])
+
+
+def test_permanence_scores_only_disappearance_and_return_transitions():
+    sc, spec = _spec(4, "barrier_pass")
+    traj = mockroll.roll(spec, sc)
+    plan = injectors.get("permanence").plan(
+        spec, traj, np.random.RandomState(1), "medium")
+    assert plan is not None
+    t0, t1 = plan.consequence_windows[0]
+    assert plan.intervention_windows == [(t0, t0), (t1 + 1, t1 + 1)]
+    invalid = injectors.get("permanence").apply(spec, traj, plan)
+    from physloc.residuals import laws
+    residual = laws.get("mass_continuity")(
+        invalid, invalid.index_of(plan.causal_body_ids[0]), {})
+    assert residual[t0] == 1.0 and residual[t1 + 1] == 1.0
+
+
 def _thrown_out(traj, body_id, frame):
     out = copy.deepcopy(traj)
     bi = out.index_of(int(body_id))

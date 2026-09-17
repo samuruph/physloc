@@ -977,13 +977,11 @@ class Solidity(Injector):
 
 
 class SuperElastic(Injector):
-    """Restitution greater than one: every bounce comes back faster than it went in.
+    """Restitution greater than one at the first impact only.
 
-    The taxonomy's only `repeated` family, and the reason `violation_windows` is
-    a *list* rather than an onset. One boosted restitution produces a gain at
-    every subsequent contact, so the clip has several disjoint violation
-    intervals with lawful flight between them. A schema with a single `t_event`
-    would have to pick one and silently discard the rest.
+    The boost occupies a short window around the first impact. Subsequent
+    contacts use the ordinary scene restitution, so one clip contains one
+    intervention and its consequences rather than a train of unrelated boosts.
 
     Both bodies in a two-body collision are boosted. Rescaling only one would
     add a momentum violation on top of the energy one, and a clip carrying two
@@ -1185,7 +1183,10 @@ class SuperElastic(Injector):
         # frames energy is *actually* gained on, rather than a guess. `apply`
         # recomputes the same thing deterministically.
         preview = self._boosted(spec, traj, targets, t0, gain, normal)
-        windows = self._gain_windows(preview, targets, traj, t0)
+        # One bounded event. Later bounces continue with the scene's ordinary
+        # restitution; otherwise a clip contains an unbounded sequence of
+        # violations instead of one causal intervention.
+        windows = [(int(t0), min(traj.num_frames - 1, int(t0) + 1))]
 
         # The reference has to be measured, not declared. Boosting the speed by
         # k multiplies *kinetic* energy by k^2, but the law scores total
@@ -1212,7 +1213,7 @@ class SuperElastic(Injector):
         r_strong = max(r_strong, float((1.0 + excess * fit) ** 2 - 1.0))
 
         return InterventionPlan(
-            family=self.family, kind="repeated", t_event=windows[0][0],
+            family=self.family, kind="instant", t_event=windows[0][0],
             windows=windows,
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "restitution_gain", "speed_gain": gain,
@@ -1274,7 +1275,7 @@ class SuperElastic(Injector):
                        * cam.frame_extent(spec.camera_position,
                                           spec.camera_look_at))),
                    "surface_top": top,
-                   "speed_gain": gain, "n_bounces": len(windows),
+                   "speed_gain": gain, "n_bounces": 1,
                    "r_strong": float(r_strong),
                    "impact_normal": [float(x) for x in normal],
                    "targets": [int(b.segmentation_id) for b in targets]})
@@ -1443,6 +1444,15 @@ class SuperElastic(Injector):
         # rebound leaving the top of the shot IS the violation.
         frame_cap = float(plan.notes.get("frame_speed_cap", 0.0) or 0.0)
         crowd = len(movers) > 2
+        static_indices = set()
+        if crowd:
+            for body in spec.bodies:
+                if not body.static or not body.collides:
+                    continue
+                idx = stepper.pybullet_index(
+                    simulator, objs, spec, int(body.segmentation_id))
+                if idx is not None:
+                    static_indices.add(int(idx))
 
         def _ceiling(sid: int) -> float:
             lawful = by_sid.get(int(sid), lawful0)
@@ -1516,7 +1526,10 @@ class SuperElastic(Injector):
                     _first_bounce()
                     for w in watch.values():
                         w["ready"] = False
+                        w["spent"] = True
                 return
+            if not crowd:
+                return                    # the planned first impact was the event
             # `getContactPoints` reports the manifold of the LAST step, so it
             # is only meaningful once this run has taken one.
             if step < 1:
@@ -1526,7 +1539,8 @@ class SuperElastic(Injector):
                 if crowd and w.get("spent"):
                     continue
                 points = [c for c in pb.getContactPoints(bodyA=idx)
-                          if float(c[9]) > 1e-6]
+                          if float(c[9]) > 1e-6
+                          and int(c[2]) in static_indices]
                 if not points:
                     # ONE BOOST PER FRAME OF GENUINE FLIGHT. Re-arming on the
                     # first free substep is what let the cascade run: a grain
@@ -1626,9 +1640,15 @@ class _CollisionEdit(Injector):
                                                only=eligible)
         if hit is None:
             return None
-        t0, id_a, id_b = hit
-        if not (1 <= t0 < traj.num_frames - 1):
+        t_contact, id_a, id_b = hit
+        if not (1 <= t_contact < traj.num_frames - 1):
             return None
+        # Change the cause before the bodies meet. Staging a false mass at the
+        # geometric touch frame resets Bullet to a state in which much of the
+        # collision has already been resolved, so even a 25x ratio can look
+        # identical to the lawful twin. One frame of lead lets the simulator
+        # produce the wrong response from a real collision.
+        t_event = max(1, int(t_contact) - 1)
         if actor_id is None or actor_id not in (id_a, id_b):
             actor_id = id_a
         other_id = id_b if actor_id == id_a else id_a
@@ -1648,7 +1668,10 @@ class _CollisionEdit(Injector):
         group = self._group(spec)
         medium = len(group) > 2
         if medium:
-            t0 = self._medium_event_frame(spec, traj, group, t0)
+            t_contact = self._medium_event_frame(spec, traj, group, t_contact)
+            t_event = max(1, int(t_contact) - 1)
+
+        t0 = int(t_contact)
 
         ia, ib = traj.index_of(actor_id), traj.index_of(other_id)
         normal = traj.pos[t0, ib] - traj.pos[t0, ia]
@@ -1684,8 +1707,9 @@ class _CollisionEdit(Injector):
         # measured divergence between the twins rather than on this window --
         # which is what lets severity stay on the frames that show the breach.
         return InterventionPlan(
-            family=self.family, kind="instant", t_event=t0, windows=[(t0, t1)],
-            intervention_windows=[(t0, t1)],
+            family=self.family, kind="instant", t_event=t_event,
+            windows=[(t_event, t1)],
+            intervention_windows=[(t_event, t1)],
             consequence_windows=[(t0, t1)],
             causal_body_ids=(heavy if len(heavy) > 1
                              else self._causal_order(actor_id, other_id)),
@@ -1938,4 +1962,3 @@ class Newton2Mass(_CollisionEdit):
 register(Solidity())
 register(SuperElastic())
 register(Newton2Mass())
-

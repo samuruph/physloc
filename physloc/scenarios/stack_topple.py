@@ -67,7 +67,12 @@ class StackTopple(Scenario):
             camera_position=(3.4, -4.8, 2.0), camera_look_at=(0.0, 0.0, 0.8),
             floor_level=0.0, complexity=complexity,
             notes={"half_extent": half, "lean_per_level": lean,
-                   "stack_ids": [self.SEG_BASE, self.SEG_MID, self.SEG_TOP]})
+                   "stack_ids": [self.SEG_BASE, self.SEG_MID, self.SEG_TOP],
+                   "violation_target_ids": [self.SEG_BASE, self.SEG_MID,
+                                            self.SEG_TOP],
+                   "randomize_violation_target": True,
+                   # Solidity here is specifically a block/floor failure.
+                   "family_targets": {"solidity": [self.SEG_BASE]}})
 
 
 register(StackTopple())

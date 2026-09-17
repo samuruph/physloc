@@ -33,6 +33,9 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     `drop` mid-bounce, and a parabola fitted across a bounce is not a
     parabola.
     """
+    anchored = _geom.anchored_event_frame(spec, num_frames)
+    if anchored is not None:
+        return anchored
     # On the first attempt only -- a retry must be able to fire elsewhere; see
     # `_geom.default_event_frame`.
     occ = _geom.occluded_midpoint(spec) if _geom.event_attempt() == 0 else None
@@ -73,7 +76,7 @@ class _GravityScale(Injector):
     across both, so the only thing the label distinguishes is what it claims to.
     """
 
-    ALPHA_BY_BIN = {"weak": -0.6, "medium": -1.6, "strong": -2.8}
+    ALPHA_BY_BIN = {"weak": -0.6, "medium": -1.6, "strong": -4.0}
     WINDOW_FRACTION = 0.55
     MIN_BODIES = 1
     spatial_extent = "local"
@@ -304,6 +307,16 @@ class AntiGravity(_GravityScale):
         live = self._all_actors(spec)
         if not live:
             return []
+        if spec.notes.get("randomize_violation_target"):
+            airborne = []
+            for body in live:
+                bi = traj.index_of(int(body.segmentation_id))
+                run = _geom.longest_airborne_run(
+                    traj, bi, _geom.surface_top(spec, body))
+                if run is not None and run[1] > run[0]:
+                    airborne.append(body)
+            choices = airborne or live
+            return [choices[int(self._instance_rng(spec).randint(len(choices)))]]
         want = len(self._group(spec))
         jitter = self._instance_rng(spec)
         scored = []
@@ -364,7 +377,7 @@ class GlobalGravity(_GravityScale):
     #: and medium as invisible on `pour` -- at 0.75 and 0.45 deviation, spread
     #: over a trapezoid whose mean is well under its peak, they were a pour
     #: falling slightly slowly.
-    ALPHA_BY_BIN = {"weak": 0.45, "medium": -0.20, "strong": -1.2}
+    ALPHA_BY_BIN = {"weak": 0.40, "medium": -0.35, "strong": -1.8}
     MIN_BODIES = 2
     spatial_extent = "global"
 
@@ -617,7 +630,7 @@ class NonParabolic(Injector):
     family = "non_parabolic"
     #: Peak lateral excursion in body radii. Small on purpose -- legibility here
     #: comes from the number of cycles, not from the size of each one.
-    AMPLITUDE_RADII = {"weak": 0.5, "medium": 0.9, "strong": 1.5}
+    AMPLITUDE_RADII = {"weak": 0.5, "medium": 1.0, "strong": 2.0}
     #: Fewer cycles than the 2.5 this shipped with. At v0's 30 fps a 2.5-cycle
     #: snake over a short airborne run turns each half-cycle over in a handful
     #: of frames, which reads as a jitter rather than as a path -- you asked for
@@ -626,7 +639,7 @@ class NonParabolic(Injector):
     CYCLES = 1.75
     #: Peak sideways speed, m/s, of the path a MEDIUM is asked to follow. See
     #: `plan`: about half of how fast `pour`'s grains fall.
-    MEDIUM_SPEED_CAP = 4.0
+    MEDIUM_SPEED_CAP = 5.5
 
     def _peak_speed(self, spec, amp: float, n: int, fps: float) -> float:
         """Fastest frame-to-frame speed of the full-amplitude path."""
@@ -913,6 +926,13 @@ class Newton1Inertia(Injector):
         if not moving.size:
             return None                 # nothing to halt: not a cell we can build
         t0 = int(max(moving[0], min(moving[-1], T // 3)))
+        ramp_id = spec.notes.get("ramp_id")
+        if ramp_id is not None:
+            run = _geom.contact_run(traj, int(actor.segmentation_id), int(ramp_id))
+            if run is not None:
+                lo, hi = max(1, run[0] + 1), min(T - 2, run[1] - 1)
+                if lo <= hi:
+                    t0 = _geom.frame_in_band(spec, lo, hi)
         # A pour that stops dead IN MID-AIR is Newton 1 at a volume a viewer
         # can hear. `T // 3` put it at frame 8 on a `pour` whose grains have
         # been lying on the floor since frame 7, so the family removed the

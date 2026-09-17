@@ -68,6 +68,7 @@ DEFAULTS: Dict[str, Any] = {
         # one goes as a fraction of the actor's speed, what share move at all,
         # and what share start airborne.
         "distractor_size": [0.35, 1.60],
+        "peer_size": [0.65, 1.45],
         "distractor_speed": [0.25, 0.85],
         "distractor_moving": 0.5,
         "distractor_airborne": 0.35,
@@ -210,6 +211,7 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     MU.MULTI_SYNC_SHARE = float(o["multi_sync_share"])
     C.SIZE_SCALE = tuple(float(x) for x in o["size_scale"])
     C.DISTRACTOR_SIZE = tuple(o["distractor_size"])
+    C.PEER_SIZE = tuple(o["peer_size"])
     C.DISTRACTOR_SPEED = tuple(o["distractor_speed"])
     C.DISTRACTOR_MOVING = float(o["distractor_moving"])
     C.DISTRACTOR_AIRBORNE = float(o["distractor_airborne"])

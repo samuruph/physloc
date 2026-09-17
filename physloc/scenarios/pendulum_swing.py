@@ -209,6 +209,28 @@ class PendulumSwing(Scenario):
 
         return (constrain,)
 
+    def rescript(self, spec, traj, plan) -> None:
+        """Let an empty pendulum hang vertically when its bob is removed.
+
+        The live constraint follows the bob's simulator proxy; ``Vanish`` parks
+        that proxy below the world, so without this render-side correction the
+        rod points after a body that no longer exists.  A massless rod/string
+        with no load has no pendular motion of its own: it returns to vertical
+        immediately and stays there until a temporarily absent bob returns.
+        """
+        jb = traj.index_of(self.SEG_BOB)
+        jr = traj.index_of(self.SEG_ROD)
+        absent = ~np.asarray(traj.present[:, jb], bool)
+        if not absent.any():
+            return
+        pivot = np.asarray(spec.notes["pivot"], np.float64)
+        arm = float(spec.notes["arm"])
+        centre = pivot + np.array([0.0, 0.0, -0.5 * arm])
+        traj.pos[absent, jr, :] = centre.astype(np.float32)
+        traj.quat[absent, jr, :] = np.array([1.0, 0.0, 0.0, 0.0], np.float32)
+        traj.lin_vel[absent, jr, :] = 0.0
+        traj.ang_vel[absent, jr, :] = 0.0
+
     @staticmethod
     def _carry_rod(pb, rod, pivot, direction, arm) -> None:
         """Hang the rod between the pivot and wherever the bob now is.

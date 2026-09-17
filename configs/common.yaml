@@ -72,6 +72,7 @@ objects:
   # that moves" identifies it, and if only the actor falls, so does "the thing
   # that falls".
   distractor_size: [0.35, 1.60]
+  peer_size: [0.65, 1.45]
   distractor_speed: [0.25, 0.85]
   distractor_moving: 0.5
   distractor_airborne: 0.35

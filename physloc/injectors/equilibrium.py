@@ -387,6 +387,15 @@ class Friction(Injector):
         # frame so their magnitudes stay comparable.
         medium = len(targets) > 2
         t0 = self._medium_event_frame(spec, traj, targets, t0)
+        ramp_end = None
+        ramp_id = spec.notes.get("ramp_id")
+        if ramp_id is not None:
+            run = _geom.contact_run(traj, int(actor.segmentation_id), int(ramp_id))
+            if run is not None:
+                lo, hi = max(1, run[0] + 1), min(T - 2, run[1] - 1)
+                if lo <= hi:
+                    t0 = _geom.frame_in_band(spec, lo, hi)
+                    ramp_end = hi
         if not (1 <= t0 < T - 1):
             return None
         # Outward from the preferred moment in BOTH directions. Searching only
@@ -429,9 +438,12 @@ class Friction(Injector):
         mu = float(getattr(actor, "friction", 0.5))
         grip, roll, target = self._solve_grip(spec, traj, actor, bi, t0,
                                               severity_bin)
+        intervention = [(t0, ramp_end if ramp_end is not None else T - 1)]
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
+            intervention_windows=intervention,
+            consequence_windows=[(t0, T - 1)],
             # THE WHOLE MEDIUM. `_group` was already being consulted and then
             # thrown away -- only `targets[0]` was named -- so a pour had one
             # grain of forty gripping while the rest slid past it, which is
@@ -457,6 +469,7 @@ class Friction(Injector):
                    "end_rate": rate, "lateral_friction": grip,
                    "rolling_friction": roll,
                    "target_distance_m": float(target),
+                   "ramp_window_end": ramp_end,
                    "r_strong": float(r_strong)})
 
     def _stopping_point(self, spec, traj, bi: int, t0: int, severity_bin: str):
@@ -560,6 +573,7 @@ class Friction(Injector):
 
         grip = float(plan.params["lateral_friction"])
         roll = float(plan.params["rolling_friction"])
+        changed = []
         for bid in plan.causal_body_ids:
             body = next((b for b in spec.bodies
                          if int(b.segmentation_id) == int(bid)), None)
@@ -569,7 +583,26 @@ class Friction(Injector):
             if idx is not None:
                 pb.changeDynamics(idx, -1, lateralFriction=grip,
                                   rollingFriction=roll, spinningFriction=roll)
-        return ()
+                changed.append((idx, body))
+        end = plan.notes.get("ramp_window_end")
+        if end is None or not changed:
+            return ()
+
+        state = {"restored": False}
+
+        def restore(_client, _step, frame):
+            if state["restored"] or frame <= int(end):
+                return
+            for idx, body in changed:
+                declared_roll = float(getattr(body, "rolling_friction", 0.0))
+                pb.changeDynamics(
+                    idx, -1,
+                    lateralFriction=float(getattr(body, "friction", 0.5)),
+                    rollingFriction=declared_roll,
+                    spinningFriction=declared_roll)
+            state["restored"] = True
+
+        return (restore,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
         import pybullet as pb

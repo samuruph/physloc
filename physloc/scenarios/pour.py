@@ -198,6 +198,12 @@ class Pour(Scenario):
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,
                    "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],
+                   # The pour's event is its arrival, not the later settled
+                   # pile.  All identity/appearance families share this cue.
+                   "event_anchor": {
+                       "body_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],
+                       "partner_ids": [self.SEG_FLOOR] + list(self.SEG_WALLS),
+                       "offset": 0, "jitter": 1},
                    # Every family that can act on a set acts on ALL of the
                    # grains here. A pour is not a scene with one protagonist:
                    # a single grain floating, vanishing or dropping through the

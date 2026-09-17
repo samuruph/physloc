@@ -43,6 +43,19 @@ def _actors(spec):
     return [b for b in spec.bodies if b.role == "actor" and not b.dormant]
 
 
+@pytest.mark.parametrize("name,expected", [
+    ("resting_table", {2, 4, 5}),
+    ("stack_topple", {2, 4, 5}),
+])
+def test_builtin_multi_object_scenes_randomise_the_standard_target(name, expected):
+    inj = injectors.get("phantom_impulse")
+    picked = set()
+    for seed in range(48):
+        spec = scenarios.get(name).sample(seed, TIERS["debug"], LEVEL)
+        picked.add(int(inj._group(spec)[0].segmentation_id))
+    assert picked == expected
+
+
 def test_the_cycle_is_the_agreed_shape():
     """Six plain clips, then one of each condition.
 

@@ -74,21 +74,18 @@ class Permanence(Injector):
             n_win = self._window_len(max(1, int(round(frac * (T - t0)))), t0, T)
             t1 = min(T - 1, t0 + n_win - 1)
         occ = spec.notes.get("occluded_frames") or []
+        transitions = [(t0, t0)]
+        if t1 + 1 < T:
+            transitions.append((t1 + 1, t1 + 1))
         return InterventionPlan(
-            family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
-            # THE WHOLE ABSENCE is the intervention, not just the frame the
-            # body goes. `Vanish` holds it hidden every frame in the span --
-            # this is the case `_split_windows` describes as "genuinely
-            # changes something for the whole clip" -- and the absence is what
-            # the family is about: `frames_absent` below says so.
-            #
-            # It matters now that `windows` follows the intervention rather
-            # than being the union: declaring one frame would collapse the
-            # violation to the instant of disappearance and leave the union
-            # mask empty for the rest of the absence, losing the documented
-            # behaviour where `reference_mask` carries where the body should
-            # have been (CLAUDE.md, non-negotiable 3).
-            intervention_windows=[(t0, t1)],
+            family=self.family, kind="sustained", t_event=t0,
+            windows=transitions,
+            # Permanence is detected at the two discontinuities: the first
+            # absent frame, and (for weak/medium) the frame it snaps back.  The
+            # absence remains the consequence, so causal/reference masks keep
+            # tracking where the missing object should have been without
+            # painting every absent frame at maximal event severity.
+            intervention_windows=transitions,
             consequence_windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",
@@ -122,7 +119,7 @@ class Permanence(Injector):
         self._gone = gone
         for g in gone:
             g.hide()
-        t1 = plan.windows[0][1]
+        t1 = plan.consequence_windows[0][1]
         back = t1 + 1
         state = {"returned": False}
 
@@ -144,7 +141,7 @@ class Permanence(Injector):
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The render side: absent means no pixels, which PyBullet cannot say."""
-        t0, t1 = plan.windows[0]
+        t0, t1 = plan.consequence_windows[0]
         traj_invalid.present = np.asarray(traj_invalid.present).copy()
         traj_invalid.pos = np.asarray(traj_invalid.pos).copy()
         for bid in plan.causal_body_ids:
@@ -156,7 +153,7 @@ class Permanence(Injector):
     def _apply(self, spec, traj, plan) -> Trajectory:
         """The host-side approximation, for the mock rollout the tests run on."""
         out = self._clone(traj)
-        t0, t1 = plan.windows[0]
+        t0, t1 = plan.consequence_windows[0]
         for bid in plan.causal_body_ids:
             out.present[t0:t1 + 1, traj.index_of(int(bid))] = False
         out.meta = dict(traj.meta)
@@ -257,6 +254,7 @@ class Immutability(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "scale_factor": k, "ramp_frames": int(ramp),
                    "r_strong": abs(self._factor("strong", grow) ** 3 - 1.0),
+                   "constrained": bool(spec.notes.get("constraint")),
                    "occluded_at_event": bool(t0 in occ)})
 
     #: STAGED, through `stepper.ShapeSwap`. PyBullet cannot rescale a collision
@@ -271,6 +269,14 @@ class Immutability(Injector):
     #: actor rests at the height its new size dictates, and a wall stops it
     #: where its new surface meets the wall's.
     simulated = True
+
+    def simulates(self, plan: InterventionPlan) -> bool:
+        # Resizing a freely hanging bob should not change its centre-of-mass
+        # equation. Rebuilding its rigid body eight times per frame introduces
+        # solver impulses at the constraint and visibly damps the swing. With
+        # no possible contact at the bob's arc, the honest intervention is the
+        # visual size change on the untouched lawful trajectory.
+        return not bool(plan.notes.get("constrained"))
 
     def _profile(self, plan, n: int) -> np.ndarray:
         """Scale factor per frame from `t_event`: smoothstep to `k`, then hold.
@@ -362,6 +368,8 @@ class Immutability(Injector):
                 continue
             bi = traj.index_of(int(bid))
             out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
+            if plan.notes.get("constrained"):
+                continue
             # A SCRIPTED body is held on a constraint, not on a surface -- a
             # pendulum bob has nothing under it -- so seating it against the
             # ground would drag the whole assembly down to the floor.
@@ -1000,8 +1008,23 @@ class Fusion(Injector):
         # reason: they are gone, and a merged body must not bounce off its own
         # other half.
         for body, t_res, v_f in resume:
+            bi = traj.index_of(int(body.segmentation_id))
+            fused_radius = float(traj.radius[bi]) * float(self.SWELL)
+            # The render and the collision geometry must share a bottom face.
+            # Re-integrating the swollen survivor at the old centre/radius put
+            # its newly enlarged lower half inside the floor, even though the
+            # integrator itself was behaving correctly for the stale radius.
+            p0 = np.asarray(out.pos[t_res - 1, bi], np.float64).copy()
+            floor = _geom.floor_fn(spec, body)
+            clearance = (float(traj.pos[t_res - 1, bi, 2])
+                         - float(traj.radius[bi])
+                         - floor(float(traj.pos[t_res - 1, bi, 0]),
+                                 float(traj.pos[t_res - 1, bi, 1])))
+            p0[2] = max(p0[2], floor(float(p0[0]), float(p0[1]))
+                        + fused_radius + max(0.0, clearance))
             self._rewrite_from(
-                spec, traj, out, body, t_res, v0=v_f,
+                spec, traj, out, body, t_res, v0=v_f, p0=p0,
+                radius=fused_radius,
                 obstacles=_geom.Obstacles(
                     spec, traj,
                     exclude_ids=[int(body.segmentation_id)] + absorbed_ids))

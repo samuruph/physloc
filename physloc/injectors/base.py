@@ -659,8 +659,12 @@ class Injector:
             preferred = [by_id[int(i)] for i in want if int(i) in by_id]
             if preferred:
                 return preferred[0]
-        live = [b for b in _geom.actors(spec) if not b.dormant]
-        return live[0] if live else None
+        live = self._all_actors(spec)
+        if not live:
+            return None
+        if spec.notes.get("randomize_violation_target"):
+            return live[int(self._instance_rng(spec).randint(len(live)))]
+        return live[0]
 
     def _group(self, spec):
         """The bodies this family should act on: one, or several.
@@ -694,6 +698,8 @@ class Injector:
         # scenario, or by the condition), so where one exists it should be
         # honoured rather than second-guessed.
         if frac <= 0.0 or len(live) < 2:
+            if spec.notes.get("randomize_violation_target"):
+                return [live[int(self._instance_rng(spec).randint(len(live)))]]
             return live[:1]
         k = int(np.clip(round(frac * len(live)), 2, len(live)))
         picks = self._instance_rng(spec).choice(len(live), size=k, replace=False)
@@ -755,7 +761,18 @@ class Injector:
         """Every actor, for the families that act on a whole medium rather than
         on one violator -- `antigravity` over a pour, `global_gravity` over a
         scene, an assembly whose parts must move together."""
-        return [b for b in _geom.actors(spec) if not b.dormant]
+        live = [b for b in _geom.actors(spec) if not b.dormant]
+        wanted = {int(i) for i in spec.notes.get("violation_target_ids", ())}
+        if not wanted:
+            return live
+        # A scenario may expose built-in props as legitimate violators (the
+        # three objects on a resting table, or every block in a stack) without
+        # relabelling them as actors for framing and prompt generation.  Peers
+        # added by the multi condition remain eligible too.
+        pooled = [b for b in spec.bodies
+                  if not b.dormant and (int(b.segmentation_id) in wanted
+                                        or b.role == "actor")]
+        return pooled
 
     @staticmethod
     def _ballistic(p0: np.ndarray, v0: np.ndarray, g: np.ndarray,
@@ -1103,7 +1120,7 @@ class Injector:
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
                       t0: int, v0=None, p0=None, g_per_frame=None,
                       restitution=None, obstacles=None, solid=True,
-                      floorless=False) -> None:
+                      floorless=False, radius=None) -> None:
         """Re-integrate one body from frame `t0`, on the surface it belongs to.
 
         The workhorse behind most families: an intervention is usually "change
@@ -1125,7 +1142,8 @@ class Injector:
         pos, vel = self._integrate_profile(
             start_p, start_v, np.asarray(g_per_frame, np.float64),
             traj.dt, (self._no_floor(spec, body) if floorless
-                      else _geom.floor_fn(spec, body)), float(traj.radius[bi]),
+                      else _geom.floor_fn(spec, body)),
+            float(traj.radius[bi]) if radius is None else float(radius),
             float(body.restitution if restitution is None else restitution),
             obstacles=self._obstacles(spec, traj, body, obstacles, solid),
             t_start=float(t0 - 1),

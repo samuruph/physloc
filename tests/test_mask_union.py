@@ -8,7 +8,6 @@ regression here silently empties the masks on a sixth of the taxonomy, so this
 tests the rule directly rather than only through a rendered clip.
 """
 import glob
-import json
 import os
 
 import numpy as np
@@ -105,21 +104,19 @@ def test_invalid_mask_is_a_subset_of_the_union():
 
 
 @pytest.mark.parametrize("which", ["violation_mask"])
-def test_released_clips_have_nonempty_masks_while_active(which):
+def test_released_samples_have_nonempty_masks_while_active(which):
     root = find_release()
     if root is None:
         pytest.skip("no release; run `python -m physloc.cli generate --debug`")
     n = 0
-    for mp in glob.glob(os.path.join(root, "clips", "**", "metadata.json"),
+    for mp in glob.glob(os.path.join(root, "samples", "**", "sample.json"),
                         recursive=True):
         cdir = os.path.dirname(mp)
-        with open(mp) as fh:
-            meta = json.load(fh)["metadata"]
-        if meta.get("label") != "invalid":
+        sample = loader.Sample.from_dir(cdir)
+        if sample.is_valid:
             continue
-        clip = loader.Clip.from_dir(cdir)
-        mask = getattr(clip, which)
-        tl = clip.timeline
+        mask = getattr(sample, which)
+        tl = sample.timeline
         # WHICH window the mask answers to depends on where the violation is
         # detectable. An `event` family -- a colour that finishes changing, a
         # body that finishes growing -- is only wrong ACROSS the change: a
@@ -130,7 +127,7 @@ def test_released_clips_have_nonempty_masks_while_active(which):
         # exactly that reason, and the mask was right.
         from physloc.taxonomy import FAMILIES
 
-        fam = FAMILIES.get(meta.get("family"))
+        fam = FAMILIES.get(sample.family)
         key = ("intervening" if fam is not None and fam.detectable == "event"
                else "consequence")
         scored = np.asarray(tl[key], bool)

@@ -20,7 +20,7 @@
 #
 # Each writes to its OWN outdir, so levels generated separately can simply be
 # merged: the clip tree is keyed by level already
-# (`clips/<release>/L2/<scenario>/<seed>/`) and every level draws from its own
+# (`samples/<release>/L2/<scenario>/<seed>/<label>/`) and every level draws from its own
 # seed block, so nothing collides.
 #
 # The five difficulty conditions apply here exactly as they do in a full run --

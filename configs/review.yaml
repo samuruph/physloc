@@ -125,7 +125,7 @@ generate:
   workers: auto
 
   workdir: out/work_review   # raw passes + trajectories (large, gitignored)
-  outdir: out/review         # clips, masks, metadata.json, overlays
+  outdir: out/review         # schema-v3 samples: sample.json, rgb.mp4, data.h5
 
   # ---- optional. (resolution, fps, frames and spp live under `defaults`.)
   #

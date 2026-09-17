@@ -1,868 +1,331 @@
-"""Package a generated release for distribution -- the clip folders, an index and a card.
-
-A release ships in the SAME layout the generator writes and the loader reads,
-so a download is usable as it lands and every consumer reads it one way:
-
-    physloc_v0/
-      README.md                     the dataset card, with YAML front-matter
-      LICENSE
-      loader.py                     reads this folder; numpy only
-      index.parquet                 one row per clip, for the dataset viewer
-      taxonomy.json  stats/         what the release is, and its distributions
-      splits/{main,held_out,debug}.txt   clip uids, grouped by pair_uid
-      clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/
-          metadata.json video.mp4 masks.npz objects.npz segmentations.npz ...
-
-Folders rather than tar shards: any clip can be opened, played and copied
-without special tooling, and a download can be cut to the files one needs --
-`--include "*/metadata.json" --include "*/video.mp4"` fetches the videos and
-nothing else. What that costs is file count: about nine files a clip, and the
-Hub advises under 100k files a repository, so a release past ~10k clips should
-be published in parts (per level is the natural cut).
-
-**The raw geometry passes are opt-in.** Measured on a debug sweep, `flow_fwd`,
-`depth` and `object_coords` are 86% of the bytes, at ~3.2 MB per clip against
-~1 KB for each annotation, and ~57x that at v0 geometry. `--with-passes` adds
-them to each clip folder; a consumer who does not want them excludes
-`*/depth.npz` and friends from the download.
-
-Splits group by `pair_uid`, never by clip. A valid twin and its invalid
-siblings share a scene, a seed and a bit-identical prefix, so putting them on
-opposite sides of a split leaks the answer: a model that saw the valid clip has
-seen every frame before `t_event` of the invalid one.
-"""
+"""Package a generated schema-v3 tree for local or Hugging Face use."""
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import os
 import shutil
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from collections import Counter
+from typing import Dict, Iterable, List, Optional
 
 from .. import loader
 from ..annotate import layout
+from ..residuals.energy import ENERGY_EXCLUDED_ROLES
 
-#: Files every exported clip carries -- what a model trains on. Masks, severity,
-#: timelines and grids are not files: `physloc/loader.py` derives them from
-#: `masks.npz`, `objects.npz` and `segmentations.npz`.
-CORE_FILES = (layout.METADATA, layout.VIDEO, layout.MASKS, layout.OBJECTS,
-              layout.SEGMENTATIONS, layout.INSTANCES, "energy.npz",
-              "bodies.npz", "traj.npz")
-
-#: Files `--with-passes` adds -- the raw geometry passes.
-PASS_FILES = tuple("%s.npz" % name for name in layout.PASSES.values()) + (
-    "energy_map.npz",)
-
-#: Fractions of PAIRS, not clips.
-#:
-#: Modelled on IntPhys 2 (arXiv:2506.09849), which this project already takes
-#: its debug/artifact split from. It reports 1416 videos over three splits --
-#: Debug (5 scenes, 60 videos, for calibration), Main (253 scenes, 1012 videos,
-#: released WITH metadata) and Held-Out (86 scenes, 344 videos, released
-#: WITHOUT metadata "to avoid training data contamination"). Counted in SCENES,
-#: which is why the unit here is the pair.
-#:
-#: Not a random train/val/test, which is what this had first and what neither
-#: prior art does. LikePhys (arXiv:2510.11512) does not split at all -- it is a
-#: training-free evaluator doing pairwise valid-versus-invalid comparison -- and
-#: PhysLoc's primary use is the same: evaluation, not fitting. A `train` split
-#: would imply the opposite.
 SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
 
-#: EVERY SPLIT SHIPS EVERY ANNOTATION, and the split is a label rather than a
-#: filter. IntPhys 2 withholds its held-out metadata to stop training
-#: contamination, and that is the right call for a leaderboard someone else
-#: submits to; it is the wrong one here, where the release has to stay
-#: re-splittable and every clip has to be scoreable. A held-out set whose masks
-#: are missing cannot be measured, only guessed at, and the boundary can never
-#: be moved afterwards without regenerating.
-#:
-#: The leakage protection that remains is the part that cannot be undone later:
-#: pairs never straddle a split, and splits are stratified per scenario. Anyone
-#: publishing a leaderboard from this can strip the annotations at that point,
-#: from `splits/held_out.txt`, without regenerating anything.
+
+def _hash_unit(value: str) -> float:
+    digest = hashlib.sha256(value.encode()).digest()
+    return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
-def _clip_dirs(root: str) -> List[str]:
-    return sorted(os.path.dirname(p) for p in layout.find(root))
-
-
-def _hash_unit(pair_uid: str) -> float:
-    """A stable number in [0, 1) from a pair uid."""
-    h = hashlib.sha256(pair_uid.encode()).digest()
-    return int.from_bytes(h[:8], "big") / float(1 << 64)
+def _cut(values: List[str], names: List[str]) -> Dict[str, str]:
+    n = len(values)
+    if not n:
+        return {}
+    weights = dict(SPLIT_FRACTIONS)
+    raw = [weights[name] * n for name in names]
+    counts = [int(value) for value in raw]
+    for index in sorted(range(len(names)), key=lambda i: raw[i] - counts[i], reverse=True)[:n - sum(counts)]:
+        counts[index] += 1
+    if n >= len(names):
+        for index, count in enumerate(counts):
+            if count:
+                continue
+            donor = max(range(len(counts)), key=lambda i: counts[i])
+            counts[donor] -= 1
+            counts[index] = 1
+    out = {}
+    start = 0
+    for name, count in zip(names, counts):
+        for value in values[start:start + count]:
+            out[value] = name
+        start += count
+    return out
 
 
 def assign_splits(pair_uids: Iterable[str]) -> Dict[str, str]:
-    """{pair_uid: split}, in the declared proportions exactly.
-
-    Pairs are ORDERED by a hash of their uid and then cut at the quantiles,
-    rather than each pair independently falling into a hash bucket. Independent
-    bucketing is the tidier rule and it does not hold its proportions on a small
-    release: thirteen pairs came out 11/2/0, and a benchmark whose test split is
-    empty is not a benchmark.
-
-    Deterministic for a given set of pairs -- no rng, and the hash fixes the
-    order -- so regenerating a release reproduces its splits exactly. ADDING
-    pairs does reshuffle, because the quantile boundaries move; a release that
-    grows should be re-split and re-reported, not appended to.
-    """
-    uids = sorted(set(str(p) for p in pair_uids))
+    """Deterministic, pair-grouped and scenario-stratified splits."""
+    groups: Dict[str, List[str]] = {}
+    for uid in sorted(set(str(value) for value in pair_uids)):
+        parts = uid.replace(os.sep, "/").split("/")
+        scenario = parts[-2] if len(parts) >= 2 else "dataset"
+        groups.setdefault(scenario, []).append(uid)
     names = [name for name, _ in SPLIT_FRACTIONS]
-    if not uids:
-        return {}
-
-    # STRATIFIED BY SCENARIO. Cutting the whole population at once lets a
-    # scenario land entirely in one split -- which for a 13-scenario release is
-    # likely, and makes the held-out set measure "have you seen `pour` before"
-    # rather than "do you understand pouring". Splitting within each scenario
-    # keeps every split a picture of the same benchmark.
-    #
-    # **THE SCENARIO IS THE SECOND-FROM-LAST SEGMENT, and counting from the
-    # front silently stopped finding it.** This read `parts[1]` against a uid
-    # documented as `<release>/<scenario>/<seed>`; the level then became part of
-    # a clip's identity (`clips/<release>/<level>/<scenario>/<seed>/`, see
-    # CLAUDE.md) and every uid grew a segment. `parts[1]` has been `"L0"` ever
-    # since -- ONE group holding every scenario, so the stratification this
-    # function exists for has not happened, and the held-out set is whole
-    # scenarios again.
-    #
-    # It also silently emptied the overlay column. `_cut` sends a group of
-    # fewer than three pairs entirely to `debug`, which is the only split that
-    # carries `overlay.mp4`; a review sweep has one pair per scenario, so every
-    # scenario used to qualify and every clip shipped an overlay. Collapsed into
-    # one group of fourteen the rule never fires, and `review_L0` published with
-    # an overlay on 1 row of 179. Counting from the back is right for both the
-    # three-segment form and the four-segment one.
-    by_scenario: Dict[str, List[str]] = {}
-    for uid in uids:
-        parts = uid.split("/")
-        by_scenario.setdefault(parts[-2] if len(parts) > 2 else "", []).append(uid)
-    out: Dict[str, str] = {}
-    for group in by_scenario.values():
-        out.update(_cut(sorted(group, key=_hash_unit), names))
+    out = {}
+    for values in groups.values():
+        ordered = sorted(values, key=lambda value: (_hash_unit(value), value))
+        out.update(_cut(ordered, names))
     return out
 
 
-def _cut(ordered: List[str], names: List[str]) -> Dict[str, str]:
-    """Assign one ordered group of pairs to splits, in the declared shares."""
-    n = len(ordered)
-    if n == 0:
-        return {}
-
-    # TOO FEW TO SPLIT: everything goes to `debug`.
-    #
-    # A scenario with one or two pairs cannot fill three splits, and the old
-    # behaviour dropped them all into `main` -- which is the split that ships
-    # no overlay. `debug` is the calibration slice and the one that carries the
-    # nine-panel overlay video, so a release too small to be a benchmark
-    # becomes the thing it can actually be: something to look at.
-    if n < len(names):
-        return {uid: "debug" for uid in ordered}
-
-    sizes = [int(round(frac * n)) for _, frac in SPLIT_FRACTIONS]
-    # EVERY SPLIT GETS AT LEAST ONE, whenever there are enough pairs to go
-    # round. Rounding alone starves the small splits on a small release -- six
-    # pairs at 80/10/10 rounds to 5/1/0 -- and a test split of zero is not a
-    # test split. Borrowed from the largest, which can afford it.
-    if n >= len(names):
-        for i in range(len(sizes)):
-            if sizes[i] == 0:
-                sizes[sizes.index(max(sizes))] -= 1
-                sizes[i] = 1
-    # Rounding can also over- or under-shoot the total by one or two.
-    sizes[0] += n - sum(sizes)
-
-    out: Dict[str, str] = {}
-    start = 0
-    for name, size in zip(names, sizes):
-        for uid in ordered[start:start + size]:
-            out[uid] = name
-        start += size
-    return out
-
-
-
-def _row(meta: Dict, splits: Dict[str, str]) -> Dict:
-    """One flat record per clip, for the index."""
-    md = layout.identity(meta)
-    v = meta.get("violation") or {}
-    cam = meta.get("camera") or {}
-    # `instances`, not `assets`: the asset list is the licence record and
-    # carries only name/source/licence, while the per-body physics and
-    # appearance live in `instances`.
-    bodies = meta.get("instances") or []
-    actor = next((b for b in bodies
-                  if b.get("role") == "actor" and not b.get("dormant")), {})
-    windows = v.get("violation_windows") or []
-
-    def _name(x):
-        """`tier` and `complexity` are a bare string in some releases and a
-        block in others; the index wants the name either way."""
-        return x.get("name") if isinstance(x, dict) else x
+def _row(document: Dict, sample_path: str) -> Dict:
+    info = document["metadata"]["sample_info"]
+    scene = document["metadata"]["scene"]["info"]
+    world = document["metadata"]["scene"]["world"]
+    counts = world.get("objects_summary") or {}
     return {
-        "clip_uid": md.get("clip_uid"),
-        "pair_uid": md.get("pair_uid"),
-        "twin_uid": md.get("twin_uid"),
-        "label": md.get("label"),
-        "scenario": md.get("scenario"),
-        "family": md.get("family"),
-        "domain": md.get("domain"),
-        "medium": md.get("physics_medium"),
-        "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
-        "magnitude": (v.get("intervention") or {}).get("magnitude"),
-        "peak_severity": (v.get("peak_residual") or {}).get("score"),
-        # THE MEASURED DETECTION DIFFICULTY, and what set it. Two columns
-        # rather than one: `difficulty` is what you group by, `difficulty_rank`
-        # is what you FILTER by, because the sets nest -- `rank <= 1` is the
-        # moderate evaluation set, and a string comparison cannot say that.
-        # `binding_factors` is why a clip landed where it did, which is the
-        # column that turns a score into a diagnosis.
-        "difficulty": (meta.get("difficulty") or {}).get("level"),
-        "difficulty_rank": (meta.get("difficulty") or {}).get("rank"),
-        "binding_factors": ",".join(
-            (meta.get("difficulty") or {}).get("binding_factors") or ()),
-        "t_event_frame": v.get("t_event_frame"),
-        "violation_windows": json.dumps(windows),
-        "observability_lag": v.get("observability_lag_frames"),
-        "seed": md.get("seed"),
-        "variant": md.get("variant"),
-        "tier": _name(md.get("tier")),
-        "complexity": _name(md.get("complexity")),
-        "condition": md.get("condition"),
-        "n_distractors": md.get("n_distractors"),
-        "n_actors": md.get("n_actors"),
-        "n_violators": md.get("n_violators"),
-        # Whether a clip's violators broke the law at their own moments or at
-        # one -- the column that finds the staggered `multi` clips.
-        "violator_timing": v.get("violator_timing"),
-        "num_frames": md.get("num_frames"),
-        "frame_rate": md.get("frame_rate"),
-        "camera_motion": cam.get("motion"),
-        "actor_shape": actor.get("category"),
-        "actor_material": actor.get("material"),
-        "actor_mass": actor.get("mass"),
-        "prompt": md.get("prompt"),
-        "split": splits.get(str(md.get("pair_uid")), "train"),
+        "sample_uid": info["sample_uid"], "pair_uid": info["pair_uid"],
+        "valid_sample_uid": info["valid_sample_uid"], "label": info["label"],
+        "split": info["split"], "scenario": scene.get("type"),
+        "family": scene.get("family"), "domain": scene.get("domain"),
+        "physics_medium": scene.get("physics_medium"),
+        "severity": scene.get("severity"), "complexity": scene.get("complexity"),
+        "difficulty": scene.get("difficulty"), "condition": scene.get("condition"),
+        "seed": info.get("seed"), "variant": info.get("variant"),
+        "num_frames": info.get("num_frames"), "fps": info.get("fps"),
+        "n_actors": counts.get("n_actors"), "n_distractors": counts.get("n_distractors"),
+        "n_violators": counts.get("n_violators"), "prompt": scene.get("prompt"),
+        "sample_path": sample_path,
+        "rgb_path": sample_path + "/" + loader.RGB,
+        "data_path": sample_path + "/" + loader.DATA,
+        "dataset_version": info.get("dataset_version"),
+        "generation_config_id": info.get("generation_config_id"),
+        "resolution": info.get("resolution"),
     }
 
 
-def _copy_clip(cdir: str, dest: str, members: Sequence[str]) -> int:
-    """Copy one clip's `members` into `dest`; returns how many were present.
-
-    Copied, not linked: the generator rewrites `metadata.json` in place when a
-    clip is re-annotated or relabelled, and a hard link would carry that edit
-    into a release that was already packaged."""
-    os.makedirs(dest, exist_ok=True)
-    n = 0
-    for name in members:
-        src = os.path.join(cdir, name)
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(dest, name))
-            n += 1
-    return n
-
-
-def export(root: str, outdir: str, with_passes: bool = False,
-           license_name: str = "CC-BY-4.0") -> Dict[str, object]:
-    """Package the release at `root` into `outdir`. Returns a summary."""
-    clip_dirs = _clip_dirs(root)
-    if not clip_dirs:
-        raise FileNotFoundError("no clips under %s" % root)
-
-    clips: List[Tuple[str, Dict]] = []
-    for cdir in clip_dirs:
-        clips.append((cdir, layout.read(cdir)))
-
-    os.makedirs(outdir, exist_ok=True)
-    splits = assign_splits(str(layout.identity(m).get("pair_uid"))
-                           for _, m in clips)
-    rows = [_row(m, splits) for _, m in clips]
-
-    # Splits, by PAIR. Writing the clip uids out per split rather than the pair
-    # uids means a consumer never has to know the grouping rule to respect it.
-    os.makedirs(os.path.join(outdir, "splits"), exist_ok=True)
-    for name, _ in SPLIT_FRACTIONS:
-        members = sorted(r["clip_uid"] for r in rows if r["split"] == name)
-        with open(os.path.join(outdir, "splits", "%s.txt" % name), "w") as fh:
-            fh.write("\n".join(members) + ("\n" if members else ""))
-
-    # THE CLIPS, in the layout the loader reads. Every split gets the same
-    # files, so the boundary can be moved later and any clip can be scored.
-    # A stale tree from an earlier export would leave clips this one dropped.
-    clip_root = os.path.join(outdir, "clips")
-    if os.path.isdir(clip_root):
-        shutil.rmtree(clip_root)
-    members = CORE_FILES + (PASS_FILES if with_passes else ())
-    files = 0
-    for cdir, meta in clips:
-        uid = str(layout.identity(meta)["clip_uid"])
-        files += _copy_clip(cdir, os.path.join(clip_root, *uid.split("/")),
-                            members)
-
-    index_path = _write_index(rows, outdir, clips)
-    _write_taxonomy(outdir, rows)
-    # THE STATISTICS SHIP WITH THE RELEASE, computed on exactly the clips being
-    # packaged, and the card shows them. A benchmark is judged on its
-    # distributions, and a reader should not have to generate anything to see
-    # them. A failure to plot costs the figures, never the export.
-    stats_dir: Optional[str] = os.path.join(outdir, "stats")
-    try:
-        from .stats import report
-        report(root, stats_dir)
-    except (Exception, SystemExit):                            # noqa: BLE001
-        stats_dir = None
-    _write_card(rows, outdir, license_name, with_passes, stats_dir)
-    _write_license(outdir, license_name)
-    # The loader ships with the data: schema v2 stores two annotation files and
-    # derives the rest, so the card's `from loader import ...` has to work on a
-    # fresh download with nothing but numpy installed.
-    shutil.copyfile(loader.__file__, os.path.join(outdir, "loader.py"))
-    # An export from before releases shipped as folders left tar shards here,
-    # and a loader that finds both would be reading two copies.
-    stale = os.path.join(outdir, "shards")
-    if os.path.isdir(stale):
-        shutil.rmtree(stale)
-    counts = {n: sum(1 for r in rows if r["split"] == n)
-              for n, _ in SPLIT_FRACTIONS}
-    notes = []
-    empty = [n for n, c in counts.items() if not c]
-    if empty:
-        # Said out loud, because an empty held-out split is the difference
-        # between a benchmark and a training set, and it is not obvious from
-        # the numbers why it happened. Splits are stratified per scenario, so a
-        # release with one pair per scenario cannot fill three splits -- it
-        # needs several variants per scenario before there is anything to hold
-        # out.
-        per = len({r["pair_uid"] for r in rows}) / max(
-            len({r["scenario"] for r in rows}), 1)
-        notes.append(
-            "splits %s are empty: %.1f pairs per scenario is too few to "
-            "stratify three ways, so everything went to `debug` -- which is "
-            "the split that carries the overlay videos. Generate more variants "
-            "per scenario for a real three-way split."
-            % (", ".join(sorted(empty)), per))
-    return {
-        "clips": len(clips),
-        "pairs": len({r["pair_uid"] for r in rows}),
-        "notes": notes,
-        "files": files,
-        "with_passes": bool(with_passes),
-        "index": index_path,
-        "splits": counts,
-        "outdir": outdir,
-    }
-
-
-def _write_taxonomy(outdir: str, rows: List[Dict]) -> str:
-    """`taxonomy.json` -- what every scenario and family in the release IS.
-
-    The index says which clip is which; this says what the labels mean. Without
-    it a consumer has `family: "newton1_inertia"` and a string, and has to come
-    back to the repository to learn that it is a kinematics violation, that its
-    law is `momentum_conservation`, and that a scenario called `pour` is
-    granular rather than rigid.
-
-    Generated from `physloc.taxonomy`, never hand-written, so it cannot drift
-    from the code the way the prose tables in docs/ did -- five hand-copies of
-    the same table disagreed with each other and with the code.
-    """
-    from ..taxonomy import DOMAINS, FAMILIES, MEDIA, SCENARIOS
-
-    present_scen = {r["scenario"] for r in rows}
-    present_fam = {r["family"] for r in rows if r["family"]}
-    blob = {
-        "media": {k: v for k, v in MEDIA.items()},
-        "domains": {k: v for k, v in DOMAINS.items()},
-        "scenarios": {
-            name: {
-                "description": sc.description,
-                "event_structure": sc.event_structure,
-                "physics_medium": sc.physics_medium,
-                "has_occluder": bool(sc.has_occluder),
-                "provides": list(sc.provides),
-                "families": sorted(f for f in present_fam
-                                   if any(r["scenario"] == name
-                                          and r["family"] == f for r in rows)),
-                "clips_in_release": sum(1 for r in rows
-                                        if r["scenario"] == name),
-            }
-            for name, sc in SCENARIOS.items() if name in present_scen
-        },
-        "families": {
-            name: {
-                "domain": fam.domain,
-                "law": fam.law,
-                "injection": fam.injection,
-                "kind": fam.kind,
-                "magnitude_unit": fam.magnitude_unit,
-                "detectable": fam.detectable,
-                "graded": bool(fam.graded),
-                "requires": list(fam.requires),
-                "clips_in_release": sum(1 for r in rows if r["family"] == name),
-            }
-            for name, fam in FAMILIES.items() if name in present_fam
-        },
-    }
-    path = os.path.join(outdir, "taxonomy.json")
-    with open(path, "w") as fh:
-        json.dump(blob, fh, indent=2, sort_keys=True)
-    return path
-
-
-#: Which splits get the nine-panel overlay embedded beside the RGB.
-#:
-#: `overlay.mp4` is 24x the size of `video.mp4` -- 261 KB against 11 KB at debug
-#: geometry, and about 5.3 MB against 0.2 MB at v0 -- because it is nine panels
-#: wide. Embedding it everywhere would be 8.5 GB on a full v0 release against
-#: 0.3 GB for the RGB alone.
-#:
-#: `debug` is the calibration slice, which is exactly where "show me everything
-#: at once" earns its bytes.
-OVERLAY_IN_SPLITS = ("debug",)
-
-
-#: THE ORDER THE DATASET VIEWER SHOWS. This list is the layout -- edit it to
-#: rearrange the columns on the hub, and nothing else needs to change.
-#:
-#: The videos come SECOND AND THIRD, right after the clip's identity, because
-#: the viewer is the point of the table: a dataset about physics whose physics
-#: cannot be watched at a glance is a poor dataset, and appended columns land
-#: off the right-hand edge behind a scroll. Then what the clip IS, then what
-#: was done to it, then how the scene was built, then the free text.
-#:
-#: Anything a row carries that is not named here is appended in row order
-#: rather than dropped, so adding a field to `_index_row` cannot silently lose
-#: it from the published index.
-INDEX_COLUMNS = (
-    "clip_uid", "video", "overlay",
-    "label", "split", "scenario", "family", "domain", "medium",
-    "severity_bin", "magnitude", "peak_severity",
-    "difficulty", "difficulty_rank", "binding_factors",
-    "t_event_frame", "violation_windows", "observability_lag",
-    "complexity", "condition", "camera_motion", "n_distractors",
-    "n_actors", "n_violators", "violator_timing",
-    "actor_shape", "actor_material", "actor_mass",
-    "tier", "num_frames", "frame_rate", "seed", "variant",
-    "pair_uid", "twin_uid",
-    "prompt",
-)
-
-#: Index video column -> the clip file it embeds.
-VIDEO_COLUMNS = (("video", layout.VIDEO), ("overlay", layout.OVERLAY))
-
-
-def _write_index(rows: List[Dict], outdir: str,
-                 clips: Sequence[Tuple[str, Dict]] = ()) -> str:
-    """The per-clip table. Parquet when pyarrow is here, JSONL when it is not.
-
-    Falling back rather than failing: the index is what makes the dataset
-    viewer work, and a release that packaged everything except the viewer table
-    is still a release. The card records which format shipped.
-    """
-    path = os.path.join(outdir, "index.parquet")
+def _write_index(rows: List[Dict], root: str) -> str:
+    for name in ("index.parquet", "index.jsonl"):
+        existing = os.path.join(root, name)
+        if os.path.exists(existing):
+            os.remove(existing)
+    path = os.path.join(root, "index.parquet")
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError:
-        path = os.path.join(outdir, "index.jsonl")
-        with open(path, "w") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
+        path = os.path.join(root, "index.jsonl")
+        with open(path, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
         return path
-
-    # THE VIDEO GOES IN THE TABLE. A dataset about physics whose physics cannot
-    # be watched is a poor dataset, and the hub will only play a column it is
-    # told is a video -- so the mp4 BYTES are embedded and the schema is
-    # annotated as a `Video` feature. A path is useless here: it resolves on
-    # this machine and nowhere else.
-    by_uid = {str(layout.identity(m).get("clip_uid")): d for d, m in clips}
-    videos = {name: [] for name, _ in VIDEO_COLUMNS}
-    for r in rows:
-        cdir = by_uid.get(str(r["clip_uid"]))
-        for name, fname in VIDEO_COLUMNS:
-            blob = None
-            want = (name == "video" or r["split"] in OVERLAY_IN_SPLITS)
-            fp = os.path.join(cdir, fname) if cdir and want else None
-            if fp and os.path.exists(fp):
-                with open(fp, "rb") as fh:
-                    blob = {"bytes": fh.read(), "path": fname}
-            videos[name].append(blob)
-
-    table = _typed(pa, pa.Table.from_pylist(rows))
-    for name, _ in VIDEO_COLUMNS:
-        if any(v is not None for v in videos[name]):
-            table = table.append_column(
-                name, pa.array(videos[name],
-                               type=pa.struct([("bytes", pa.binary()),
-                                               ("path", pa.string())])))
-    # Ordered LAST, once, rather than by inserting each column at a computed
-    # index: one declared list is the whole layout, and it cannot get out of
-    # step with itself the way two insert positions can.
-    present = set(table.schema.names)
-    ordered = ([c for c in INDEX_COLUMNS if c in present]
-               + [c for c in table.schema.names if c not in INDEX_COLUMNS])
-    table = table.select(ordered)
-    table = table.replace_schema_metadata(_video_schema_metadata(table))
+    table = pa.Table.from_pylist(rows)
     pq.write_table(table, path)
     return path
 
 
-#: What an index column IS, for the columns a release can leave entirely empty.
-#:
-#: `pa.Table.from_pylist` infers from the VALUES, so a column nothing filled in
-#: comes out `null`-typed. `actor_material` on an L0 sweep is exactly that --
-#: L0 is flat colours and no body has a material -- and it published as
-#: `{"dtype": "null", "_type": "Value"}`, which is not a type `datasets`
-#: describes or the hub's column statistics can profile.
-#:
-#: It also makes two levels of one release schema-INCOMPATIBLE: `actor_material`
-#: is `null` in `review_L0` and `string` in `review_L1`, so the two cannot be
-#: concatenated -- which is the whole point of generating a ladder.
-#:
-#: Only columns that can come out empty need declaring. Guessing from the name
-#: is not good enough: `magnitude` and `peak_severity` are null on every VALID
-#: clip, so a valid-only release would infer them as text.
-INDEX_TYPES = {
-    "magnitude": "double", "peak_severity": "double", "actor_mass": "double",
-    "difficulty_rank": "int64", "t_event_frame": "int64",
-    "observability_lag": "int64", "n_distractors": "int64",
-    "n_actors": "int64", "n_violators": "int64", "num_frames": "int64",
-    "frame_rate": "int64", "seed": "int64", "variant": "int64",
-}
+def _schema() -> Dict:
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://physloc/schema/v3/sample.json",
+        "title": "PhysLoc sample schema v3", "type": "object",
+        "required": ["schema_version", "metadata", "observations", "annotations", "storage"],
+        "properties": {
+            "schema_version": {"const": loader.SCHEMA_VERSION},
+            "metadata": {"type": "object", "required": ["sample_info", "scene"]},
+            "observations": {"type": "object", "required": ["rgb", "dense"]},
+            "annotations": {"type": "object", "required": ["objects", "maps", "events"]},
+            "storage": {"type": "object", "required": ["dense_store", "format"]},
+        }, "additionalProperties": False,
+    }
 
 
-def _typed(pa, table):
-    """Give every empty column its declared type instead of `null`."""
-    kinds = {"double": pa.float64(), "int64": pa.int64(), "string": pa.string()}
-    for i, field in enumerate(table.schema):
-        if not pa.types.is_null(field.type):
-            continue
-        want = kinds[INDEX_TYPES.get(field.name, "string")]
-        table = table.set_column(i, pa.field(field.name, want),
-                                 table.column(i).cast(want))
-    return table
+def _difficulty_analysis(root: str) -> Dict[str, object]:
+    """Compact release-wide difficulty measurements for ``dataset.json``."""
+    from . import stats
+    from ..annotate import difficulty as difficulty_module
+
+    records = stats.load(root)
+    summary = stats.summarise(records)
+
+    def quantile(values, fraction):
+        ordered = sorted(float(value) for value in values)
+        if not ordered:
+            return None
+        position = (len(ordered) - 1) * float(fraction)
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    zone_counts = {factor.name: Counter() for factor in difficulty_module.FACTORS}
+    for record in records:
+        for name, value in ((record.get("difficulty") or {}).get("factors") or {}).items():
+            if name in zone_counts and value.get("level"):
+                zone_counts[name][str(value["level"])] += 1
+    factors = {}
+    for name, values in summary["factor_values"].items():
+        numbers = [float(value) for value in values]
+        factors[name] = {
+            "count": len(numbers), "zone_counts": dict(zone_counts[name]),
+            "min": min(numbers) if numbers else None,
+            "p05": quantile(numbers, 0.05), "median": quantile(numbers, 0.50),
+            "p95": quantile(numbers, 0.95), "max": max(numbers) if numbers else None,
+            "mean": (sum(numbers) / len(numbers)) if numbers else None,
+        }
+    return {
+        "number_of_invalid_samples": summary["invalid"],
+        "label_distribution": summary["difficulty"],
+        "labels_by_complexity": summary["difficulty_by_level"],
+        "label_setting_factors": summary["binding_factors"],
+        "thresholds": summary["thresholds"],
+        "factors": factors,
+    }
 
 
-def _video_schema_metadata(table) -> Dict[bytes, bytes]:
-    """Tell the hub which columns are videos.
+def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
+    splits = Counter(row["split"] for row in rows)
+    complexity = Counter(row.get("complexity") for row in rows)
+    versions = sorted({str(row.get("dataset_version") or "") for row in rows})
+    dataset = {
+        "schema_version": loader.SCHEMA_VERSION,
+        "dataset_metadata": {
+            "name": "PhysLoc", "version": versions[-1] if versions else "",
+            "number_of_samples": len(rows),
+            "number_of_pairs": len({row["pair_uid"] for row in rows}),
+            "splits": dict(sorted(splits.items())),
+            "split_definitions": {
+                name: {"fraction": fraction, "unit": "pair",
+                       "assignment": "deterministic scenario-stratified SHA-256"}
+                for name, fraction in SPLIT_FRACTIONS
+            },
+            "complexity_splits": {str(key): value for key, value in sorted(complexity.items())},
+            "taxonomy": {
+                "scenarios": sorted({str(row["scenario"]) for row in rows
+                                     if row.get("scenario") is not None}),
+                "families": sorted({str(row["family"]) for row in rows
+                                    if row.get("family") is not None}),
+                "domains": sorted({str(row["domain"]) for row in rows
+                                   if row.get("domain") is not None}),
+            },
+            "generation_config_ids": sorted({str(row["generation_config_id"])
+                                             for row in rows
+                                             if row.get("generation_config_id")}),
+            "difficulty_analysis": _difficulty_analysis(root),
+            "energy_accounting": {
+                "world_total": {
+                    "hdf5_path": "/energy/scene/total",
+                    "scope": "all energy-eligible physical objects, whether visible or occluded",
+                    "purpose": "physics conservation, residual, and anomaly analysis",
+                },
+                "visible_scene_total": {
+                    "hdf5_path": "/energy/scene/energy_in_frame",
+                    "scope": "energy-eligible objects visible in rendered instance segmentation",
+                    "purpose": "video-grounded analysis and visualization",
+                },
+                "per_object": {
+                    "hdf5_path": "/energy/objects/by_body",
+                    "object_axis": "/objects/ids",
+                },
+                "included": [
+                    "dynamic subjects", "dynamic context and distractors",
+                    "dynamic affected objects and peers",
+                ],
+                "excluded_roles": sorted(ENERGY_EXCLUDED_ROLES),
+            },
+            "license": license_name,
+            "units": {"length": "m", "time": "s", "mass": "kg", "energy": "J"},
+            "coordinate_convention": "right-handed; +Z up; quaternions w,x,y,z",
+            "shadow_strength_threshold": 1.0 / 255.0,
+            "violation_components": {"0": "none", "1": "body", "2": "shadow",
+                                     "3": "trajectory", "4": "interaction", "5": "energy"},
+            "analysis_groups": ["subject", "context", "support", "background"],
+            "checksum_policy": "HDF5 Fletcher32 per chunk",
+        }
+    }
+    with open(os.path.join(root, "dataset.json"), "w", encoding="utf-8") as handle:
+        json.dump(dataset, handle, indent=2, sort_keys=True)
+    with open(os.path.join(root, "schema.json"), "w", encoding="utf-8") as handle:
+        json.dump(_schema(), handle, indent=2, sort_keys=True)
+    with open(os.path.join(root, "LICENSE"), "w", encoding="utf-8") as handle:
+        handle.write(license_name + "\n")
+    card = """---
+license: {license}
+task_categories:
+- video-classification
+tags:
+- physics
+- video
+---
 
-    `datasets` records its feature types in a `huggingface` key on the parquet
-    schema metadata, and the viewer reads that to decide what to render. Written
-    by hand rather than by building a `datasets.Dataset` so that packaging a
-    release does not depend on `datasets` being installed.
-    """
-    feats = {}
-    for field in table.schema:
-        if field.name in dict(VIDEO_COLUMNS):
-            feats[field.name] = {"_type": "Video"}
-        else:
-            dtype = {"string": "string", "int64": "int64", "double": "float64"}
-            feats[field.name] = {"dtype": dtype.get(str(field.type),
-                                                    str(field.type)),
-                                 "_type": "Value"}
-    md = dict(table.schema.metadata or {})
-    md[b"huggingface"] = json.dumps({"info": {"features": feats}}).encode()
-    return md
+# PhysLoc schema v3
+
+PhysLoc stores each sample as `sample.json`, a standalone `rgb.mp4`, and one
+chunked `data.h5`. The Parquet index contains relative paths and never embeds
+duplicate video bytes.
+
+```python
+from loader import PhysLocDataset
+dataset = PhysLocDataset(".")
+sample = dataset.samples[0]
+sample.video_path
+sample.objects("violators")
+```
+
+Download with `hf download <repo> --repo-type dataset --local-dir physloc`.
+Publish with `hf upload <repo> <directory> --type dataset`.
+""".format(license=license_name.lower())
+    with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as handle:
+        handle.write(card)
+    shutil.copyfile(loader.__file__, os.path.join(root, "loader.py"))
 
 
-def _write_license(outdir: str, license_name: str) -> None:
-    path = os.path.join(outdir, "LICENSE")
-    if os.path.exists(path):
-        return
-    with open(path, "w") as fh:
-        fh.write(
-            "%s\n\n"
-            "The clips in this dataset are rendered from primitive geometry\n"
-            "with Kubric (Apache-2.0) and Blender. Per-asset licences are\n"
-            "recorded in every clip's metadata.json under "
-            "`instances[].license`.\n"
-            % license_name)
+def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
+    """Write the global index, splits, schema, card, and dataset metadata."""
+    metadata_paths = layout.find(root)
+    if not metadata_paths:
+        raise FileNotFoundError("no schema-v3 samples under %s" % root)
+    documents = [(os.path.dirname(path), layout.read(os.path.dirname(path)))
+                 for path in metadata_paths]
+    splits = assign_splits(layout.identity(document)["pair_uid"]
+                           for _, document in documents)
+    rows = []
+    for sample_dir, document in documents:
+        info = layout.identity(document)
+        uid = str(info["sample_uid"])
+        document["metadata"]["sample_info"]["split"] = splits[str(info["pair_uid"])]
+        with open(os.path.join(sample_dir, loader.SAMPLE_METADATA), "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2, sort_keys=True)
+        rows.append(_row(document, "samples/" + uid))
+    split_dir = os.path.join(root, "splits")
+    if os.path.isdir(split_dir):
+        shutil.rmtree(split_dir)
+    os.makedirs(split_dir)
+    for name, _ in SPLIT_FRACTIONS:
+        members = sorted(row["sample_uid"] for row in rows if row["split"] == name)
+        with open(os.path.join(split_dir, name + ".txt"), "w", encoding="utf-8") as handle:
+            handle.write("\n".join(members) + ("\n" if members else ""))
+    index = _write_index(rows, root)
+    _write_global_files(root, rows, license_name)
+    return {"samples": len(rows), "pairs": len({row["pair_uid"] for row in rows}),
+            "schema_version": loader.SCHEMA_VERSION, "index": index,
+            "splits": {name: sum(row["split"] == name for row in rows)
+                       for name, _ in SPLIT_FRACTIONS}, "outdir": root}
 
 
-from .. import reference  # noqa: E402
-
-
-def _count(rows, field):
-    """(value, n) pairs for one column, for the card's summary table."""
-    import collections
-
-    c = collections.Counter(str(r.get(field)) for r in rows
-                            if r.get(field) is not None)
-    return sorted(c.items())
-
-
-def _write_card(rows: List[Dict], outdir: str, license_name: str,
-                with_passes: bool = False,
-                stats_dir: Optional[str] = None) -> None:
-    """The dataset card. YAML front-matter first, because the hub parses it."""
-    from collections import Counter
-
-    from .stats import FIGURES
-
-    stats_lines: List[str] = []
-    if stats_dir and os.path.isdir(stats_dir):
-        stats_lines = ["## Dataset statistics", "",
-                       "Computed from every clip's `metadata.json`; the numbers "
-                       "behind each figure are in `stats/stats.json`.", ""]
-        for name, caption in FIGURES:
-            if os.path.exists(os.path.join(stats_dir, name)):
-                stats_lines += ["![%s](stats/%s)" % (name[:-4], name), "",
-                                "*%s*" % caption, ""]
-
-    scenarios = Counter(r["scenario"] for r in rows)
-    families = Counter(r["family"] for r in rows if r["family"])
-    tiers = sorted({r["tier"] for r in rows if r["tier"]})
-    invalid = sum(1 for r in rows if r["label"] == "invalid")
-    moving = sum(1 for r in rows if r["camera_motion"] not in (None, "static"))
-    cluttered = sum(1 for r in rows if (r.get("n_distractors") or 0) > 0)
-    index_kind = ("parquet" if os.path.exists(os.path.join(outdir, "index.parquet"))
-                  else "jsonl")
-
-    # THE VIEWER NEEDS `configs`. Without it the hub shows a folder tree and
-    # nothing renders. One config, `index`: parquet, one row per clip, with the
-    # mp4 embedded -- sortable, filterable, playable. The clip folders are the
-    # data and are downloaded rather than previewed.
-    splits_present = [n for n, _ in SPLIT_FRACTIONS
-                      if any(r["split"] == n for r in rows)]
-    cfg = ["configs:",
-           "- config_name: index",
-           "  data_files:"]
-    for n in splits_present:
-        cfg.append("  - split: %s" % n)
-        cfg.append("    path: index.parquet")
-        break                      # the index carries every split in one file
-    lines = [
-        "---",
-        "license: %s" % license_name.lower(),
-        *cfg,
-        "task_categories:",
-        "- video-classification",
-        "tags:",
-        "- physics",
-        "- video",
-        "- intuitive-physics",
-        "- counterfactual",
-        "size_categories:",
-        "- %s" % ("n<1K" if len(rows) < 1000 else "1K<n<10K"),
-        "---",
-        "",
-        "# PhysLoc",
-        "",
-        "Physics-violation video clips with **spatio-temporal annotations**: "
-        "every invalid clip ships where the violation is, when it happens, and "
-        "how badly -- all derived from the simulator rather than annotated by "
-        "hand.",
-        "",
-        "Clips come in **twins**. A valid clip and its invalid partner share a "
-        "scene, a seed, and a bit-identical prefix up to `t_event`; only after "
-        "that do they differ. That is what makes the difference between them "
-        "attributable to the intervention and nothing else.",
-        "",
-        "## What is here",
-        "",
-        "| | |",
-        "|---|---|",
-        "| clips | %d (%d invalid, %d valid) |" % (len(rows), invalid,
-                                                   len(rows) - invalid),
-        "| pairs | %d |" % len({r["pair_uid"] for r in rows}),
-        "| scenarios | %d |" % len(scenarios),
-        "| violation families | %d |" % len(families),
-        "| tier | %s |" % ", ".join(tiers),
-        "| moving camera | %d clips (%.0f%%) |" % (
-            moving, 100.0 * moving / max(len(rows), 1)),
-        # The three axes a consumer filters on, each as a count rather than a
-        # promise: the ladder and the two orthogonal conditions are partitions
-        # INSIDE this release, so the card has to say how much of each landed.
-        "| complexity | %s |" % ", ".join(
-            "%s %d" % (lv, n) for lv, n in sorted(_count(rows, "complexity"))),
-        "| with distractors | %d clips (%.0f%%) |" % (
-            cluttered, 100.0 * cluttered / max(len(rows), 1)),
-        "| condition | %s |" % ", ".join(
-            "%s %d" % (c, n) for c, n in _count(rows, "condition")),
-        "",
-        "## The complexity ladder",
-        "",
-        "SCENE REALISM, four levels, each the one below plus one thing. Every "
-        "clip carries its level in `complexity`, so a level is a filter rather "
-        "than a separate download, and each level draws its OWN scenes -- an L1 "
-        "clip is not an L0 clip in better materials.",
-        "",
-        # GENERATED, from the same functions the README uses. Two documents
-        # describing one set of constants is exactly how the counts drifted
-        # five different ways before; neither is written by hand now.
-        reference.render("ladder"),
-        "",
-        "## Difficulty conditions",
-        "",
-        "Not levels -- every clip carries exactly ONE of these, applied inside "
-        "every level, so \"what does clutter cost\" is answerable at each "
-        "realism level and not only at the top. Filter on `condition`.",
-        "",
-        reference.render("conditions"),
-        "",
-        "One condition per clip rather than independent coin flips per axis, "
-        "so every count is exact and every comparison against `standard` "
-        "isolates one change. Under `multi` the scene holds N objects of which "
-        "M violate, both drawn per clip -- `n_actors` and `n_violators` say how "
-        "many -- so the clip asks WHICH objects are wrong rather than whether "
-        "something is.",
-        "",
-        "## The taxonomy",
-        "",
-        "Five levels: medium -> domain -> family -> scenario -> instance. A "
-        "*cell* is one (scenario, family) pair.",
-        "",
-        reference.render("domains"),
-        "",
-        reference.render("scenarios"),
-        "",
-        *stats_lines,
-        "## Files",
-        "",
-        "- `clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/` -- "
-        "one folder per clip, `valid` or `invalid_<family>_<bin>`: "
-        "`video.mp4`, `metadata.json`, `segmentations.npz`, `instances.npz`, "
-        "`traj.npz`, `bodies.npz`, `energy.npz`, and on invalid clips "
-        "`masks.npz` and `objects.npz`. **This is the data**, in the same "
-        "layout the generator writes.",
-        ("- The raw geometry passes (`depth.npz`, `forward_flow.npz`, "
-         "`backward_flow.npz`, `normal.npz`, `object_coordinates.npz`, "
-         "`energy_map.npz`) sit in the same folders -- about 86% of the bytes, "
-         "so exclude them from a download unless you need them."
-         if with_passes else
-         "- The raw geometry passes (depth, optical flow, normals, object "
-         "coordinates) are **not** in this release. They are about 86% of the "
-         "bytes and are packaged only on request."),
-        "- `loader.py` -- reads this folder (numpy only; imageio or OpenCV for "
-        "the video).",
-        "- `index.%s` -- one row per clip: uids, scenario, family, severity, "
-        "windows, camera motion, actor shape and material." % index_kind,
-        "- `splits/*.txt` -- clip uids per split.",
-        "",
-        "## Splits leak nothing",
-        "",
-        "Splits are grouped by `pair_uid`, never by clip. A valid twin and its "
-        "invalid siblings share every frame before `t_event`, so splitting them "
-        "apart would put the answer on the other side.",
-        "",
-        "Pairs are ordered by a hash of their uid and cut at the quantiles "
-        "WITHIN each scenario, so every split sees every scenario and the "
-        "proportions are exact. There is no rng, so reproducing this release "
-        "reproduces its splits. Adding clips moves the boundaries.",
-        "",
-        "**Every split ships every annotation.** The split is a label, not a "
-        "filter: you can re-cut it, and you can score any clip in the release. "
-        "If you need a genuinely blind held-out set -- for a leaderboard others "
-        "submit to -- strip the annotations from `splits/held_out.txt` at that "
-        "point; nothing here has to be regenerated to do it.",
-        "",
-        "## Downloading",
-        "",
-        "```bash",
-        "hf download <this repo> --repo-type dataset --local-dir physloc",
-        "# only what a video model needs:",
-        "hf download <this repo> --repo-type dataset --local-dir physloc \\",
-        "    --include \"*.py\" --include \"*.txt\" --include \"*/metadata.json\" "
-        "--include \"*/video.mp4\"",
-        "```",
-        "",
-        "## Reading it",
-        "",
-        "`loader.py` ships in this folder and is the one reader: import it from "
-        "here in any project, or copy it. It derives every annotation below "
-        "from the stored files. `fields` picks what an item carries, filters "
-        "pick the clips, and `unit=\"pair\"` gives one item per scene -- its "
-        "valid clip and every invalid clip made from it.",
-        "",
-        "```python",
-        "import sys; sys.path.insert(0, \"physloc\")   # the downloaded folder",
-        "from loader import PhysLocDataset, FIELDS, collate",
-        "",
-        # A split THIS release has. `main` was hard-coded, and a small
-        # release that only fills `debug` answered the card's own example
-        # with zero clips -- measured on a fresh download of physloc-mini.
-        'ds = PhysLocDataset("physloc", label="invalid", split="%s",'
-        % (splits_present[0] if splits_present else "main"),
-        '                    fields=("video", "violation_mask", "severity_map"))',
-        "item = ds[0]",
-        'item["video"]           # uint8 [T,H,W,3]',
-        'item["violation_mask"]  # bool [T,H,W]   the localisation target',
-        'item["severity_map"]    # float32 [T,H,W]',
-        "",
-        'scenes = PhysLocDataset("physloc", unit="pair", fields=("video_path",))',
-        'scenes[0]["valid"], scenes[0]["invalid"]   # one scene, both sides',
-        "",
-        "clip = ds.clips[0]       # or everything, lazily, from one clip",
-        'clip.objects["severity"] # [K,T], one row per violating object',
-        "```",
-        "",
-        "`sorted(FIELDS)` lists every field. Each clip folder also opens "
-        "without the loader: `video.mp4` plays in any player.",
-        "",
-        "## The annotations, and what they are not",
-        "",
-        "Stored (invalid clips only; schema version %d):" % layout.SCHEMA_VERSION,
-        "",
-        "- `masks.npz` `violation` -- uint16 [T,H,W], 0 or the violating "
-        "object's instance id, unioned over BOTH twins: a vanished body has no "
-        "pixels in the invalid render, which is exactly why the union is needed.",
-        "- `masks.npz` `causal` / `causal_source` -- level 1 a violator, level 2 "
-        "a body it affected, and which violator each pixel belongs to.",
-        "- `objects.npz` -- per violating object, per frame: `severity`, the "
-        "clocks `active` / `intervening` / `consequence` / `observable` / "
-        "`occluded`, and the raw `residual` and its 0..1 `score`.",
-        "",
-        "Derived by the loader: `violation_mask` (`violation > 0`), "
-        "`visible_violation` (the part visible in the invalid video), "
-        "`severity_map` (each object's severity painted on its pixels), "
-        "`reference_mask` (where the violators lawfully are), clip timelines and "
-        "latent token grids. `divergence` (`|valid - invalid|`) is for "
-        "inspection, never training: it diverges everywhere downstream of the "
-        "event, so a model trained on it learns to find the edit rather than "
-        "the physics.",
-        "",
-        "## Scenarios",
-        "",
-        "".join("- `%s` (%d clips)\n" % (k, v)
-                for k, v in sorted(scenarios.items())),
-        "## Violation families",
-        "",
-        "".join("- `%s` (%d clips)\n" % (k, v)
-                for k, v in sorted(families.items())),
-    ]
-    with open(os.path.join(outdir, "README.md"), "w") as fh:
-        fh.write("\n".join(lines) + "\n")
+def export(root: str, outdir: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
+    """Copy an already-v3 sample tree and finalize it for publication."""
+    if os.path.realpath(root) == os.path.realpath(outdir):
+        raise ValueError("export source and destination must be different directories")
+    metadata_paths = layout.find(root)
+    if not metadata_paths:
+        raise FileNotFoundError("no schema-v3 samples under %s" % root)
+    target_samples = os.path.join(outdir, "samples")
+    if os.path.isdir(target_samples):
+        shutil.rmtree(target_samples)
+    os.makedirs(target_samples, exist_ok=True)
+    for path in metadata_paths:
+        source = os.path.dirname(path)
+        document = layout.read(source)
+        info = layout.identity(document)
+        uid = str(info["sample_uid"])
+        destination = os.path.join(outdir, "samples", *uid.split("/"))
+        shutil.copytree(source, destination)
+    return finalize(outdir, license_name)
 
 
 def upload(outdir: str, repo_id: str, private: bool = False,
            token: Optional[str] = None) -> str:
-    """Push a packaged release to the HuggingFace Hub. Returns its URL.
-
-    Separate from `export` on purpose: packaging is local and repeatable,
-    uploading is neither. Publishing puts the clips somewhere they can be
-    fetched, indexed and cached by people who are not you, so it is worth being
-    a deliberate second step rather than a flag on the first.
-    """
-    from huggingface_hub import HfApi
-
-    api = HfApi(token=token)
-    api.create_repo(repo_id=repo_id, repo_type="dataset", private=private,
-                    exist_ok=True)
-    # THE LARGE-FOLDER UPLOAD: a release is thousands of clip folders, and one
-    # commit of that many files is what the Hub refuses; this one commits in
-    # batches and resumes where an interrupted run stopped. Bytecode appears the
-    # moment anyone imports the shipped `loader.py` from inside the folder, and
-    # it has no business on the hub.
-    api.upload_large_folder(repo_id=repo_id, repo_type="dataset",
-                            folder_path=outdir, private=private,
-                            ignore_patterns=["**/__pycache__/**", "*.pyc",
-                                             ".cache/**"])
-    # A repository first published as tar shards still holds them, and every
-    # download would carry the data twice.
-    if any(f.startswith("shards/") for f in api.list_repo_files(
-            repo_id=repo_id, repo_type="dataset")):
-        api.delete_folder("shards", repo_id=repo_id, repo_type="dataset",
-                          commit_message="Remove the tar shards; clips ship as folders")
+    """Publish through the current Hugging Face `hf` CLI."""
+    import subprocess
+    command = ["hf", "upload", repo_id, outdir, ".", "--type", "dataset",
+               "--commit-message", "Publish PhysLoc schema v3"]
+    if private:
+        command.append("--private")
+    environment = os.environ.copy()
+    if token:
+        environment["HF_TOKEN"] = token
+    subprocess.run(command, check=True, env=environment)
     return "https://huggingface.co/datasets/%s" % repo_id

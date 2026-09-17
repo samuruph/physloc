@@ -182,12 +182,11 @@ over those records.** `plan.windows` is *defined* as the merged union, `t_event`
 over violators, `causal_body_ids` as the list of their ids. A third role, `participant`,
 covers a body that is in `causal_body_ids` but is not independently scored — the static floor
 a ball sinks through, the victim of the second half of a `fission`. It
-inherits the primary's windows and score, **which is exactly what the pipeline does today**,
-so the first migration step is a no-op provable by byte-diffing a regenerated release.
+inherits the primary's windows and score, **which is exactly what the pipeline does today**.
 
-The released format grows a body axis **beside** the union, never instead of it:
-`timelines.npz` keeps `active[T]` and gains `active_by_body[T,N]`; `violation_mask.npz` keeps
-`mask[T,H,W]` and gains `mask_by_body[T,N,H,W]`. Additive, because N is not a fixed axis
+The released format has a full object axis **beside** the union, never instead of it:
+`data.h5:/violations/active[N,T]` and the object-id spatial maps retain both views. This is
+additive because N is not a fixed axis
 (`pour` has ~40 violators, `global_gravity` has none), because the union is the documented
 training target and a CLAUDE.md non-negotiable, and because two independently computed views
 can be **checked against each other** — `mask == mask_by_body.any(1)`. A single source of

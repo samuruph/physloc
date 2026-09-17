@@ -332,7 +332,7 @@ class BodySpec:
     static: bool = False
     color: Tuple[float, float, float] = (0.7, 0.7, 0.75)
     segmentation_id: int = 0
-    role: str = "prop"        # prop | floor | occluder | actor | shadow
+    role: str = "prop"        # prop | floor | occluder | actor | shadow_caster
 
     #: What the body is made of -- see `scenarios/materials.py`. `None` keeps
     #: the literal `mass`, `color` and default shading, which is what floors,
@@ -386,9 +386,8 @@ class BodySpec:
     # frozen in mid-air.
     collides: bool = True
 
-    # Cycles ray visibility. `shadow_track` uses these to hand the cast shadow
-    # to a body of its own, which is the only way a shadow can carry a
-    # segmentation id and therefore a mask.
+    # Cycles ray visibility. `shadow_track` uses these for a renderer-only
+    # duplicate that casts a real Cycles shadow while remaining camera-hidden.
     visible_camera: bool = True
     visible_shadow: bool = True
 
@@ -842,9 +841,8 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
     for body in spec.bodies:
         if body.role in ("actor", "distractor", "backdrop") or body.material:
             continue
-        # The shadow stand-in is a picture of an absence -- see
-        # `shadow_track`. Giving it a surface would make it an object.
-        if body.role == "shadow":
+        # The camera-hidden shadow caster must keep the visible actor's surface.
+        if body.role == "shadow_caster":
             continue
         name = M.pick(rng, M.SCENERY_MATERIALS)
         m = M.get(name)
@@ -1157,7 +1155,7 @@ def _seat_under(spec: SceneSpec, body: BodySpec, was, seated) -> Optional[float]
     for other in spec.bodies:
         if other is body or other.dormant or not other.collides:
             continue
-        if other.role in ("backdrop", "shadow"):
+        if other.role in ("backdrop", "shadow_caster"):
             continue
         if not (other.static or id(other) in seated):
             continue
@@ -1192,6 +1190,11 @@ def _add_backdrop(spec: SceneSpec) -> None:
         return
     body = C.backdrop(COMPLEXITY[spec.complexity])
     if body is not None:
+        # The dome is the visible HDRI ground. Keep the cube slab solely as
+        # the identical physical collider used at every level; drawing both
+        # creates competing surfaces and can slice resting objects visually.
+        for floor in (item for item in spec.bodies if item.role == "floor"):
+            floor.visible_camera = False
         spec.bodies.append(body)
 
 
@@ -1574,13 +1577,10 @@ CAMERA_TRAVEL = (0.14, 0.22)
 
 #: How much a `dolly` changes its distance to the subject, as a fraction.
 #:
-#: Tighter than the others, because this is the motion that changes APPARENT
-#: SIZE -- the exact cue `immutability` and `deformation` make their claim
-#: about. At 12% the size change is a third of `deformation`'s weakest bin
-#: (1.35 aspect), and unlike a deformation it scales the floor and every other
-#: body by the same amount, so the scene still says "the camera moved" rather
-#: than "that object changed".
-DOLLY_RANGE = (0.10, 0.15)
+#: Still below `deformation`'s weakest 1.35 aspect change, but large enough to
+#: remain visible across a short clip. The previous 10-15% range looked static
+#: on plain backgrounds even though the stored camera path was correct.
+DOLLY_RANGE = (0.16, 0.20)
 
 
 def _maybe_move_camera(spec: SceneSpec, seed: int) -> None:
@@ -1742,12 +1742,10 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
     rng = np.random.RandomState(
         (seed * 2654435761 + 0xF100D + zlib.crc32(spec.scenario.encode()))
         % (2 ** 31 - 1))
-    # The cast shadow counts too. `shadow_track` stages its shadow as a real
-    # near-black body, and the family is about whether that shadow tracks the
-    # object faithfully -- on a floor the same darkness there is nothing to
-    # judge.
+    # Only camera-visible actors constrain floor colour.  The renderer-only
+    # shadow caster is hidden from camera rays and is never a dataset object.
     lab_actors = [_srgb_to_lab(np.asarray(b.color, np.float64))
-                  for b in spec.bodies if b.role in ("actor", "shadow")]
+                  for b in spec.bodies if b.role == "actor"]
 
     def separation(rgb) -> float:
         """Lab distance to the nearest actor -- bigger is better."""

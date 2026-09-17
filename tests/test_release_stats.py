@@ -10,18 +10,6 @@ from physloc.annotate import difficulty as D
 from tests.test_difficulty import _meta
 
 
-def _release(tmp_path, metas):
-    import json
-    import os
-
-    for i, m in enumerate(metas):
-        cdir = tmp_path / "clips" / "rel" / "L0" / "drop" / ("%04d" % i) / "x"
-        os.makedirs(cdir, exist_ok=True)
-        with open(cdir / "metadata.json", "w") as fh:
-            json.dump(m, fh)
-    return str(tmp_path)
-
-
 def test_summarise_counts_what_the_figures_draw(tmp_path):
     from physloc.release import stats
 
@@ -44,7 +32,7 @@ def test_summarise_counts_what_the_figures_draw(tmp_path):
     metas.append(valid)
 
     s = stats.summarise(metas)
-    assert s["clips"] == 4 and s["invalid"] == 3 and s["valid"] == 1
+    assert s["samples"] == 4 and s["invalid"] == 3 and s["valid"] == 1
     assert s["difficulty"] == {"easy": 1, "moderate": 1, "hard": 1}
     assert s["conditions"] == {"standard": 2, "camera": 1, "multi": 1}
     assert s["difficulty_by_level"]["L0"]["hard"] == 1
@@ -68,9 +56,7 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
         m["violation"]["intervention"] = {"severity_bin": "strong"}
         m["difficulty"] = D.assess(m)
         metas.append(m)
-    root = _release(tmp_path, metas)
-
-    got = stats.report(root)
+    got = stats.report(str(tmp_path), metas=metas)
     out = got["outdir"]
     for name in [n for n, _ in stats.FIGURES] + ["stats.json"]:
         p = os.path.join(out, name)
@@ -79,17 +65,14 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
         assert json.load(fh)["invalid"] == 3
 
 
-def test_stats_backfills_a_release_that_predates_the_label(tmp_path):
-    """Several runs on disk were generated before `difficulty` existed, and
-    they are the corpus its thresholds were fitted to. The report has to be
-    able to read them."""
+def test_stats_reconstructs_early_v3_factor_blocks(tmp_path):
+    """Early v3 JSON retained all measurements but only the label string."""
     from physloc.release import stats
+    from v3_fixture import make_pair
 
-    m = _meta(condition="standard", scenario="drop", family="antigravity",
-              complexity={"name": "L0"})
-    m["violation"]["intervention"] = {"severity_bin": "strong"}
-    m.pop("difficulty", None)
-    root = _release(tmp_path, [m])
-    loaded = stats.load(root)
+    make_pair(tmp_path)
+    loaded = stats.load(str(tmp_path))
+    loaded = [row for row in loaded if row["violation"]]
     assert loaded[0]["difficulty"] is not None
     assert loaded[0]["difficulty"]["level"] in D.LEVELS
+    assert set(loaded[0]["difficulty"]["factors"]) == {factor.name for factor in D.FACTORS}

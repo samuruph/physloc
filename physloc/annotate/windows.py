@@ -105,7 +105,7 @@ def build(plan_windows: Sequence[Window], num_frames: int,
           causal_ids: Sequence[int], primary_id: int,
           severity_t: Optional[np.ndarray] = None,
           observable: Optional[np.ndarray] = None) -> Dict[str, object]:
-    """Everything in PLAN 3.2, ready for meta.json + timelines.npz."""
+    """Build the temporal fields stored under schema-v3 violation datasets."""
     active = rasterise(plan_windows, num_frames)
     if observable is None:
         observable = observable_frames(seg_valid, seg_invalid, causal_ids)

@@ -4,7 +4,7 @@
     python -m physloc.cli taxonomy
     python -m physloc.cli generate --debug -n 2
     python -m physloc.cli annotate out/work/drop/0173
-    python -m physloc.cli overlay out/release/clips/.../invalid_solidity_a
+    python -m physloc.cli overlay out/release/samples/.../invalid_solidity_a
     python -m physloc.cli validate out/release
 
 `generate` is the end-to-end path: it shells out to docker/kubric.sh for the
@@ -27,7 +27,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- taxonomy
 def cmd_taxonomy(a) -> int:
-    from .taxonomy import (COMPATIBILITY, DOMAINS, FAMILIES, MEDIA, SCENARIOS,
+    from .taxonomy import (DOMAINS, FAMILIES, MEDIA, SCENARIOS,
                            SEVERITY_BINS, build_cells, validate_taxonomy)
     validate_taxonomy()
     print("MEDIA (%d)  -- level 0, the LikePhys-style macro-category" % len(MEDIA))
@@ -414,8 +414,7 @@ def _print_release_size(cells, a) -> None:
 # ------------------------------------------------------------------ export
 def cmd_export(a) -> int:
     from .release.export import export
-    out = export(a.root, a.outdir, with_passes=a.with_passes,
-                 license_name=a.license)
+    out = export(a.root, a.outdir, license_name=a.license)
     if a.push_to:
         from .release.export import upload
         out["url"] = upload(a.outdir, a.push_to, private=a.private)
@@ -429,14 +428,14 @@ def cmd_stats(a) -> int:
 
     `validate` says it is well formed and `audit` says every cell depicts
     something; neither says what the DISTRIBUTIONS look like, and those are
-    what a benchmark is judged on. Reads only `metadata.json`, so it runs in
+    what a benchmark is judged on. Reads only `sample.json`, so it runs in
     seconds over a full release and can be re-run after any annotation change.
     """
     from .release.stats import report
 
     s = report(a.root, a.outdir)
-    print("%d clips (%d invalid, %d valid) -> %s"
-          % (s["clips"], s["invalid"], s["valid"], s["outdir"]))
+    print("%d samples (%d invalid, %d valid) -> %s"
+          % (s["samples"], s["invalid"], s["valid"], s["outdir"]))
     total = max(1, s["invalid"])
     print("   difficulty: " + ", ".join(
         "%s %d (%.0f%%)" % (lv, s["difficulty"].get(lv, 0),
@@ -451,7 +450,7 @@ def cmd_stats(a) -> int:
 def cmd_relabel(a) -> int:
     """Re-derive every difficulty label under a root, in place.
 
-    A clip carries the label its annotation wrote, under the cuts of that day;
+    A sample carries the label its annotation wrote, under the cuts of that day;
     after a recalibration `stats` would otherwise plot the old ones. This
     measures each clip again -- and each violator, which clips annotated before
     per-object labels have none of -- from the arrays beside its metadata.
@@ -463,7 +462,7 @@ def cmd_relabel(a) -> int:
     for path in layout.find(a.root):
         if D.relabel(os.path.dirname(path)) is not None:
             n += 1
-    print("relabelled %d invalid clips under %s" % (n, a.root))
+    print("relabelled %d invalid samples under %s" % (n, a.root))
     return 0
 
 
@@ -550,6 +549,19 @@ def cmd_randomisation(a) -> int:
 # ---------------------------------------------------------------- generate
 #: The worker's word for "this family does not apply to this sample".
 NO_PLAN = "injector produced no plan"
+
+
+def _decline_only(info) -> bool:
+    """Whether a non-zero worker result is only a sample-level decline.
+
+    The renderer uses exit code 3 when every requested injector declines its
+    sampled scene. That is scheduling information, not a renderer failure: the
+    generator must expose the variant records to its fresh-seed retry loop.
+    """
+    variants = info.get("variants") if isinstance(info, dict) else None
+    failed = [item for item in (variants or [])
+              if not item.get("ok") and not item.get("skipped")]
+    return bool(failed) and all(item.get("error") == NO_PLAN for item in failed)
 
 #: How many fresh seeds a declined cell is offered before it counts as dead.
 #: A cell that cannot be built on any of them is a genuine matrix error -- the
@@ -744,25 +756,26 @@ def cmd_generate(a) -> int:
         # a disk that filled mid-write all leave an entry pointing at nothing,
         # and resuming onto those produces a release with holes in it that
         # `validate` finds days later.
-        from .annotate.layout import METADATA
+        from .annotate.layout import SAMPLE_METADATA
 
-        for clip in entry.get("clips", []):
-            if not os.path.exists(os.path.join(clip, METADATA)):
+        for sample in entry.get("samples", []):
+            if not os.path.exists(os.path.join(sample, SAMPLE_METADATA)):
                 return None
         return entry.get("outcome")
 
     def _ledger_save(job, outcome):
         if outcome.get("rc") != 0:
             return                      # only completed work is resumable
-        clips = [r["clips"]["invalid"] for r in outcome.get("results", [])
-                 if isinstance(r.get("clips"), dict) and r["clips"].get("invalid")]
+        samples = [r["samples"]["invalid"] for r in outcome.get("results", [])
+                   if isinstance(r.get("samples"), dict)
+                   and r["samples"].get("invalid")]
         os.makedirs(ledger_dir, exist_ok=True)
         path = _ledger_path(job)
         tmp = path + ".tmp"
         # Written atomically: a ledger truncated by a kill would be read back
         # as "no entry" at best and as a corrupt one at worst.
         with open(tmp, "w") as fh:
-            json.dump({"request": _ledger_request(job), "clips": clips,
+            json.dump({"request": _ledger_request(job), "samples": samples,
                        "outcome": outcome}, fh, default=str)
         os.replace(tmp, path)
 
@@ -842,7 +855,7 @@ def cmd_generate(a) -> int:
         with frame_watch_lock:
             frame_watch[index] = [os.path.join(job_dir, "_scratch", "exr"),
                                   time.time()]
-        annotator = _ClipAnnotator(job_dir, rel, overlay=not a.no_overlay,
+        annotator = _SampleAnnotator(job_dir, rel, overlay=not a.no_overlay,
                                    prof=prof)
         try:
             with prof.timer("worker"):
@@ -870,7 +883,7 @@ def cmd_generate(a) -> int:
         if isinstance(render, dict):
             prof.add("render", sum(float(v) for v in render.values()),
                      n=max(1, len(render)))
-        if rc != 0:
+        if rc != 0 and not _decline_only(info):
             return {"scenario": scenario, "seed": seed, "level": level,
                     "variant": variant,
                     "rc": rc, "info": info, "results": [], "bad": []}
@@ -1181,14 +1194,25 @@ def cmd_generate(a) -> int:
             print("   %s" % (row,), file=sys.stderr)
     # STATS ON EVERY RUN. `physloc stats` had to be remembered, and no script
     # remembered it, so a run's distributions were only ever looked at when
-    # someone thought to ask. It reads metadata.json only -- seconds, even over
+    # someone thought to ask. It reads sample.json only -- seconds, even over
     # a release -- and a failure to plot is reported, never a failed run.
     try:
         from .release.stats import report
         got = report(rel)
-        print("stats: %d clips -> %s" % (got["clips"], got["outdir"]))
+        print("stats: %d samples -> %s" % (got["samples"], got["outdir"]))
     except (Exception, SystemExit) as exc:                 # noqa: BLE001
         print("!! stats not written for %s: %r" % (rel, exc), file=sys.stderr)
+    # A generated run is already the canonical dataset representation. Finish
+    # its global manifest and index in place; `export` only copies this same
+    # sample tree to a publication directory.
+    try:
+        from .release.export import finalize
+        manifest = finalize(rel)
+        print("dataset manifest: %d samples, %d pairs -> %s"
+              % (manifest["samples"], manifest["pairs"], rel))
+    except (Exception, SystemExit) as exc:                 # noqa: BLE001
+        print("!! dataset manifest not written for %s: %r" % (rel, exc),
+              file=sys.stderr)
     return 0
 
 
@@ -1475,21 +1499,19 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
 def _annotate(workdir, outroot, overlay=True, only=None):
     from .annotate.pipeline import annotate_work
     # The release NAME comes from where the release is being written. It
-    # defaulted to the literal "physloc_v0" and nothing ever passed it, so a
-    # v1 run wrote `out/physloc_v1/clips/physloc_v0/...` and stamped
-    # `"release": "physloc_v0"` into every metadata.json it produced -- a whole
-    # release mislabelled as the previous one.
+    # It once defaulted to a literal release name, so a new output root could
+    # be stamped and nested under the previous release's identity.
     release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
     results = annotate_work(workdir, outroot, release=release, only=only)
     if overlay:
         from .viz.overlay import build
         for r in results:
-            r["overlay"] = build(r["clips"]["invalid"])["path"]
+            r["overlay"] = build(r["samples"]["invalid"])["path"]
     return results
 
 
-class _ClipAnnotator:
-    """Annotates a job's clips one at a time, as each of its renders finishes.
+class _SampleAnnotator:
+    """Annotate each completed render into a schema-v3 sample immediately.
 
     Videos used to appear only when a whole job ended: a job renders its valid
     twin and then every family at every severity -- about fifty clips, fifteen
@@ -1510,7 +1532,7 @@ class _ClipAnnotator:
         self.overlay, self.prof = overlay, prof
         self.done = {}                          # normalised variant dir -> result
         self._queue = queue.Queue()
-        self._thread = threading.Thread(target=self._run, name="clip-annotator",
+        self._thread = threading.Thread(target=self._run, name="sample-annotator",
                                         daemon=True)
         self._thread.start()
 
@@ -1551,7 +1573,7 @@ def cmd_annotate(a) -> int:
 
 def cmd_overlay(a) -> int:
     from .viz.overlay import build
-    print(json.dumps(build(a.clip_dir, a.out, upscale=a.upscale), default=str))
+    print(json.dumps(build(a.sample_dir, a.out, upscale=a.upscale), default=str))
     return 0
 
 
@@ -1572,7 +1594,7 @@ def cmd_sheet(a) -> int:
 
 
 def _condition_in(pair_dir) -> Optional[str]:
-    """The condition a clip pair carries, read from any `metadata.json` it has.
+    """The condition a sample pair carries, read from `sample.json`.
 
     Only needed for runs generated before the condition joined the clip path;
     a current one carries it in the directory name.
@@ -1581,10 +1603,11 @@ def _condition_in(pair_dir) -> Optional[str]:
 
     from .annotate import layout
 
-    for mp in glob.glob(os.path.join(pair_dir, "*", layout.METADATA)):
+    for mp in glob.glob(os.path.join(pair_dir, "**", layout.SAMPLE_METADATA),
+                        recursive=True):
         try:
             with open(mp) as fh:
-                got = layout.identity(json.load(fh)).get("condition")
+                got = json.load(fh)["metadata"]["scene"]["info"].get("condition")
         except Exception:                                      # noqa: BLE001
             continue
         if got:
@@ -1622,7 +1645,7 @@ def cmd_params(a) -> int:
 def cmd_viz(a) -> int:
     """Every grid and sheet for a finished release, in ONE flat directory.
 
-    `grid` and `sheet` each take one pair directory and write beside the clips,
+    `grid` and `sheet` each take one pair directory and write beside the samples,
     which is right for a single look and wrong for reviewing a run: a
     ten-variant sweep scatters its videos across twenty folders four levels
     deep, so the files you want to compare are the ones furthest apart.
@@ -1636,10 +1659,10 @@ def cmd_viz(a) -> int:
     THE CONDITION IS IN THE NAME, and early enough to sort on. Comparing a
     family across conditions is the comparison this axis exists for, and with
     the condition buried -- or absent, as it was -- that means opening
-    `metadata.json` per file or memorising which variant index is which. Sorted,
-    every `camera` clip is now adjacent to every other.
+    `sample.json` per file or memorising which variant index is which. Sorted,
+    every `camera` sample is now adjacent to every other.
 
-    Nothing is re-rendered -- it reads the clips already on disk, so it costs
+    Nothing is re-rendered -- it reads the samples already on disk, so it costs
     seconds and can be run again after any change to the visualisers.
     """
     import glob
@@ -1650,7 +1673,7 @@ def cmd_viz(a) -> int:
     outdir = a.outdir or os.path.join(root, "viz")
     os.makedirs(outdir, exist_ok=True)
     pairs = sorted(
-        d for d in glob.glob(os.path.join(root, "clips", "*", "*", "*", "*"))
+        d for d in glob.glob(os.path.join(root, "samples", "*", "*", "*", "*"))
         if os.path.isdir(d) and glob.glob(os.path.join(d, "invalid_*")))
     if not pairs:
         print("no clip pairs under %s" % root, file=sys.stderr)
@@ -1912,7 +1935,7 @@ def _build(suppress: bool = False):
                    help="raw passes and trajectories; a relative path is placed "
                         "under out/ (e.g. `w` -> out/w)")
     p.add_argument("--outdir",
-                   help="clips, masks and metadata.json; a relative path is placed "
+                   help="schema-v3 samples; a relative path is placed "
                         "under out/ (e.g. `r` -> out/r)")
     p.add_argument("--no-overlay", action="store_true")
     p.add_argument("--resume", action="store_true",
@@ -1920,7 +1943,7 @@ def _build(suppress: bool = False):
                         "leave on: a job is reused only when the RECORDED "
                         "request -- families, severity, tier, dials, render "
                         "backend, overlay -- matches the current one exactly "
-                        "and every clip it claims still has a metadata.json. "
+                        "and every sample it claims still has a sample.json. "
                         "Change any of those and the job is rebuilt. Nothing "
                         "is ever deleted; a resume only declines to redo work.")
     p.set_defaults(fn=cmd_generate)
@@ -1931,14 +1954,14 @@ def _build(suppress: bool = False):
     p.add_argument("--no-overlay", action="store_true")
     p.set_defaults(fn=cmd_annotate)
 
-    p = add_parser("overlay", help="annotated mp4 for one invalid clip")
-    p.add_argument("clip_dir")
+    p = add_parser("overlay", help="annotated mp4 for one invalid sample")
+    p.add_argument("sample_dir")
     p.add_argument("--out")
     p.add_argument("--upscale", type=int, default=4)
     p.set_defaults(fn=cmd_overlay)
 
     p = add_parser("grid", help="one family: valid vs every severity, all views")
-    p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
+    p.add_argument("pair_dir", help=".../samples/<release>/<level>/<scenario>/<seed_condition>/")
     p.add_argument("--family")
     p.add_argument("--out")
     p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div,energy,seg,depth,flow "
@@ -1948,7 +1971,7 @@ def _build(suppress: bool = False):
 
     p = add_parser("sheet",
                    help="one scenario+seed: every family x every severity")
-    p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
+    p.add_argument("pair_dir", help=".../samples/<release>/<level>/<scenario>/<seed_condition>/")
     p.add_argument("--view", default="mask",
                    choices=["rgb", "mask", "sev", "causal", "div", "energy",
                             "seg", "depth", "flow"],
@@ -1994,19 +2017,15 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_config_path)
 
     p = add_parser("export",
-                   help="package a release as clip folders + index + card")
+                   help="package an already schema-v3 generated dataset")
     p.add_argument("root", nargs="?", default="out/release",
-                   help="a generated release directory (the one with clips/)")
+                   help="a generated release directory (the one with samples/)")
     p.add_argument("--outdir", required=True,
                    help="where to write the packaged dataset")
-    p.add_argument("--with-passes", action="store_true",
-                   help="also ship depth/flow/normals/object coords -- about "
-                        "86%% of the bytes, hence opt-in")
     p.add_argument("--license", default="CC-BY-4.0")
     p.add_argument("--push-to", metavar="REPO_ID",
-                   help="after packaging, upload to this HuggingFace dataset "
-                        "repo (e.g. samueleruf/physloc-v0). Needs "
-                        "huggingface_hub and a login token.")
+                   help="after packaging, upload with the `hf` CLI to this "
+                        "Hugging Face dataset repo")
     p.add_argument("--private", action="store_true",
                    help="create the hub repo private")
     p.set_defaults(fn=cmd_export)

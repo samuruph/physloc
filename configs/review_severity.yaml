@@ -3,7 +3,7 @@
 #
 #   python -m physloc.cli generate --config review_severity
 #   python -m physloc.cli audit    out/review_severity   # cells depicting nothing
-#   python -m physloc.cli grid out/review_severity/clips/review_severity/L0/drop/0777 \
+#   python -m physloc.cli grid out/review_severity/samples/review_severity/L0/drop/0777_standard \
 #          --family solidity                             # the three bins side by side
 #
 # EVERY ONE OF THE 23 FAMILIES, at all three bins, in about 8 minutes.

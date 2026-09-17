@@ -22,6 +22,15 @@ BASE, VARIANTS = 777, 10
 DECLINER = ("toss", "angular_momentum")
 
 
+def test_worker_decline_exit_is_retryable_but_real_errors_are_not():
+    declined = {"variants": [{"family": "angular_momentum", "ok": False,
+                              "error": cli.NO_PLAN}]}
+    assert cli._decline_only(declined)
+    assert not cli._decline_only({"stderr": "blender crashed"})
+    assert not cli._decline_only(
+        {"variants": [{"ok": False, "error": "corrupt EXR"}]})
+
+
 def _run(monkeypatch, argv, declines_while):
     """Drive `cmd_generate`, returning every worker call it made.
 
@@ -43,7 +52,11 @@ def _run(monkeypatch, argv, declines_while):
                 out.append({"family": f, "ok": False, "error": cli.NO_PLAN})
             else:
                 out.append({"family": f, "ok": True, "dir": "/dev/null"})
-        return 0, {"outdir": workdir, "variants": out}
+        # The renderer reports a declined-only batch with exit code 3. The
+        # scheduler must still route those structured records to its retry
+        # loop rather than misclassifying them as a Blender failure.
+        rc = 3 if any(not item["ok"] for item in out) else 0
+        return rc, {"outdir": workdir, "variants": out}
 
     monkeypatch.setattr(cli, "_run_worker", fake_worker)
     monkeypatch.setattr(cli, "_annotate", lambda *a, **k: iter(()))

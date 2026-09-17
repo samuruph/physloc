@@ -31,17 +31,18 @@
 #   9    both at once
 #
 # `n_actors`, `n_violators`, `n_distractors` and `condition` are in every
-# metadata.json and in the published index, so the check can be a query rather than
+# sample.json and in the published index, so the check can be a query rather than
 # a viewing:
 #
 #   python - <<'PY'
 #   import glob, json, collections
 #   c = collections.Counter()
-#   for f in glob.glob("out/review_conditions/clips/**/metadata.json", recursive=True):
+#   for f in glob.glob("out/review_conditions/samples/**/sample.json", recursive=True):
 #       m = json.load(open(f))["metadata"]
-#       if m.get("label") == "invalid":
-#           c[(m["condition"], m["n_actors"], m["n_violators"],
-#              m["n_distractors"])] += 1
+#       info, counts = m["sample_info"], m["scene"]["world"]["objects_summary"]
+#       if info["label"] == "invalid":
+#           c[(m["scene"]["info"]["condition"], counts["n_actors"],
+#              counts["n_violators"], counts["n_distractors"])] += 1
 #   for k, n in sorted(c.items()): print(k, n)
 #   PY
 #

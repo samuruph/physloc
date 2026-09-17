@@ -143,7 +143,7 @@ class _Squash(Injector):
             # A SCRIPTED body is animated rather than solved -- `shadow_shape`'s
             # target is a flattened disc lying on the floor -- so there is
             # nothing in the simulator to resize and nothing holding it up.
-            if body is not None and not body.scripted and body.role != "shadow":
+            if body is not None and not body.scripted and body.role != "shadow_caster":
                 out.append(body)
         return out
 
@@ -219,7 +219,7 @@ class _Squash(Injector):
             # target is a flattened disc lying on the floor whose declared
             # radius has nothing to do with how tall it is drawn -- so seating
             # it against a surface would lift it off the ground it *is*.
-            if body is None or body.scripted or body.role == "shadow":
+            if body is None or body.scripted or body.role == "shadow_caster":
                 continue
             # The body's FOOTPRINT moved, so its pose has to move with it. A
             # volume-preserving stretch shortens two axes, and the vertical one
@@ -275,7 +275,7 @@ class ShadowShape(_Squash):
     simulated = False
 
     def _targets(self, spec):
-        shade = [b for b in spec.bodies if b.role == "shadow"]
+        shade = [b for b in spec.bodies if b.role == "shadow_caster"]
         return shade[:1]
 
 

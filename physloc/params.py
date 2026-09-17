@@ -13,7 +13,7 @@ container, whose Python is 3.9 with Kubric's pinned packages and no PyYAML --
         -> params.json    (written into the workdir, which is mounted)
         -> params.apply() (container reads it, with json)
 
-which also means the resolved values land in `metadata.json`, so a clip records
+which also means the resolved values land in `sample.json`, so a sample records
 what it was generated under. A tunable nobody can reproduce is worse than a
 constant nobody can change.
 
@@ -84,11 +84,10 @@ DEFAULTS: Dict[str, Any] = {
         "kinds": ["track", "orbit", "dolly"],
         "weights": [0.40, 0.40, 0.20],
         # How far a track or orbit travels, as a fraction of the standoff, and
-        # how much a dolly changes its distance. Dolly is tighter because it is
-        # the motion that changes APPARENT SIZE, which is the cue
-        # `immutability` and `deformation` make their claim about.
+        # how much a dolly changes its distance. Dolly stays below the weakest
+        # deformation scale but must still read as motion in a short clip.
         "travel": [0.14, 0.22],
-        "dolly": [0.10, 0.15],
+        "dolly": [0.16, 0.20],
     },
     "difficulty": {
         # THE EASY / MODERATE / HARD CUTS, two per factor, in the order
@@ -101,7 +100,7 @@ DEFAULTS: Dict[str, Any] = {
         # difficulty labels move between releases cannot be compared with
         # itself. They are editable because a future dataset with a different
         # geometry or a different window policy will want different cuts --
-        # and because the resolved values ride in every `metadata.json`, so a clip
+        # and because the resolved values ride in every `sample.json`, so a sample
         # always says what it was labelled under. Changing them is a new
         # release, not a bug fix.
         #
@@ -140,11 +139,6 @@ def _merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
                            % (section, ", ".join(sorted(out))))
         if not isinstance(values, dict):
             raise TypeError("params section %r must be a mapping" % section)
-        if section == "difficulty":
-            # Three factors were renamed; a config written before still sets
-            # their cuts under the old names.
-            from .annotate.difficulty import canonical
-            values = {canonical(k): v for k, v in values.items()}
         unknown = set(values) - set(out[section])
         if unknown:
             raise KeyError("unknown params key(s) in %r: %s"
@@ -173,34 +167,12 @@ def write(values: Dict[str, Any], workdir: str) -> str:
     return path
 
 
-#: Key renames a work dir may predate. Schema v2 renamed `culprit` to `violator`
-#: and `disturbed_instance_ids` to `affected_instance_ids`; a work dir rendered
-#: before that must still annotate, and re-rendering it to change a spelling
-#: would cost hours of Blender for nothing.
-LEGACY_RENAMES = (("culprit", "violator"),
-                  ("disturbed_instance_ids", "affected_instance_ids"))
-
-
-def upgrade_keys(obj: Any) -> Any:
-    """Rename legacy keys anywhere in a JSON tree. Values are left alone."""
-    if isinstance(obj, dict):
-        out = {}
-        for key, value in obj.items():
-            for old, new in LEGACY_RENAMES:
-                key = key.replace(old, new)
-            out[key] = upgrade_keys(value)
-        return out
-    if isinstance(obj, list):
-        return [upgrade_keys(v) for v in obj]
-    return obj
-
-
 def read(path: str) -> Dict[str, Any]:
     with open(path) as fh:
-        return resolved(upgrade_keys(json.load(fh)))
+        return resolved(json.load(fh))
 
 
-#: The values in force, for `metadata.json` and for anything that wants to report
+#: The values in force, for `sample.json` and for anything that wants to report
 #: them. Replaced wholesale by `apply`.
 CURRENT: Dict[str, Any] = resolved()
 

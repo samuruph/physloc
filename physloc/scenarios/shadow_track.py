@@ -1,20 +1,13 @@
-"""`shadow_track` -- an object translates under a fixed light, casting a shadow.
+"""`shadow_track` -- an object translates under a fixed light.
 
-**The shadow is a body, not a render effect.** Blender's own cast shadow has no
-segmentation id, so it cannot carry a mask, and a violation nobody can localise
-is not what this dataset ships. So the actor's Cycles shadow ray visibility is
-switched off and a flat, dark `shadow` body is scripted onto the ground at the
-position the light geometry puts it. It is a stand-in -- no penumbra, no shape
-distortion over uneven ground -- and it is labelled `role="shadow"` so a
-consumer is never misled about what it is looking at.
-
-What that buys: the shadow now has pixels, an id, a footprint in both twins and
-therefore an exact `violation_mask` under the same union rule as every other
-family. Grounded in LikePhys *Moving Shadow*.
+The visible shadow is a real Cycles cast shadow.  A duplicate of the actor is
+hidden from camera rays and visible only to shadow rays; the visible actor has
+its shadow ray disabled.  Optical interventions move or deform that internal
+caster, so Cycles still performs the light transport while the RGB actor stays
+unchanged.  The caster is renderer-only and is removed from public object,
+segmentation, physics and energy annotations by the v3 writer.
 """
 from __future__ import annotations
-
-import math
 
 import numpy as np
 
@@ -67,28 +60,14 @@ class ShadowTrack(Scenario):
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_ACTOR, role="actor")
 
-        psi = math.atan2(float(light_dir[1]), float(light_dir[0]))
         actor = C.with_material(actor, M.pick(arng), arng)
         shade = BodySpec(
-            # A flattened SPHERE, not a flattened cube. A round caster does not
-            # throw a square shadow, and shipping one meant every `shadow` clip
-            # carried a second, unlabelled inconsistency for a viewer to notice
-            # first. Whether the shadow's shape matches its caster is a
-            # violation in its own right -- see the `shadow_shape` family --
-            # which only works if the lawful clip gets it right.
-            name="shadow", kind="sphere", position=(0.0, 0.0, 0.006),
-            # Declared round for the simulator, drawn as a flattened ellipse.
-            # Kubric's PyBullet wrapper asserts uniform scaling on spheres, so
-            # the squash has to happen on the render side -- see
-            # `BodySpec.render_scale`. Stretched along the light's ground-plane
-            # bearing, which is the direction a low sun smears a round object's
-            # shadow.
+            name="shadow_caster", kind="sphere", position=actor.position,
             scale=(r, r, r),
-            render_scale=(r / max(abs(float(light_dir[2])), 0.35), r, 0.006),
-            quaternion=(math.cos(psi / 2.0), 0.0, 0.0, math.sin(psi / 2.0)),
-            mass=1.0, static=False, scripted=True, visible_shadow=False,
-            color=(0.035, 0.035, 0.045), segmentation_id=self.SEG_SHADOW,
-            role="shadow")
+            mass=0.0, static=False, scripted=True, collides=False,
+            visible_camera=False, visible_shadow=True,
+            color=actor.color, segmentation_id=self.SEG_SHADOW,
+            role="shadow_caster")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
@@ -109,7 +88,7 @@ class ShadowTrack(Scenario):
 
     # ------------------------------------------------------------------ #
     def script(self, spec, traj) -> None:
-        """Translate the actor, and put its shadow where the light says it goes."""
+        """Translate the actor and its renderer-only Cycles shadow caster."""
         n = traj.num_frames
         t = np.arange(n, dtype=np.float64) * traj.dt
         ja = _index(spec, self.SEG_ACTOR)
@@ -139,7 +118,7 @@ class ShadowTrack(Scenario):
         simply undo them. So this stands aside whenever the shadow is named in
         the plan.
         """
-        shade = next((b for b in spec.bodies if b.role == "shadow"), None)
+        shade = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
         if shade is None:
             return
         if int(shade.segmentation_id) in {int(i) for i in plan.causal_body_ids}:
@@ -147,15 +126,11 @@ class ShadowTrack(Scenario):
         self._cast(spec, traj)
 
     def _cast(self, spec, traj) -> None:
-        """Put the shadow under the caster, at the caster's size and presence.
+        """Keep the hidden caster identical to the visible actor.
 
         Four channels, because a shadow follows its object in all of them:
 
-        * **position** -- the light's projection of the caster onto the ground.
-        * **footprint** -- a body that doubles in size doubles its shadow, so
-          the caster's horizontal `scale_mul` carries over. Not the vertical
-          one: the shadow is a flat patch on the floor and scaling its
-          thickness would only lift it off the ground.
+        Cycles, not this trajectory, projects it onto receiving geometry.
         * **presence** -- what is not there casts nothing. This is what makes
           `permanence` and `dissolve` read correctly on this scenario instead
           of leaving an orphaned shadow behind.
@@ -164,30 +139,14 @@ class ShadowTrack(Scenario):
         """
         ja, js = _index(spec, self.SEG_ACTOR), _index(spec, self.SEG_SHADOW)
         p = np.asarray(traj.pos[:, ja, :], np.float64)
-        traj.pos[:, js, :] = project(p, spec.notes["light_dir"],
-                                     float(spec.notes["surface_top"]),
-                                     0.006).astype(np.float32)
+        traj.pos[:, js, :] = p.astype(np.float32)
         if traj.num_frames > 1:
             traj.lin_vel[1:, js, :] = ((traj.pos[1:, js, :]
                                         - traj.pos[:-1, js, :]) / traj.dt)
             traj.lin_vel[0, js, :] = traj.lin_vel[1, js, :]
-        lin = np.asarray(traj.scale_mul[:, ja, :], np.float64)
-        traj.scale_mul[:, js, 0] = lin[:, 0]
-        traj.scale_mul[:, js, 1] = lin[:, 1]
+        traj.scale_mul[:, js, :] = np.asarray(traj.scale_mul[:, ja, :], np.float32)
         traj.present[:, js] = np.asarray(traj.present[:, ja], bool)
         traj.opacity[:, js] = np.asarray(traj.opacity[:, ja], np.float32)
-
-
-def project(p: np.ndarray, light_dir, surface_top: float,
-            lift: float = 0.0) -> np.ndarray:
-    """Where a body at `p` casts its shadow on the plane z == surface_top."""
-    L = _unit(np.asarray(light_dir, np.float64))
-    denom = -L[2] if abs(L[2]) > 1e-6 else -1e-6
-    t = (p[:, 2] - surface_top) / denom
-    out = np.zeros_like(p)
-    out[:, :2] = p[:, :2] + t[:, None] * L[None, :2]
-    out[:, 2] = surface_top + lift
-    return out
 
 
 def _unit(v: np.ndarray) -> np.ndarray:

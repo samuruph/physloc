@@ -17,8 +17,6 @@ because each of them misses cases the others catch:
 """
 from __future__ import annotations
 
-import json
-import os
 from typing import Dict, List
 
 import numpy as np
@@ -33,28 +31,27 @@ MIN_OBSERVABLE_FRAMES = 1
 MIN_EVIDENCE = 0.02          # peak |valid - invalid| inside the mask, 0..1
 
 
-def measure_clip(cdir: str) -> Dict[str, object]:
-    """Severity, observability and pixel evidence for one invalid clip."""
-    meta = layout.read(cdir)
-    md = layout.identity(meta)
-    v = meta.get("violation") or {}
+def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
+    """Severity, observability and pixel evidence for one invalid sample."""
+    meta = layout.read(sample_dir)
+    scene = meta["metadata"]["scene"]["info"]
+    v = (meta.get("annotations") or {}).get("violation_summary") or {}
     out = {
-        "scenario": md.get("scenario"), "family": md.get("family"),
+        "scenario": scene.get("type"), "family": scene.get("family"),
         "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
         "peak_severity": 0.0, "observable_frames": 0, "evidence": 0.0,
     }
-    clip = loader.Clip.from_dir(cdir)
-    if not clip.has(layout.OBJECTS):
-        return out
-    tl = clip.timeline
+    sample = loader.Sample(sample_dir, twin=twin)
+    tl = sample.timeline
     out["peak_severity"] = float(np.asarray(tl["severity"]).max())
     out["observable_frames"] = int(np.asarray(tl["observable"]).sum())
 
     # Divergence is no longer shipped; it is computed from the two videos, which
     # is what it always was -- so this needs the valid twin beside the clip.
-    mask = clip.violation_mask
-    if mask.any() and clip.twin is not None:
-        out["evidence"] = float(clip.divergence[mask].max())
+    mask = sample.violation_mask
+    if mask.any() and sample.twin is not None:
+        out["evidence"] = float(sample.divergence[mask].max())
+    sample.release()
     return out
 
 
@@ -79,11 +76,10 @@ def is_unscored(row: Dict[str, object]) -> bool:
 
 
 def audit(release_root: str) -> List[Dict[str, object]]:
+    dataset = loader.PhysLocDataset(release_root)
     rows = []
-    for mp in layout.find(release_root):
-        with open(mp) as fh:
-            meta = json.load(fh)
-        if layout.identity(meta).get("label") != "invalid":
+    for sample in dataset.samples:
+        if sample.is_valid:
             continue
-        rows.append(measure_clip(os.path.dirname(mp)))
+        rows.append(measure_sample(sample.path, sample.twin))
     return rows

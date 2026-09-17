@@ -263,7 +263,8 @@ def test_scanned_objects_still_rest_on_what_they_rested_on(name):
     # a stack re-seats all the way up, so a block's underside follows the NEW
     # top of the one below it, not its own old height.
     tops = [b.centre[2] + b.extents[2] for b in scanned.bodies
-            if b.collides and not b.dormant and b.role not in ("backdrop", "shadow")]
+            if b.collides and not b.dormant
+            and b.role not in ("backdrop", "shadow_caster")]
     for before, after in zip(plain.bodies, scanned.bodies):
         if after.kind != "gso":
             continue

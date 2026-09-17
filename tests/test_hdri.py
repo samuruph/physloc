@@ -17,6 +17,7 @@ import pytest
 
 from physloc import scenarios
 from physloc.scenarios import TIERS
+from physloc.scenarios._common import HDRI_GROUND_GAP
 from physloc.scenarios._hdri import HDRI_IDS
 from physloc.scenarios.base import COMPLEXITY
 
@@ -48,6 +49,33 @@ def test_only_the_hdri_levels_get_an_environment(name):
         else:
             assert got is None, "%s at %s drew %r on a solid background" % (
                 name, level, got)
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_hdri_ground_is_the_only_visible_ground(name):
+    """The HDRI dome depicts the ground; the slab only supplies collisions.
+
+    Drawing both at the same height caused competing surfaces and clipped the
+    lower part of resting objects. The photographic surface is offset slightly
+    below the physical plane, while non-HDRI levels retain their visible slab.
+    """
+    sc = scenarios.get(name)
+    for level, cx in COMPLEXITY.items():
+        if not cx.implemented:
+            continue
+        spec = sc.sample(SEED, TIERS["debug"], level)
+        floors = [body for body in spec.bodies if body.role == "floor"]
+        backdrops = [body for body in spec.bodies if body.role == "backdrop"]
+        if cx.background == "hdri":
+            assert backdrops and all(not body.collides for body in backdrops)
+            assert all(not body.visible_camera for body in floors)
+            collision_plane = max(body.position[2] + body.scale[2]
+                                  for body in floors)
+            assert backdrops[0].position[2] == pytest.approx(
+                collision_plane - HDRI_GROUND_GAP)
+        else:
+            assert not backdrops
+            assert all(body.visible_camera for body in floors)
 
 
 def test_the_environment_varies_across_scenarios_and_seeds():

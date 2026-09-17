@@ -11,7 +11,7 @@ import pytest
 from physloc.annotate import difficulty as D
 
 
-#: Top-level blocks of `metadata.json`; any other keyword to `_meta` is an
+#: Top-level inputs to difficulty analysis; any other keyword to `_meta` is an
 #: identity field and lands in the `metadata` block.
 _BLOCKS = ("camera", "violation", "difficulty", "instances")
 
@@ -130,10 +130,8 @@ def test_a_valid_twin_has_no_difficulty():
 def test_an_unmeasurable_factor_is_moderate_never_easy():
     """A missing value must not flatter a clip.
 
-    `footprint` and `occlusion` come from arrays. If a consumer hands us a
-    `meta.json` written before those were stored, the honest answer is the
-    middle -- not `easy`, which would quietly move clips into the strictest
-    evaluation set.
+    `violation_area` and `occlusion` come from arrays. If either measurement is
+    unavailable, the honest answer is the middle rather than `easy`.
     """
     meta = _meta()
     meta["violation"].pop("difficulty_inputs")
@@ -141,18 +139,6 @@ def test_an_unmeasurable_factor_is_moderate_never_easy():
     assert got["factors"]["violation_area"]["level"] == "moderate"
     assert got["factors"]["occlusion"]["level"] == "moderate"
     assert got["level"] == "moderate"
-
-
-def test_a_clip_stored_under_the_old_factor_names_still_reads():
-    """`footprint`, `clutter` and `camera` were renamed; clips generated before
-    carry the old keys, and must be measured and counted the same."""
-    meta = _meta()
-    meta["violation"]["difficulty_inputs"] = {"footprint": 0.0001, "occlusion": 0.0}
-    got = D.assess(meta)
-    assert got["factors"]["violation_area"]["value"] == pytest.approx(0.0001)
-    assert got["binding_factors"] == ["violation_area"]
-    assert [D.canonical(n) for n in ("footprint", "clutter", "camera", "severity")] == [
-        "violation_area", "object_count", "camera_motion", "severity"]
 
 
 def test_every_factor_declares_a_direction_and_ordered_thresholds():

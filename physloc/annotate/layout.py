@@ -1,16 +1,4 @@
-"""What the files in a clip directory are called, in one place.
-
-Names follow Kubric's MOVi datasets (`refs/kubric/challenges/movi/README.md`)
-wherever MOVi has a name for the thing -- `metadata.json`, `video`,
-`segmentations`, `depth`, `forward_flow`, `backward_flow`, `normal`,
-`object_coordinates` -- so a reader that knows MOVi finds the passes where it
-expects them. The metadata inside keeps MOVi's top-level blocks (`metadata`,
-`camera`, `instances`, `events`) and adds PhysLoc's own beside them; see
-docs/schema.md.
-
-Every consumer reads the names from here. They were spelled out in a dozen
-files, and a rename that misses one is a reader that silently finds nothing.
-"""
+"""Names and discovery helpers for the single PhysLoc schema-v3 layout."""
 from __future__ import annotations
 
 import glob
@@ -18,49 +6,32 @@ import json
 import os
 from typing import Dict, List
 
-from .. import loader as _loader
+from .. import loader
 
-#: 1 when the layout became MOVi's; 2 when the annotations shrank to the two
-#: files below and everything derivable moved into `physloc/loader.py`. A reader
-#: checks this before trusting any other field.
-SCHEMA_VERSION = _loader.SCHEMA_VERSION
-
-METADATA = _loader.METADATA
-VIDEO = _loader.VIDEO
+SCHEMA_VERSION = loader.SCHEMA_VERSION
+SAMPLE_METADATA = loader.SAMPLE_METADATA
+RGB = loader.RGB
+DATA = loader.DATA
 OVERLAY = "overlay.mp4"
-SEGMENTATIONS = _loader.SEGMENTATIONS
-#: Invalid clips only. `masks.npz`: the dense maps (`violation`, `causal`,
-#: `causal_source`). `objects.npz`: the per-violator [K,T] table.
-MASKS = _loader.MASKS
-OBJECTS = _loader.OBJECTS
-CLOCKS = _loader.CLOCKS
-#: MOVi's per-instance, per-frame tensors -- positions, quaternions, velocities,
-#: boxes, image positions, visibility -- as [k, s, ...] arrays. In an `.npz`
-#: rather than in `metadata.json` because `pour` alone would be megabytes of
-#: JSON per clip.
-INSTANCES = "instances.npz"
-
-#: Renderer pass -> the name it ships under, as both the file stem and the key.
+CLOCKS = loader.CLOCKS
 PASSES: Dict[str, str] = {
-    "depth": "depth",
-    "forward_flow": "forward_flow",
-    "backward_flow": "backward_flow",
-    "normal": "normal",
+    "depth": "depth", "forward_flow": "forward_flow",
+    "backward_flow": "backward_flow", "normal": "normal",
     "object_coordinates": "object_coordinates",
+    "shadow_strength": "shadow_strength",
+    "shadow_source_id": "shadow_source_id",
 }
 
 
-def identity(meta) -> Dict[str, object]:
-    """The `metadata` block: who a clip is, what it is of, and its geometry."""
-    return (meta or {}).get("metadata") or {}
+def identity(document) -> Dict[str, object]:
+    return ((document or {}).get("metadata") or {}).get("sample_info") or {}
 
 
-def read(cdir: str) -> Dict[str, object]:
-    with open(os.path.join(cdir, METADATA)) as fh:
-        return json.load(fh)
+def read(sample_dir: str) -> Dict[str, object]:
+    with open(os.path.join(sample_dir, SAMPLE_METADATA), encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def find(root: str) -> List[str]:
-    """Every clip's metadata file under a release root, sorted."""
-    return sorted(glob.glob(os.path.join(root, "clips", "**", METADATA),
+    return sorted(glob.glob(os.path.join(root, "samples", "**", SAMPLE_METADATA),
                             recursive=True))

@@ -88,14 +88,14 @@ LAYERS: Dict[str, str] = {
 PANELS: Dict[str, str] = {
     "rgb": "RGB",
     "valid": "VALID TWIN",
-    "energy": "ENERGY  per body, fraction of E0",
+    "energy": "ENERGY  visible scene + per-object map",
     "segmentation": "SEGMENTATION  instance ids",
     "depth": "DEPTH  metres, near->far",
     "flow": "FORWARD FLOW  hue=direction val=speed",
     "backward_flow": "BACKWARD FLOW",
     "normal": "NORMALS",
     "object_coordinates": "OBJECT COORDINATES",
-    "mask": "MASK  red=violation  green=should-be",
+    "mask": "MASK  colour=violator  green=should-be",
     "severity": "SEVERITY MAP",
     "causal": "CAUSAL MASK",
     "divergence": "DIVERGENCE (not GT)",
@@ -111,9 +111,9 @@ DEFAULT_LAYERS: Sequence[str] = ()
 #: Bodies too big to box: the floor and the HDRI dome would frame the whole shot.
 UNBOXED_ROLES = ("floor", "backdrop")
 #: The file a panel needs, so a clip without it gets a captioned blank.
-PANEL_FILES = {"energy": loader.ENERGY_MAP, "depth": "depth.npz",
-               "flow": "forward_flow.npz", "backward_flow": "backward_flow.npz",
-               "normal": "normal.npz", "object_coordinates": "object_coordinates.npz"}
+PANEL_FILES = {"energy": "energy_map", "depth": "depth",
+               "flow": "forward_flow", "backward_flow": "backward_flow",
+               "normal": "normal", "object_coordinates": "object_coordinates"}
 #: The 12 edges of a box whose 8 corners are `itertools.product(x, y, z)`:
 #: corners joined by an edge differ in exactly one of the three bits.
 BOX_EDGES = tuple((a, a | bit) for bit in (1, 2, 4) for a in range(8) if not a & bit)
@@ -122,22 +122,22 @@ VELOCITY_SECONDS = 1.0 / 3.0
 VIOLATION_PANELS = ("mask", "severity", "causal", "divergence")
 
 
-def build(clip_dir: str, out_path: Optional[str] = None, panel: int = PANEL,
+def build(sample_dir: str, out_path: Optional[str] = None, panel: int = PANEL,
           layers: Sequence[str] = DEFAULT_LAYERS,
           panels: Sequence[str] = DEFAULT_PANELS, **_ignored) -> Dict[str, object]:
-    """Render a clip to mp4 (default: `<clip_dir>/overlay.mp4`)."""
-    clip = loader.Clip.from_dir(clip_dir)
-    r = Renderer(clip, layers, panels, panel)
-    out_path = out_path or os.path.join(clip_dir, layout.OVERLAY)
-    vid.write(r.render(), out_path, fps=clip.fps)
-    return {"path": out_path, "frames": clip.num_frames,
+    """Render a sample to mp4 (default: `<sample_dir>/overlay.mp4`)."""
+    sample = loader.Sample.from_dir(sample_dir)
+    r = Renderer(sample, layers, panels, panel)
+    out_path = out_path or os.path.join(sample_dir, layout.OVERLAY)
+    vid.write(r.render(), out_path, fps=sample.fps)
+    return {"path": out_path, "frames": sample.num_frames,
             "panels": list(r.panels), "layers": list(r.layers)}
 
 
 class Renderer:
-    """Composes one frame at a time from a `loader.Clip`."""
+    """Composes one frame at a time from a schema-v3 `loader.Sample`."""
 
-    def __init__(self, clip: "loader.Clip", layers: Sequence[str] = DEFAULT_LAYERS,
+    def __init__(self, clip: "loader.Sample", layers: Sequence[str] = DEFAULT_LAYERS,
                  panels: Sequence[str] = DEFAULT_PANELS, panel: int = PANEL,
                  columns: int = COLUMNS):
         unknown = ([x for x in layers if x not in LAYERS]
@@ -151,17 +151,24 @@ class Renderer:
         self.size = int(panel)
         self.columns = max(1, min(int(columns), len(self.panels)))
         self.rows = math.ceil(len(self.panels) / self.columns)
-        self.meta = clip.metadata
+        self.meta = clip.display_metadata
         self.v = self.meta.get("violation") or {}
         self.T = clip.num_frames
-        self.ids = [int(i) for i in clip.objects["ids"]]
+        self.ids = [int(i) for i in clip.object_ids[
+            np.asarray(clip.violation_arrays.get(
+                "is_violator", np.zeros(len(clip.object_ids), bool)), bool)]]
+        self.object_rows = {int(iid): row
+                            for row, iid in enumerate(clip.object_ids)}
+        self.granular = (self.meta.get("metadata", {}).get("physics_medium") == "granular"
+                         and len(self.ids) > 1)
         insts = self.meta.get("instances", [])
         self.names = {int(i["id"]): str(i.get("name", i["id"])) for i in insts}
         self.roles = {int(i["id"]): i.get("role") for i in insts}
         self.width = self.columns * self.size + (self.columns + 1) * PAD
         self.panels_bottom = HEADER + PAD + self.rows * (self.size + PAD)
+        timeline_rows = 1 if self.granular and self.ids else len(self.ids)
         clocks = (0 if clip.is_valid else
-                  30 + 3 * CLOCK_ROW + len(self.ids) * VIOLATOR_ROW + SEVERITY_LANE)
+                  30 + 3 * CLOCK_ROW + timeline_rows * VIOLATOR_ROW + SEVERITY_LANE)
         self.height = self.panels_bottom + LEGEND + clocks + 40
         self._cache: Dict[str, object] = {}
 
@@ -202,6 +209,8 @@ class Renderer:
 
     def colour(self, instance_id: int):
         if instance_id in self.ids:
+            if self.granular:
+                return C_VIOLATORS[0]
             return C_VIOLATORS[self.ids.index(instance_id) % len(C_VIOLATORS)]
         return SEG_PALETTE[int(instance_id) % len(SEG_PALETTE)]
 
@@ -237,12 +246,15 @@ class Renderer:
             "normal": ("normals", lambda: {"normals": c.pass_("normal")}),
             "object_coordinates": ("normals",
                                    lambda: {"normals": c.pass_("object_coordinates")}),
-            "mask": ("mask", lambda: {"mask": c.violation_mask, "ref": c.reference_mask}),
+            "mask": ("mask", lambda: {
+                "mask": c.violation, "ref": c.reference_mask,
+                "mask_colours": {iid: self.colour(iid) for iid in self.ids}}),
             "severity": ("sev", lambda: {"sev": c.severity_map}),
             "causal": ("causal", lambda: {"causal": c.causal}),
             "divergence": ("div", lambda: {"diverg": c.divergence}),
         }[name]
         args = dict(mask=None, sev=None, causal=None, diverg=None, ref=None,
+                    mask_colours=None,
                     energy=None, seg=None, depth=None, flow=None, normals=None)
         args.update(arrays())
         return _panel(kind, t, c.video, size=S, **args)
@@ -278,11 +290,11 @@ class Renderer:
                       (x + 5, y + S - 8), C_DIM, 0.36, 1)
         elif name == "energy":
             _energy_scale(f, x, y, S, float(np.abs(c.energy_map[t]).max()))
-            if c.has(loader.ENERGY):
+            if c.has("energy"):
                 twin = c.twin if not c.is_valid else None
                 _energy_curve(f, x, y, S, t, dict(c.energy),
                               dict(twin.energy) if twin is not None
-                              and twin.has(loader.ENERGY) else None)
+                              and twin.has("energy") else None)
 
     def _camera(self, t: int) -> np.ndarray:
         """Top-down (x, y) map: the camera's path and view wedge, object tracks."""
@@ -384,10 +396,10 @@ class Renderer:
         around nothing reads as a detection."""
         if "present" not in self._cache:
             table = {}
-            if self.clip.has(loader.TRAJECTORY):
-                traj = self.clip.trajectory
-                for j, bid in enumerate(traj["body_ids"]):
-                    table[int(bid)] = np.asarray(traj["present"][:, j], bool)
+            inst = self.clip.instances
+            if "present" in inst:
+                for j, bid in enumerate(inst["ids"]):
+                    table[int(bid)] = np.asarray(inst["present"][j], bool)
             self._cache["present"] = table
         present = self._cache["present"]
         inst = self.clip.instances
@@ -484,9 +496,18 @@ class Renderer:
         if self.clip.is_valid:
             _text(f, "valid clip -- nothing here is violated", (x, yb), C_DIM, 0.40, 1)
             x += _w("valid clip -- nothing here is violated", 0.40) + 18
-        for iid in self.ids:
+        if self.granular and self.ids:
+            cv2.rectangle(f, (x, yb - 9), (x + 10, yb), C_VIOLATORS[0], -1)
+            s = "violating medium (%d grains)" % len(self.ids)
+            _text(f, s, (x + 14, yb), C_TEXT, 0.40, 1)
+            x += 14 + _w(s, 0.40) + 16
+        compact = not self.granular and len(self.ids) > 4
+        for iid in (() if self.granular else self.ids):
             cv2.rectangle(f, (x, yb - 9), (x + 10, yb), self.colour(iid), -1)
-            s = "violator %s #%d" % (self.names.get(iid, iid), iid)
+            # Names remain on the matching timeline rows. With many violators,
+            # repeating them here made the legend run beyond the canvas and
+            # hid the colour key that the legend exists to provide.
+            s = "#%d" % iid if compact else "violator %s #%d" % (self.names.get(iid, iid), iid)
             _text(f, s, (x + 14, yb), C_TEXT, 0.40, 1)
             x += 14 + _w(s, 0.40) + 16
         if self.layers:
@@ -502,12 +523,18 @@ class Renderer:
         def fx(frame):
             return int(x0 + (frame / max(T, 1)) * span)
 
+        def display_windows(windows):
+            wins = [tuple(w) for w in windows]
+            if self.granular and wins:
+                return [(min(s for s, _ in wins), max(e for _, e in wins))]
+            return wins
+
         y = y0
         if not self.clip.is_valid:
-            vwin = [tuple(w) for w in v.get("violation_windows", [])]
-            iwin = [tuple(w) for w in v.get("intervention_windows", [])] or vwin
-            cwin = [tuple(w) for w in v.get("consequence_windows", [])] or vwin
-            owin = [tuple(w) for w in v.get("observable_windows", [])]
+            vwin = display_windows(v.get("violation_windows", []))
+            iwin = display_windows(v.get("intervention_windows", [])) or vwin
+            cwin = display_windows(v.get("consequence_windows", [])) or vwin
+            owin = display_windows(v.get("observable_windows", []))
             rows = [("intervening", "being changed", iwin, C_INTERVENE),
                     ("consequence", "still wrong", cwin, C_MASK),
                     ("observable", "a viewer could tell", owin, C_OBS)]
@@ -529,20 +556,35 @@ class Renderer:
                                   colour, -1)
                 y += CLOCK_ROW
 
-            # One row per violator: its own active window in its own colour,
-            # observable as an amber underline, occluded as a grey overline.
-            obj = self.clip.objects
-            for k, iid in enumerate(self.ids):
-                col = self.colour(iid)
+            # One row per violator. A granular medium is intentionally one
+            # aggregate row: dozens of grain rows and fragmented windows hide
+            # the event instead of explaining it.
+            obj = self.clip.object_table
+            if self.granular and self.ids:
+                rows = [self.object_rows[iid] for iid in self.ids]
+                series = [("medium", C_VIOLATORS[0],
+                           {"active": np.any(obj["active"][rows], axis=0),
+                            "observable": np.any(obj["observable"][rows], axis=0),
+                            "occluded": np.all(obj["occluded"][rows], axis=0),
+                            "severity": np.max(obj["severity"][rows], axis=0)})]
+            else:
+                series = [("#%d %s" % (iid, self.names.get(iid, "")),
+                           self.colour(iid),
+                           {key: obj[key][self.object_rows[iid]]
+                            for key in ("active", "observable", "occluded", "severity")})
+                          for iid in self.ids]
+            for name, col, values in series:
                 cv2.rectangle(f, (x0, y), (x1, y + 8), (34, 34, 40), -1)
                 for key, top, colour, h in (("active", y, col, 9),
                                             ("observable", y + 7, C_OBS, 2),
                                             ("occluded", y, (130, 130, 140), 2)):
-                    for s, e in _runs(obj[key][k]):
+                    wins = _runs(values[key])
+                    if self.granular and wins:
+                        wins = [(wins[0][0], wins[-1][1])]
+                    for s, e in wins:
                         cv2.rectangle(f, (fx(s), top),
                                       (max(fx(e + 1) - 1, fx(s) + 2), top + h - 1),
                                       colour, -1)
-                name = "#%d %s" % (iid, self.names.get(iid, ""))
                 _text(f, name, (x1 - _w(name, 0.32) - 2, y + 8), col, 0.32, 1)
                 y += VIOLATOR_ROW
 
@@ -550,11 +592,11 @@ class Renderer:
             # paints over each body on that frame.
             top, h = y + 2, SEVERITY_LANE - 6
             cv2.rectangle(f, (x0, top), (x1, top + h), (26, 26, 32), -1)
-            for k, iid in enumerate(self.ids):
-                sev = np.clip(obj["severity"][k], 0, 1)
+            for _name, col, values in series:
+                sev = np.clip(values["severity"], 0, 1)
                 pts = [(fx(i + 0.5), int(top + h - sev[i] * (h - 2) - 1)) for i in range(T)]
                 for a, b in zip(pts, pts[1:]):
-                    cv2.line(f, a, b, self.colour(iid), 1, cv2.LINE_AA)
+                    cv2.line(f, a, b, col, 1, cv2.LINE_AA)
             _text(f, "severity [0, 1]", (x0 + 3, top + 11), C_DIM, 0.32, 1)
             y += SEVERITY_LANE
 
@@ -650,8 +692,9 @@ def _flow_scale(flow) -> float:
     return _FLOW_SCALE_CACHE[key]
 
 
-def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
-           seg=None, depth=None, flow=None, normals=None):
+def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None,
+           mask_colours=None, energy=None, seg=None, depth=None, flow=None,
+           normals=None):
     import cv2
     base = rgb[t].astype(np.float32)
 
@@ -659,16 +702,29 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
         img = base
     elif kind == "mask":
         img = base.copy()
-        if mask is not None:
-            m = mask[t].astype(bool)
-            img[m] = img[m] * 0.55 + np.array(C_MASK, np.float32) * 0.45
-            edge = m ^ _erode(m)
-            img[edge] = np.array(C_MASK, np.float32)
+        # Paint the lawful/reference location first. It remains visible for a
+        # vanished object, while current violation locations are then drawn in
+        # their stable per-object colours. A bright green outline is repeated
+        # last so overlap never erases the "where it should be" cue.
         if ref is not None:
-            # Where the violator should be, per the valid twin -- drawn *last*
-            # and outline-only. The violation mask is a superset of it for
-            # vanish-type families, so drawing the reference first would let the
-            # red fill hide it exactly when it matters most.
+            r = ref[t].astype(bool)
+            img[r] = img[r] * 0.60 + np.array(C_REF, np.float32) * 0.40
+        if mask is not None:
+            labels = np.asarray(mask[t])
+            if labels.dtype == bool or not mask_colours:
+                labels = labels.astype(bool)
+                colours = {1: C_MASK}
+                labels = labels.astype(np.uint8)
+            else:
+                colours = mask_colours
+            for iid, colour in colours.items():
+                m = labels == int(iid)
+                if not m.any():
+                    continue
+                col = np.array(colour, np.float32)
+                img[m] = img[m] * 0.50 + col * 0.50
+                img[m ^ _erode(m)] = col
+        if ref is not None:
             r = ref[t].astype(bool)
             img[r ^ _erode(r)] = np.array(C_REF, np.float32)
     elif kind == "sev":
@@ -772,7 +828,11 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     """Laid out right-to-left from measured widths so nothing ever collides."""
     import cv2
     v = meta.get("violation") or {}
-    md = layout.identity(meta)
+    # Renderer.display_metadata carries a compact, already-flattened identity
+    # under ``metadata``; callers may also pass a canonical sample document.
+    # Using only layout.identity() on the compact form produced the literal
+    # header ``None / None / None`` on every schema-v3 overlay.
+    md = layout.identity(meta) or (meta.get("metadata") or {})
 
     # --- right edge: frame counter, then the state pill ---
     frame_s = "f %d/%d" % (t, T - 1)
@@ -943,14 +1003,17 @@ def _nice_step(x: float) -> float:
 
 
 # ------------------------------------------------------------------ energy
-def _energy_trace(clip_dir):
-    if not clip_dir:
+def _energy_trace(sample_dir):
+    if not sample_dir:
         return None
-    path = os.path.join(clip_dir, "energy.npz")
-    if not os.path.exists(path):
+    try:
+        sample = loader.Sample.from_dir(sample_dir)
+    except (FileNotFoundError, ValueError):
         return None
-    z = np.load(path)
-    return {k: z[k] for k in z.files}
+    try:
+        return sample.scene_energy.as_dict()
+    finally:
+        sample.release()
 
 
 #: Energy map display range, as a multiple of E0, and the gamma the panel uses.
@@ -1004,7 +1067,7 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
     # exactly that on `drop x superelastic`, `solidity` and `antigravity`.
     # `total` is still drawn, dimmed, so the difference between the two IS the
     # reading: where they separate, energy has left the frame rather than the
-    # scene, and `energy.npz` ships both.
+    # scene, and `/energy/scene` ships both.
     key = "energy_in_frame" if "energy_in_frame" in trace else "total"
     series = [(trace[key], (255, 120, 120))]
     if trace.get("total") is not None and key != "total":
@@ -1044,9 +1107,10 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
     # non-negative by construction, so "%+.0f%%" printed a plus on every frame
     # and told the reader nothing -- and which channel fired is the part that
     # distinguishes energy appearing from energy vanishing.
-    channels = (("gain", float(trace["contact_anomaly"][t])),
-                ("uncaused", float(trace["free_anomaly"][t])),
-                ("loss", float(trace["excess_loss"][t])))
+    zero = np.zeros(T, np.float32)
+    channels = (("gain", float(np.asarray(trace.get("contact_anomaly", zero))[t])),
+                ("uncaused", float(np.asarray(trace.get("free_anomaly", zero))[t])),
+                ("loss", float(np.asarray(trace.get("excess_loss", zero))[t])))
     name, peak = max(channels, key=lambda kv: kv[1])
     if peak > 0.01:
         _text(f, "%s %.0f%%" % (name, 100 * peak), (bx + 3, by + h - 4),

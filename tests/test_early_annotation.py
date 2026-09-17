@@ -33,7 +33,7 @@ def _generate(monkeypatch, fail_first=False):
         out = []
         for d in only:
             family, severity = os.path.basename(d).rsplit("_", 1)
-            out.append({"clips": {"invalid": os.path.join(outroot, os.path.basename(d))},
+            out.append({"samples": {"invalid": os.path.join(outroot, os.path.basename(d))},
                         "family": family, "severity": severity, "t_event": 8,
                         "observability_lag": 0, "violation_windows": [[8, 12]],
                         "peak_severity": 1.0, "peak_score": 1.0})
@@ -72,12 +72,12 @@ def test_each_clip_is_annotated_once_as_it_renders(monkeypatch):
     assert sorted(annotated) == sorted("%s_strong" % f for f in FAMILIES)
     # One clip per call, on the annotator's own thread -- not a batch at job end.
     assert all(len(only) == 1 for only, _ in calls)
-    assert all(name == "clip-annotator" for _, name in calls)
+    assert all(name == "sample-annotator" for _, name in calls)
 
 
 def test_a_clip_that_fails_early_is_annotated_when_its_job_ends(monkeypatch):
     rc, calls = _generate(monkeypatch, fail_first=True)
     assert rc == 0
     first = os.path.basename(calls[0][0][0])
-    retried = [only for only, name in calls if name != "clip-annotator"]
+    retried = [only for only, name in calls if name != "sample-annotator"]
     assert [os.path.basename(d) for only in retried for d in only] == [first]

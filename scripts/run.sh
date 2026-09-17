@@ -142,9 +142,9 @@ echo "== audit: cells whose violation is not visible -> $REL/audit.txt =="
 $PV audit "$REL" 2>&1 | tee "$REL/audit.txt" || true
 
 # Which severity bins this release actually contains.
-# clips/<release>/<level>/<scenario>/<seed>/<clip> -- the level joined the key
+# samples/<release>/<level>/<scenario>/<seed>/<sample> -- the level joined the key
 # when one run started producing several levels, so these depths went up by one.
-BINS=$(find "$REL/clips" -mindepth 5 -maxdepth 5 -type d -name 'invalid_*' \
+BINS=$(find "$REL/samples" -mindepth 5 -maxdepth 5 -type d -name 'invalid_*' \
        | sed -n 's/.*_\(weak\|medium\|strong\)$/\1/p' | sort -u)
 BINS=${BINS:-strong}
 
@@ -155,7 +155,7 @@ for BIN in $BINS; do
 done
 
 # Grids and sheets, collected into ONE folder rather than written beside the
-# clips they came from. A twenty-pair run scatters them four levels deep across
+# samples they came from. A twenty-pair run scatters them four levels deep across
 # twenty directories, which puts the videos you most want to compare furthest
 # apart. `viz` names them `<level>_<scenario>_<seed>_<family>.mp4` so the sort
 # order is the reading order.
@@ -171,7 +171,7 @@ $PV viz "$REL" || true
 # spread over the scenarios, because every eligible cell is hundreds of videos
 # on a full review. Across separate runs, `run_reviews.sh` compares them all.
 COMPARE_LIMIT="${PHYSLOC_COMPARE_LIMIT:-12}"
-LEVELS=$(find "$REL/clips" -mindepth 2 -maxdepth 2 -type d -name 'L[0-9]' \
+LEVELS=$(find "$REL/samples" -mindepth 2 -maxdepth 2 -type d -name 'L[0-9]' \
          -printf '%f\n' 2>/dev/null | sort -u)
 echo "== compare: structure videos -> $REL/compare (levels: ${LEVELS:-none}) =="
 for LEVEL in $LEVELS; do
@@ -188,11 +188,11 @@ fi
 echo "== randomisation: is the sampler actually varying? (renders nothing) =="
 $PV randomisation --seeds 24 || true
 
-echo "== export: package it as a dataset -- clip folders, index, card, splits =="
+echo "== export: package it as a dataset -- sample folders, index, card, splits =="
 # Publishing is opt-in and env-driven, not a flag, because everything after the
 # config name is forwarded to `generate` and `generate` has no idea what a
 # HuggingFace repo is. It is deliberately a separate switch from generating:
-# packaging is local and repeatable, uploading is neither -- it puts the clips
+# packaging is local and repeatable, uploading is neither -- it puts the samples
 # somewhere other people can fetch, index and cache them.
 #
 #   PHYSLOC_PUSH_TO=<user>/<dataset> bash scripts/run.sh review ...
@@ -227,5 +227,5 @@ echo "  stats/                         1_overview.png ... 6_timing_and_severity.
 echo "  viz/                           every grid and sheet, one folder"
 echo "  compare/<level>/{variants,conditions}/   one cell's structure side by side"
 echo "  out/hf/$(basename "$REL")/       packaged dataset: index.parquet plays the videos"
-echo "  clips/*/*/*/sheet_strong.mp4   one scenario: every family x every annotation"
-echo "  clips/*/*/*/grid_<family>.mp4  one family: every severity x every annotation"
+echo "  samples/**/sheet_strong.mp4    one scenario: every family x every annotation"
+echo "  samples/**/grid_<family>.mp4   one family: every severity x every annotation"

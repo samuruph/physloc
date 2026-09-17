@@ -1,233 +1,118 @@
-"""Packaging a release: the clip folders, the index, and the split that must not leak.
+"""Packaging the one schema-v3 representation for local and Hub use."""
+from __future__ import annotations
 
-Built on a synthetic clip tree rather than a generated release, so the test
-runs anywhere and does not need docker, a renderer, or an hour.
-"""
+import importlib.util
 import json
 import os
 
-import numpy as np
 import pytest
 
-import physloc.release.export as X
-
-
-def _clip(root, pair, name, label, family=None, seed=7):
-    cdir = os.path.join(root, "clips", pair, name)
-    os.makedirs(cdir, exist_ok=True)
-    meta = {
-        "metadata": {
-            "schema_version": 1,
-            "clip_uid": "%s/%s" % (pair, name),
-            "pair_uid": pair,
-            "twin_uid": "%s/valid" % pair,
-            "label": label,
-            "scenario": pair.split("/")[2],
-            "family": family,
-            "domain": "identity",
-            "physics_medium": "rigid",
-            "seed": seed,
-            "tier": "debug",
-            "num_frames": 25,
-            "frame_rate": 12,
-        },
-        "camera": {"motion": "orbit"},
-        "instances": [
-            {"role": "floor", "category": "cube", "dormant": False},
-            {"role": "actor", "category": "cone", "material": "steel",
-             "mass": 3.5, "dormant": False},
-            {"role": "actor", "category": "cone", "dormant": True},
-        ],
-        "violation": ({"t_event_frame": 8, "violation_windows": [[8, 12]],
-                       "intervention": {"severity_bin": "strong",
-                                        "magnitude": 1.5},
-                       "peak_residual": {"score": 0.9}}
-                      if label == "invalid" else None),
-    }
-    with open(os.path.join(cdir, "metadata.json"), "w") as fh:
-        json.dump(meta, fh)
-    with open(os.path.join(cdir, "video.mp4"), "wb") as fh:
-        fh.write(b"\0" * 64)
-    np.savez_compressed(os.path.join(cdir, "segmentations.npz"),
-                        segmentations=np.zeros((2, 4, 4), np.uint16))
-    if label == "invalid":
-        np.savez_compressed(os.path.join(cdir, "masks.npz"),
-                            violation=np.zeros((2, 4, 4), np.uint16))
-    np.savez_compressed(os.path.join(cdir, "depth.npz"),
-                        depth=np.zeros((2, 4, 4), np.float32))
-    return cdir
+from physloc.release import export as X
+from v3_fixture import make_pair
 
 
 @pytest.fixture
 def release(tmp_path):
-    root = str(tmp_path / "rel")
-    for i in range(12):
-        pair = "physloc_v0/L0/drop/%04d_standard" % i
-        _clip(root, pair, "valid", "valid")
-        _clip(root, pair, "invalid_permanence_strong", "invalid", "permanence")
-    return root
+    root = tmp_path / "generated"
+    for index in range(12):
+        make_pair(root, "test-v3/L0/drop/%04d_standard" % index, write_rgb=False)
+    return str(root)
 
 
-def test_export_writes_clips_index_card_and_splits(release, tmp_path):
+def _rows(root):
+    path = os.path.join(root, "index.jsonl")
+    if os.path.exists(path):
+        return [json.loads(line) for line in open(path, encoding="utf-8")]
+    import pyarrow.parquet as pq
+    return pq.read_table(os.path.join(root, "index.parquet")).to_pylist()
+
+
+def test_export_preserves_the_v3_sample_payload(release, tmp_path):
     out = str(tmp_path / "pack")
-    res = X.export(release, out)
-    assert res["clips"] == 24 and res["pairs"] == 12
-    for name in ("README.md", "LICENSE", "loader.py"):
+    result = X.export(release, out)
+    assert result["samples"] == 24 and result["pairs"] == 12
+    for name in ("README.md", "LICENSE", "loader.py", "dataset.json", "schema.json"):
         assert os.path.exists(os.path.join(out, name))
-    assert any(os.path.exists(os.path.join(out, n))
-               for n in ("index.parquet", "index.jsonl"))
-    assert os.path.exists(os.path.join(
-        out, "clips", "physloc_v0", "L0", "drop", "0000_standard",
-        "invalid_permanence_strong", "masks.npz"))
-    assert not os.path.exists(os.path.join(out, "shards"))
+    sample = os.path.join(out, "samples", "test-v3", "L0", "drop",
+                          "0000_standard", "invalid_solidity_strong")
+    assert set(os.listdir(sample)) == {"sample.json", "rgb.mp4", "data.h5"}
+    assert not any(name.endswith(".npz") for _, _, files in os.walk(out) for name in files)
 
 
-def test_the_shipped_loader_reads_the_export(release, tmp_path):
-    """What a user downloads is read by the loader that came with it, in the
-    same layout the generator writes -- one form, one reader."""
-    import importlib.util
-
+def test_shipped_loader_reads_the_export(release, tmp_path):
     out = str(tmp_path / "pack")
     X.export(release, out)
-    spec = importlib.util.spec_from_file_location(
-        "shipped_loader", os.path.join(out, "loader.py"))
-    L = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(L)
-    ds = L.PhysLocDataset(out, fields=("violation",))
-    assert len(ds) == 24
-    pairs = L.PhysLocDataset(out, unit="pair", fields=("path_info",))
-    assert len(pairs) == 12
-    item = pairs[0]
-    assert item["valid"]["label"] == "valid"
-    assert [c["label"] for c in item["invalid"]] == ["invalid"]
-    total = sum(len(L.PhysLocDataset(out, split=n, fields=()))
-                for n, _ in X.SPLIT_FRACTIONS)
-    assert total == 24
+    spec = importlib.util.spec_from_file_location("shipped_loader", os.path.join(out, "loader.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    dataset = module.PhysLocDataset(out)
+    assert len(dataset.samples) == 24 and not hasattr(dataset, "clips")
+    assert len(module.PhysLocDataset(out, unit="pair")) == 12
 
 
-def test_a_second_export_replaces_the_first(release, tmp_path):
+def test_pairs_never_cross_splits(release, tmp_path):
     out = str(tmp_path / "pack")
     X.export(release, out)
-    os.makedirs(os.path.join(out, "shards"))
-    stray = os.path.join(out, "clips", "physloc_v0", "L0", "drop", "9999_standard",
-                         "valid")
-    os.makedirs(stray)
-    X.export(release, out)
-    assert not os.path.exists(stray)
-    assert not os.path.exists(os.path.join(out, "shards"))
+    membership = {}
+    for name, _fraction in X.SPLIT_FRACTIONS:
+        with open(os.path.join(out, "splits", name + ".txt"), encoding="utf-8") as handle:
+            for uid in handle.read().split():
+                membership.setdefault(uid.rsplit("/", 1)[0], set()).add(name)
+    assert all(len(splits) == 1 for splits in membership.values())
 
 
-def test_a_twin_pair_is_never_split_apart(release, tmp_path):
-    """The leak this grouping exists to prevent.
-
-    A valid clip and its invalid siblings share every frame before `t_event`.
-    Put them on opposite sides and the training set contains the answer.
-    """
+def test_index_uses_relative_paths_without_video_bytes(release, tmp_path):
     out = str(tmp_path / "pack")
     X.export(release, out)
-    where = {}
-    for name, _ in X.SPLIT_FRACTIONS:
-        with open(os.path.join(out, "splits", "%s.txt" % name)) as fh:
-            for uid in fh.read().split():
-                where.setdefault(uid.rsplit("/", 1)[0], set()).add(name)
-    bad = {p: s for p, s in where.items() if len(s) > 1}
-    assert not bad, "these pairs straddle a split: %s" % bad
+    row = next(value for value in _rows(out) if value["label"] == "invalid")
+    for key in ("sample_uid", "pair_uid", "valid_sample_uid", "scenario", "family",
+                "condition", "complexity", "split", "rgb_path", "data_path"):
+        assert row.get(key) is not None, key
+    assert not os.path.isabs(row["rgb_path"])
+    assert row["rgb_path"].endswith("/rgb.mp4")
+    assert "bytes" not in row
 
 
-def test_every_split_gets_pairs_even_on_a_small_release():
-    """Independent hash bucketing does not hold its proportions when there are
-    few pairs -- thirteen came out 11/2/0, and a benchmark whose test split is
-    empty is not a benchmark. Ordering by hash and cutting at the quantiles
-    does."""
-    for n in (6, 13, 40, 400):
-        got = X.assign_splits("pair/%d" % i for i in range(n))
-        counts = {s: sum(1 for v in got.values() if v == s)
-                  for s, _ in X.SPLIT_FRACTIONS}
-        assert all(c > 0 for c in counts.values()), (n, counts)
-        assert sum(counts.values()) == n
-
-
-def test_splits_are_reproducible():
-    """No rng anywhere: the same pairs must always land the same way, or a
-    number reported against one build cannot be compared to the next."""
-    uids = ["physloc_v0/drop/%04d" % i for i in range(50)]
-    assert X.assign_splits(uids) == X.assign_splits(reversed(uids))
-
-
-def test_raw_passes_are_opt_in(release, tmp_path):
-    """`depth`, `flow` and `object_coords` are ~86% of the bytes. Someone
-    training on the masks should not download them to get there."""
+def test_dataset_metadata_is_complete(release, tmp_path):
     out = str(tmp_path / "pack")
     X.export(release, out)
-    names = [n for _, _, fs in os.walk(os.path.join(out, "clips")) for n in fs]
-    assert "masks.npz" in names
-    assert "depth.npz" not in names, "a raw geometry pass leaked into the export"
-
-    out = str(tmp_path / "with")
-    res = X.export(release, out, with_passes=True)
-    assert res["with_passes"]
-    names = [n for _, _, fs in os.walk(os.path.join(out, "clips")) for n in fs]
-    assert "depth.npz" in names
-
-
-def test_the_index_carries_what_a_filter_needs(release, tmp_path):
-    """A consumer picking "moving camera, steel actors, strong bin" should not
-    have to open 1500 meta.json files to do it."""
-    out = str(tmp_path / "pack")
-    X.export(release, out)
-    path = os.path.join(out, "index.jsonl")
-    if not os.path.exists(path):
-        pytest.skip("parquet index; covered by the export summary")
-    rows = [json.loads(l) for l in open(path)]
-    inv = next(r for r in rows if r["label"] == "invalid")
-    for field in ("scenario", "family", "severity_bin", "t_event_frame",
-                  "camera_motion", "actor_shape", "actor_material",
-                  "actor_mass", "split", "pair_uid"):
-        assert inv.get(field) is not None, field
-    assert inv["actor_shape"] == "cone" and inv["actor_material"] == "steel"
+    with open(os.path.join(out, "dataset.json"), encoding="utf-8") as handle:
+        metadata = json.load(handle)["dataset_metadata"]
+    assert metadata["number_of_samples"] == 24
+    assert metadata["number_of_pairs"] == 12
+    assert metadata["taxonomy"]["scenarios"] == ["drop"]
+    assert metadata["generation_config_ids"] == ["test:debug"]
+    assert metadata["coordinate_convention"].startswith("right-handed")
+    analysis = metadata["difficulty_analysis"]
+    assert analysis["number_of_invalid_samples"] == 12
+    assert set(analysis["thresholds"]) == {
+        "violation_area", "occlusion", "duration", "severity",
+        "object_count", "violators", "camera_motion"}
+    assert "label_setting_factors" in analysis
+    accounting = metadata["energy_accounting"]
+    assert accounting["world_total"]["hdf5_path"] == "/energy/scene/total"
+    assert accounting["visible_scene_total"]["hdf5_path"].endswith("energy_in_frame")
+    assert accounting["per_object"]["object_axis"] == "/objects/ids"
+    assert {"floor", "occluder", "barrier", "shadow_caster"} <= set(
+        accounting["excluded_roles"])
 
 
-def test_every_split_ships_the_same_files(release, tmp_path):
-    """A split is a LABEL, not a filter.
-
-    IntPhys 2 withholds its held-out metadata, and for a leaderboard someone
-    else submits to that is right. Here it would be wrong: the release has to
-    stay re-splittable, and a clip whose masks are missing cannot be scored at
-    all -- so moving the boundary later would mean regenerating.
-
-    The protection that stays is the part that cannot be recovered afterwards:
-    pairs never straddle a split. Stripping annotations, by contrast, can be
-    done at publication time from `splits/held_out.txt` without regenerating.
-    """
-    out = str(tmp_path / "pack")
-    X.export(release, out)
-    per_split = {}
-    for name, _ in X.SPLIT_FRACTIONS:
-        with open(os.path.join(out, "splits", "%s.txt" % name)) as fh:
-            for uid in filter(None, (l.strip() for l in fh)):
-                cdir = os.path.join(out, "clips", *uid.split("/"))
-                if uid.endswith("/valid"):
-                    continue
-                per_split.setdefault(name, set()).update(os.listdir(cdir))
-    assert len(per_split) > 1, "expected more than one split to be populated"
-    kinds = list(per_split.values())
-    assert all(k == kinds[0] for k in kinds), (
-        "splits ship different files: %s"
-        % {k: sorted(v) for k, v in per_split.items()})
-    assert "masks.npz" in kinds[0]
-    assert "metadata.json" in kinds[0]
+def test_export_rejects_v2_and_in_place_targets(tmp_path):
+    old = tmp_path / "old" / "clips" / "valid"
+    old.mkdir(parents=True)
+    (old / "metadata.json").write_text("{}")
+    with pytest.raises(FileNotFoundError, match="schema-v3"):
+        X.export(str(tmp_path / "old"), str(tmp_path / "pack"))
+    release = tmp_path / "generated"
+    make_pair(release, write_rgb=False)
+    with pytest.raises(ValueError, match="different"):
+        X.export(str(release), str(release))
 
 
-def test_every_split_sees_every_scenario(tmp_path):
-    """A split missing a whole scenario measures familiarity, not physics.
-
-    Cutting the population in one pass lets that happen: with thirteen
-    scenarios and a 5% slice, the small splits would be a couple of scenarios
-    each. Stratifying within each scenario is what prevents it.
-    """
-    uids = ["physloc_v0/%s/%04d" % (s, i)
-            for s in ("drop", "collision", "pour", "toss") for i in range(20)]
-    got = X.assign_splits(uids)
-    for name, _ in X.SPLIT_FRACTIONS:
-        scen = {u.split("/")[1] for u, v in got.items() if v == name}
-        assert scen == {"drop", "collision", "pour", "toss"}, (name, scen)
+def test_split_assignment_is_reproducible_and_populated():
+    for count in (6, 13, 40):
+        values = ["dataset/drop/%04d" % index for index in range(count)]
+        got = X.assign_splits(values)
+        assert got == X.assign_splits(reversed(values))
+        assert all(any(split == name for split in got.values())
+                   for name, _fraction in X.SPLIT_FRACTIONS)

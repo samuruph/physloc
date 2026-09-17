@@ -12,7 +12,7 @@
 # Every run reads this file, and any config may override part of it in its own
 # `params:` block -- so this holds the defaults and a run states its
 # differences. The resolved values are written to `params.json` in the workdir
-# and recorded in every `metadata.json`, so a clip says what it was generated
+# and recorded in every `sample.json`, so a sample says what it was generated
 # under: a tunable nobody can reproduce is worse than a constant nobody can
 # change.
 #
@@ -99,10 +99,10 @@ camera:
   # a different shot.
   travel: [0.14, 0.22]
 
-  # How much a dolly changes its distance. Tighter than the others because this
-  # is the motion that changes APPARENT SIZE -- the exact cue `immutability`
-  # and `deformation` make their claim about.
-  dolly: [0.10, 0.15]
+  # How much a dolly changes its distance. A 10-15% move looked static in a
+  # short clip, especially when the background was plain. Keep it below the
+  # deformation scale while making the global zoom clearly observable.
+  dolly: [0.16, 0.20]
 
 difficulty:
   # THE EASY / MODERATE / HARD CUTS, two per factor, always written
@@ -120,7 +120,7 @@ difficulty:
   # between releases cannot be compared with itself. They are editable because
   # a dataset with a different geometry or a different window policy will want
   # different cuts -- and because the resolved values ride in every
-  # `metadata.json`, so a clip always says what it was labelled under. Changing
+  # `sample.json`, so a sample always says what it was labelled under. Changing
   # them is a new release, not a bug fix.
   #
   # Four of the seven were FITTED, at the tertiles of the 431 invalid clips in

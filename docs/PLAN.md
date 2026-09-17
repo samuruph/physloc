@@ -12,7 +12,7 @@ docs, and the repo skeleton listed fifteen files that do not exist. For anything
 |---|---|
 | how to run anything | [../README.md](../README.md) |
 | counts, families, scenarios, cells | `python -m physloc.cli taxonomy` |
-| what a `metadata.json` field means | [schema.md](schema.md) |
+| what a `sample.json` or `data.h5` field means | [schema.md](schema.md) |
 | locked decisions and traps | [../CLAUDE.md](../CLAUDE.md) |
 | what is next, and what is undecided | [roadmap.md](roadmap.md) |
 
@@ -93,7 +93,7 @@ residual against the law that was broken:
 | trajectory shape | RMS deviation (m) of flight path from the fitted `g`-parabola |
 | identity | Δvolume ratio, ΔLab, or mass discontinuity |
 
-Residuals are computed for **valid clips too**. They are not exactly zero there — solver
+Residuals are computed for **valid samples too**. They are not exactly zero there — solver
 error is real — so a **noise-floor calibration pass** over valid clips is a required
 deliverable (Part 3, step 2).
 
@@ -110,8 +110,8 @@ accident.
 | what it is | the knob we turned | the effect that knob had |
 | known | **before** simulating — we chose it | **after** simulating, from `traj.npz` |
 | exact? | yes, by construction | up to the noise floor |
-| shape | one scalar per clip | per body, per frame → `[T,H,W]` field |
-| lives in | `metadata.json:violation.intervention.magnitude` | `residuals.npz`, `severity_map.npz`, `severity_t` |
+| shape | one scalar per sample | per object, per frame → `[T,H,W]` field |
+| lives in | `sample.json:annotations.events` | `data.h5:/violations` |
 | used for | building weak/medium/strong splits | training targets, difficulty analysis |
 
 They are **not** the same number and the mapping between them is not the identity — a large
@@ -124,21 +124,21 @@ There is no "severity mask". There are two distinct arrays: **`violation_mask`**
 
 ---
 
-## Part 3 — Annotations: exactly what ships with every clip
+## Part 3 — Annotations: exactly what ships with every sample
 
 This is the contribution. Grouped by the question each annotation answers.
 
 | group | answers | files |
 |---|---|---|
-| 3.1 labels | *what* and *whether* | `metadata.json` |
-| 3.2 temporal | ***when***, and ***for how long*** | `metadata.json`, `timelines.npz` |
-| 3.3 spatiotemporal masks | ***where***, per frame | `violation_mask.npz`, `causal_mask.npz`, `segmentations.npz` |
-| 3.4 severity fields | ***how badly***, localised in space and time | `severity_map.npz`, `severity_t`, `residuals.npz` |
-| 3.5 geometry | scene structure, free from Kubric | `depth`, `forward_flow`, `backward_flow`, `normal`, `object_coordinates` |
-| 3.6 token grids | ready-to-train reductions | `grids.npz` |
-| 3.7 raw physics + provenance | reproducibility | `traj.npz`, `metadata.json:provenance` |
+| 3.1 labels | *what* and *whether* | `sample.json` |
+| 3.2 temporal | ***when***, and ***for how long*** | `sample.json`, `data.h5:/violations` |
+| 3.3 spatiotemporal masks | ***where***, per frame | `data.h5:/observations`, `data.h5:/violations` |
+| 3.4 severity fields | ***how badly***, localised in space and time | `data.h5:/violations` |
+| 3.5 geometry | scene structure, free from Kubric | `data.h5:/observations` |
+| 3.6 token grids | ready-to-train reductions | derived lazily by the loader |
+| 3.7 raw physics + provenance | reproducibility | `data.h5:/objects`, `sample.json:metadata.sample_info.provenance` |
 
-### 3.1 Clip-level labels
+### 3.1 Sample-level labels
 
 `label` (valid/invalid), `domain`, `family`, `scenario`, `seed`, `severity_bin`
 (weak/medium/strong), the `intervention` block (type, params, `magnitude`, `magnitude_unit`),
@@ -159,7 +159,7 @@ The part that answers *"a window of when the physics is violated"*.
 | **`observable_windows`** | `[[s,e], …]` | every interval during which visual evidence is present |
 | `consequences[k]` | list | per downstream body: `t_diverge_frame`, `t_observable_frame`, `displacement_m`, `relation` |
 
-Rasterised into **`timelines.npz`** so consumers never expand intervals themselves:
+Rasterised under **`data.h5:/violations`** so consumers never expand intervals themselves:
 
 | array | shape | dtype | meaning |
 |---|---|---|---|
@@ -274,8 +274,8 @@ nobody can see it and reads as `0.00` on every frame that shows anything. Where 
 hidden the carry is the identity, so a shaped intervention keeps its rise and fall rather
 than becoming a running maximum.
 
-**Step 5 — the temporal profile.** `severity_t[t] = max_b s(b,t)`, stored in
-`timelines.npz`. This is the 1-D curve a temporal model regresses; `severity_map` is the 3-D
+**Step 5 — the temporal profile.** `severity_t[t] = max_b s(b,t)`, stored under
+`data.h5:/violations`. This is the 1-D curve a temporal model regresses; `severity_map` is the 3-D
 field a spatial model regresses. They are consistent by construction:
 `severity_t[t] == severity_map[t].max()`.
 
@@ -384,14 +384,14 @@ that is not about violations at all.
 
 ### 3.6 Token grids
 
-`grids.npz` pre-reduces masks and severity to the latent token grid so a consumer never
-re-derives a VAE's binning. the release tier: `7×16×16`. (the 81-frame derivative was never built) `21×16×16` on the 81-frame derivative.
+The loader can reduce masks and severity lazily to a requested latent token grid, so the
+published dataset does not duplicate another dense representation. The standard release
+view is `7×16×16`.
 
 - `mask_<F>x16x16` — bool, reduced by **max** (a violation in any contributing source frame
   marks the latent frame)
-- `severity_max_<F>x16x16`, `severity_mean_<F>x16x16` — f16. Peak and average are different
-  questions; both ship.
-- a `T×32×32` reduction alongside, for consumers on a different tokenizer
+- `severity_max` and `severity_mean` — peak and average are different questions, so the
+  loader exposes both.
 
 **Ordering guarantee:** time-major, `[F_lat, H_lat, W_lat]`, latent frame slowest. This is a
 schema guarantee, not an implementation detail — flattening must match transformer token
@@ -399,11 +399,10 @@ order.
 
 ### 3.7 Raw physics and provenance
 
-`traj.npz` (the seam file: per-body pose, velocity, applied force, contacts, residuals,
-events) and the `provenance` block (`generator_commit`, `kubric_image_digest`,
-`blender_version`, `render_seed`, `prefix_identical_verified`,
-`prefix_identical_upto_frame`). Shipping `traj.npz` means renders reproduce without
-re-simulating.
+The generator's `traj.npz` is an internal simulation/render seam, not a published dataset
+file. Required per-object state is consolidated into `data.h5:/objects`; structured events
+and provenance (`generator_commit`, renderer versions, render seed, and prefix-identity
+checks) live in `sample.json`. This keeps the public format compact without exposing a
+second, competing storage layout.
 
 ---
-

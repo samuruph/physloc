@@ -14,8 +14,6 @@ that keeps the two from drifting: it reads the real source.
 import json
 import os
 
-import pytest
-
 
 # --------------------------------------------------------------------------
 # A faithful stand-in for the closures in cmd_generate.
@@ -28,11 +26,11 @@ def make_ledger(root, request_of):
                             % (job["level"], job["scenario"], job["seed"],
                                job["variant"]))
 
-    def save(job, outcome, clips):
+    def save(job, outcome, samples):
         os.makedirs(ledger_dir, exist_ok=True)
         p = path(job)
         with open(p + ".tmp", "w") as fh:
-            json.dump({"request": request_of(job), "clips": clips,
+            json.dump({"request": request_of(job), "samples": samples,
                        "outcome": outcome}, fh, default=str)
         os.replace(p + ".tmp", p)
 
@@ -44,8 +42,8 @@ def make_ledger(root, request_of):
             return None
         if entry.get("request") != request_of(job):
             return None
-        for clip in entry.get("clips", []):
-            if not os.path.exists(os.path.join(clip, "metadata.json")):
+        for sample in entry.get("samples", []):
+            if not os.path.exists(os.path.join(sample, "sample.json")):
                 return None
         return entry.get("outcome")
 
@@ -55,18 +53,18 @@ def make_ledger(root, request_of):
 JOB = {"level": "L0", "scenario": "drop", "seed": 777, "variant": 0}
 
 
-def _clip(tmp_path, name="invalid_solidity_strong"):
-    d = tmp_path / "clips" / name
+def _sample(tmp_path, name="invalid_solidity_strong"):
+    d = tmp_path / "samples" / name
     d.mkdir(parents=True)
-    (d / "metadata.json").write_text("{}")
+    (d / "sample.json").write_text("{}")
     return str(d)
 
 
 def test_a_matching_job_is_resumed(tmp_path):
     req = lambda j: {"families": ["solidity"], "severity": "all"}
     save, load = make_ledger(str(tmp_path), req)
-    clip = _clip(tmp_path)
-    save(JOB, {"rc": 0, "scenario": "drop"}, [clip])
+    sample = _sample(tmp_path)
+    save(JOB, {"rc": 0, "scenario": "drop"}, [sample])
     assert load(JOB) == {"rc": 0, "scenario": "drop"}
 
 
@@ -75,7 +73,7 @@ def test_a_changed_request_is_not_resumed(tmp_path):
     state = {"families": ["solidity"]}
     req = lambda j: dict(state)
     save, load = make_ledger(str(tmp_path), req)
-    save(JOB, {"rc": 0}, [_clip(tmp_path)])
+    save(JOB, {"rc": 0}, [_sample(tmp_path)])
     assert load(JOB) is not None
 
     state["families"] = ["solidity", "permanence"]      # asked for more
@@ -91,18 +89,18 @@ def test_a_ledger_whose_clips_are_gone_is_not_resumed(tmp_path):
     """
     req = lambda j: {"families": ["solidity"]}
     save, load = make_ledger(str(tmp_path), req)
-    clip = _clip(tmp_path)
-    save(JOB, {"rc": 0}, [clip])
+    sample = _sample(tmp_path)
+    save(JOB, {"rc": 0}, [sample])
     assert load(JOB) is not None
 
-    os.remove(os.path.join(clip, "metadata.json"))
+    os.remove(os.path.join(sample, "sample.json"))
     assert load(JOB) is None
 
 
 def test_a_corrupt_ledger_is_ignored_not_fatal(tmp_path):
     req = lambda j: {"families": ["solidity"]}
     save, load = make_ledger(str(tmp_path), req)
-    save(JOB, {"rc": 0}, [_clip(tmp_path)])
+    save(JOB, {"rc": 0}, [_sample(tmp_path)])
     p = os.path.join(str(tmp_path), ".jobs",
                      "L0_drop_777_v0.json")
     with open(p, "w") as fh:

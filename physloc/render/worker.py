@@ -34,11 +34,11 @@ from physloc import scenarios
 from physloc.injectors import _geom, multi
 from physloc.injectors.base import InterventionPlan
 from physloc.render import stepper
-from physloc.scenarios.base import FRAMING_ATTEMPTS, SceneSpec, Tier
+from physloc.scenarios.base import FRAMING_ATTEMPTS, SceneSpec
 from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
 
 PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
-          "normal", "object_coordinates")
+          "normal", "object_coordinates", "shadow_strength", "shadow_source_id")
 
 #: How many event moments a family is offered before a variant is given up
 #: because its violator will not stay on screen after the event. Simulation is
@@ -306,6 +306,7 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
             kubasic = kb.AssetSource.from_manifest(KUBASIC)
             obj = kubasic.create(asset_id="dome", name=b.name, friction=b.friction,
                                  restitution=b.restitution, static=True,
+                                 position=b.position,
                                  background=True)
             obj.segmentation_id = b.segmentation_id
             scene += obj
@@ -776,6 +777,35 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     t0 = time.perf_counter()
     stack = renderer.render()
     dt = time.perf_counter() - t0
+
+    # A true Cycles shadow has no segmentation id. Isolate it with a matched
+    # no-caster-shadow render: only the camera-hidden caster's shadow-ray flag
+    # changes, so the positive luminance difference is the shadow strength.
+    # This is equivalent to a shadow-catcher pass while preserving the exact
+    # materials, receiver geometry and denoiser used by the RGB render.
+    caster = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
+    if caster is not None and caster.name in objs:
+        obj = objs[caster.name]
+        bobj = obj.linked_objects.get(renderer)
+        if bobj is not None:
+            if hasattr(bobj, "visible_shadow"):
+                bobj.visible_shadow = False
+            elif hasattr(bobj, "cycles_visibility"):
+                bobj.cycles_visibility.shadow = False
+            clear = renderer.render()
+            if hasattr(bobj, "visible_shadow"):
+                bobj.visible_shadow = True
+            elif hasattr(bobj, "cycles_visibility"):
+                bobj.cycles_visibility.shadow = True
+            normal = np.asarray(stack["rgba"])[..., :3].astype(np.float32)
+            no_shadow = np.asarray(clear["rgba"])[..., :3].astype(np.float32)
+            scale = 255.0 if max(float(normal.max()), float(no_shadow.max())) > 1.5 else 1.0
+            strength = np.clip((no_shadow - normal).mean(axis=-1) / scale,
+                               0.0, 1.0).astype(np.float16)
+            source = np.where(strength > (1.0 / 255.0),
+                              int(spec.notes["caster_id"]), 0).astype(np.uint16)
+            stack["shadow_strength"] = strength
+            stack["shadow_source_id"] = source
 
     # Kubric numbers the raw segmentation by scene-asset order and only honours
     # each asset's declared `segmentation_id` if you run this post-process --

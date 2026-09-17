@@ -38,11 +38,11 @@ def release(tmp_path_factory):
 
 
 def _invalid_clips(root):
-    for mp in sorted(glob.glob(os.path.join(root, "clips", "**", "metadata.json"),
+    for mp in sorted(glob.glob(os.path.join(root, "samples", "**", "sample.json"),
                                recursive=True)):
         with open(mp) as fh:
             m = json.load(fh)
-        if m["metadata"]["label"] == "invalid":
+        if m["metadata"]["sample_info"]["label"] == "invalid":
             yield os.path.dirname(mp), m
 
 
@@ -55,7 +55,7 @@ def test_the_release_validates(release):
 
 def test_every_invalid_clip_describes_each_violator(release):
     for cdir, m in _invalid_clips(release):
-        v = m["violation"]
+        v = m["annotations"]["violation_summary"]
         violators = v["violators"]
         assert v["violator_timing"] in ("independent", "sync", "shared")
         assert [c["instance_id"] for c in violators] == [
@@ -65,37 +65,38 @@ def test_every_invalid_clip_describes_each_violator(release):
         for c in violators:
             assert c["t_event_frame"] <= c["t_observable_frame"]
             for s, e in c["violation_windows"]:
-                assert 0 <= s <= e < m["metadata"]["num_frames"]
+                assert 0 <= s <= e < m["metadata"]["sample_info"]["num_frames"]
 
 
 def test_independent_violators_keep_their_own_windows(release):
     seen = 0
     for cdir, m in _invalid_clips(release):
-        v = m["violation"]
+        v = m["annotations"]["violation_summary"]
         if v["violator_timing"] != "independent":
             continue
         seen += 1
-        T = m["metadata"]["num_frames"]
-        obj = loader.Clip.from_dir(cdir).objects
-        assert list(obj["ids"]) == [c["instance_id"] for c in v["violators"]]
+        T = m["metadata"]["sample_info"]["num_frames"]
+        sample = loader.Sample.from_dir(cdir)
+        obj = sample.object_table
+        rows = [list(obj["ids"]).index(c["instance_id"]) for c in v["violators"]]
         for k, c in enumerate(v["violators"]):
             want = np.zeros(T, bool)
             for s, e in c["violation_windows"]:
                 want[s:e + 1] = True
-            assert np.array_equal(obj["active"][k], want)
+            assert np.array_equal(obj["active"][rows[k]], want)
         # The clip's windows are the union of the violators' own.
         clip_active = rasterise([tuple(w) for w in v["violation_windows"]], T)
-        assert np.array_equal(clip_active, obj["active"].any(axis=0))
+        assert np.array_equal(clip_active, obj["active"][rows].any(axis=0))
     if not seen:
         pytest.skip("this workdir has no independently timed violators")
 
 
 def test_pixel_attribution_names_only_violators_and_their_consequences(release):
     for cdir, m in _invalid_clips(release):
-        v = m["violation"]
+        v = m["annotations"]["violation_summary"]
         violator_ids = {c["instance_id"] for c in v["violators"]}
-        clip = loader.Clip.from_dir(cdir)
-        vids, cids, cmask = clip.violation, clip.causal_source, clip.causal
+        sample = loader.Sample.from_dir(cdir)
+        vids, cids, cmask = sample.violation, sample.causal_source, sample.causal
         assert set(np.unique(vids[vids > 0]).tolist()) <= violator_ids
         assert np.array_equal(cids > 0, cmask > 0)
         assert set(np.unique(cids[cids > 0]).tolist()) <= violator_ids

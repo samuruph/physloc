@@ -13,6 +13,7 @@ channels:
 dependencies:
   - python=3.11
   - numpy
+  - h5py                # schema-v3 dense per-sample stores
   - scipy               # parabola fits, residual math
   - pillow              # reading Kubric's PNG passes
   - tifffile            # reading Kubric's depth TIFFs

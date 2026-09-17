@@ -1,4 +1,4 @@
-"""What a generated release actually contains, as figures and one JSON.
+"""What a generated schema-v3 release contains, as figures and one JSON.
 
 `validate` says a release is well formed and `audit` says every cell depicts
 something. Neither says what the DISTRIBUTIONS look like, and the distributions
@@ -11,7 +11,7 @@ Every one of those questions has been answered by eye at some point in this
 project, and eye-answers have been wrong every time -- a "varied" sampler with
 three constants in it, a severity ladder whose bins were V-shaped, thirty-four
 clips whose severity was zero. So they get plotted, once per release, from the
-shipped `metadata.json` files and nothing else.
+shipped `sample.json` files and nothing else.
 
     python -m physloc.cli stats out/physloc_v0
 
@@ -20,11 +20,8 @@ numbers behind them -- so a regression can be diffed rather than squinted at,
 and so the dataset card can quote them without re-deriving anything. `generate`
 writes them at the end of every run and `export` ships them with the release.
 
-**Reads `metadata.json` and nothing else** on a current release -- no arrays, no
-renders -- so it runs in seconds over a full release and can be re-run after
-any annotation change. The one exception is a clip generated before the
-difficulty label existed: `load` back-fills it, and reads that clip's masks to
-do so.
+**Reads `sample.json` and nothing else** -- no dense arrays or renders -- so it
+runs in seconds over a full release and can be re-run after metadata changes.
 
 The look follows benchmark reports (IntPhys 2, LikePhys and the like) rather
 than a dashboard: part-to-whole as labelled donuts, distributions as histograms,
@@ -91,47 +88,50 @@ FIGURES: Tuple[Tuple[str, str], ...] = (
 
 
 # ------------------------------------------------------------------- reading
-def _array(path: str):
-    """One array out of an `.npz`, or None. The files here hold exactly one."""
-    if not os.path.exists(path):
-        return None
-    import numpy as np
-
-    with np.load(path) as z:
-        keys = list(z.keys())
-        return z[keys[0]] if keys else None
-
-
-def _violation_mask(cdir: str):
-    """The clip's violation mask, or None when it has no v2 annotations."""
-    from .. import loader
-
-    clip = loader.Clip.from_dir(cdir)
-    return clip.violation_mask if clip.has(loader.MASKS) else None
-
-
 def load(root: str) -> List[Dict[str, object]]:
-    """Every clip's `metadata.json` under a release root.
-
-    BACK-FILLS `difficulty` when a clip predates it, so this works on runs
-    generated before the label existed -- of which there are several on disk,
-    and they are the corpus the thresholds were fitted to. The masks are read
-    only in that case, and only when they are sitting beside the metadata;
-    a current release carries the label already and this touches no arrays.
-    """
+    """Return every sample as the compact report record expected below."""
     from ..annotate import layout
 
     out = []
     for path in layout.find(root):
-        with open(path) as fh:
-            meta = json.load(fh)
-        if meta.get("violation") and not meta.get("difficulty"):
-            cdir = os.path.dirname(path)
-            meta["difficulty"] = D.assess(
-                meta,
-                _violation_mask(cdir),
-                _array(os.path.join(cdir, layout.SEGMENTATIONS)))
-        out.append(meta)
+        document = layout.read(os.path.dirname(path))
+        info = document["metadata"]["sample_info"]
+        scene = document["metadata"]["scene"]["info"]
+        world = document["metadata"]["scene"]["world"]
+        counts = world.get("objects_summary") or {}
+        annotations = document.get("annotations") or {}
+        summary = annotations.get("violation_summary")
+        record = {
+            "metadata": {
+                "sample_uid": info.get("sample_uid"),
+                "pair_uid": info.get("pair_uid"),
+                "label": info.get("label"),
+                "release": info.get("dataset_version"),
+                "seed": info.get("seed"),
+                "variant": info.get("variant"),
+                "num_frames": info.get("num_frames"),
+                "frame_rate": info.get("fps"),
+                "resolution": info.get("resolution"),
+                "scenario": scene.get("type"),
+                "family": scene.get("family"),
+                "domain": scene.get("domain"),
+                "physics_medium": scene.get("physics_medium"),
+                "condition": scene.get("condition"),
+                "complexity": {"name": scene.get("complexity")},
+                "n_actors": counts.get("n_actors", counts.get("n_subjects", 0)),
+                "n_distractors": counts.get("n_distractors", counts.get("n_context", 0)),
+                "n_violators": counts.get("n_violators", 0),
+            },
+            "camera": world.get("camera") or {},
+            "violation": summary,
+            "difficulty": scene.get("difficulty_analysis"),
+        }
+        # Early schema-v3 samples retained the label but accidentally dropped
+        # the measured factor block. All inputs needed to reproduce it remain
+        # in sample.json, so reports repair those samples without opening HDF5.
+        if summary and not record["difficulty"]:
+            record["difficulty"] = D.assess(record)
+        out.append(record)
     return out
 
 
@@ -158,10 +158,8 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         for m in invalid)
     diff = Counter(str((m.get("difficulty") or {}).get("level") or "unlabelled")
                    for m in invalid)
-    # Through `canonical`: a clip labelled before three factors were renamed
-    # carries `footprint`, `clutter` and `camera`, and counts under the new names.
     binding = Counter(
-        D.canonical(name) for m in invalid
+        name for m in invalid
         for name in ((m.get("difficulty") or {}).get("binding_factors") or ()))
 
     # Difficulty against the complexity level -- the grid the difficulty module
@@ -173,8 +171,7 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
 
     factors: Dict[str, List[float]] = {f.name: [] for f in D.FACTORS}
     for m in invalid:
-        got = {D.canonical(k): v for k, v in
-               ((m.get("difficulty") or {}).get("factors") or {}).items()}
+        got = (m.get("difficulty") or {}).get("factors") or {}
         for name in factors:
             v = (got.get(name) or {}).get("value")
             if v is not None:
@@ -226,7 +223,7 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         declared = {}
 
     return {
-        "clips": len(metas), "invalid": len(invalid), "valid": len(valid),
+        "samples": len(metas), "invalid": len(invalid), "valid": len(valid),
         "levels": dict(levels), "conditions": dict(conditions),
         "declared_condition_shares": declared,
         "severity_bins": dict(bins), "difficulty": dict(diff),
@@ -638,20 +635,20 @@ def _fig_overview(plt, s, path) -> None:
     """Part-to-whole of the release along its four declared axes."""
     fig = plt.figure(figsize=(17, 5.8))
     _heading(fig, "Overview",
-             "%d clips  |  %d with a violation  |  %d lawful twins  |  "
+             "%d samples  |  %d with a violation  |  %d lawful twins  |  "
              "%d scenarios  |  %d families"
-             % (s["clips"], s["invalid"], s["valid"],
+             % (s["samples"], s["invalid"], s["valid"],
                 len(s.get("scenarios") or {}), len(s.get("families") or {})))
     gs = fig.add_gridspec(1, 4, left=0.01, right=0.99, top=0.8, bottom=0.2,
                           wspace=0.12)
 
     ax = fig.add_subplot(gs[0, 0])
-    _panel_title(ax, "Complexity level", "all clips; scene realism L0 -> L3")
+    _panel_title(ax, "Complexity level", "all samples; scene realism L0 -> L3")
     lv = [k for k in LEVELS if k in s["levels"]] + sorted(
         k for k in s["levels"] if k not in LEVELS)
     _donut(ax, lv, [s["levels"][k] for k in lv],
            [ORDINAL4[LEVELS.index(k)] if k in LEVELS else NEUTRAL for k in lv],
-           "%d" % s["clips"], "clips", legend_cols=4)
+           "%d" % s["samples"], "samples", legend_cols=4)
 
     ax = fig.add_subplot(gs[0, 1])
     declared = s.get("declared_condition_shares") or {}
@@ -660,18 +657,18 @@ def _fig_overview(plt, s, path) -> None:
         c for c in s["conditions"] if c not in known)
     total = max(1, sum(s["conditions"].values()))
     _panel_title(ax, "Difficulty condition",
-                 "all clips; the legend compares with the declared share")
+                 "all samples; the legend compares with the declared share")
     _donut(ax, conds, [s["conditions"][c] for c in conds],
            [CATEGORICAL[known.index(c) % len(CATEGORICAL)] if c in known
             else NEUTRAL for c in conds],
-           "%d" % total, "clips",
+           "%d" % total, "samples",
            legend_labels=["%s %d%% (declared %d%%)"
                           % (c, round(100 * s["conditions"][c] / total),
                              round(100 * declared.get(c, 0))) for c in conds],
            legend_cols=2)
 
     ax = fig.add_subplot(gs[0, 2])
-    _panel_title(ax, "Severity bin", "violated clips; the magnitude we asked for")
+    _panel_title(ax, "Severity bin", "violated samples; requested magnitude")
     bins = s.get("severity_bins") or {}
     names = [b for b in BINS if b in bins] + sorted(b for b in bins if b not in BINS)
     _donut(ax, names, [bins[b] for b in names],

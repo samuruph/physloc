@@ -59,19 +59,18 @@ bash scripts/run.sh review_severity                       # generate, validate, 
 `run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
 tiled into one video.
 
-Load a release **the way a user gets it** — downloaded from the Hub and read through the
-`loader.py` that ships inside it — and check every annotation by eye:
+Load a dataset — either downloaded from the Hub, exported locally, or still in
+the generator output directory — and check every annotation by eye:
 
 ```bash
 python test_dataset_loader.py                               # downloads samueleruf/physloc-mini into data/hub
 python test_dataset_loader.py --repo <owner>/physloc-review_severity
-python test_dataset_loader.py --gui                          # browser viewer, http://localhost:8765
-python test_dataset_loader.py --render 0 --layers violation,reference,bbox3d
-python test_dataset_loader.py out/review_severity --generated   # a local run, before exporting it
+python test_dataset_loader.py out/review_severity
+python test_dataset_loader.py out/review_severity --gui       # browser viewer, http://localhost:8765
+python test_dataset_loader.py out/review_severity --render 0 --layers violation,reference,bbox3d
 ```
 
-From Python, `PhysLocDataset("<downloaded release>")` in the shipped `loader.py` (the same file as
-[`physloc/loader.py`](physloc/loader.py)) gives every clip and pair — see
+From Python, [`physloc/loader.py`](physloc/loader.py) gives every sample and pair — see
 [Loading the dataset](#loading-the-dataset).
 
 To generate the full dataset, see [Running the full release](#running-the-full-release).
@@ -100,115 +99,201 @@ One valid twin is shared by every family and severity staged on that scene.
 
 ### Layout on disk
 
+PhysLoc has one public representation: schema v3.
+
+```text
+<root>/
+├── dataset.json
+├── schema.json
+├── index.parquet
+├── splits/
+└── samples/<sample_uid>/
+    ├── sample.json
+    ├── rgb.mp4
+    └── data.h5
 ```
-<run>/clips/<release>/<level>/<scenario>/<seed>_<condition>/
-    valid/                       the lawful twin, shared by every family and severity
-    invalid_<family>_<bin>/      one clip per cell per severity bin
-```
 
-Every clip directory holds the same files, except that only an invalid clip carries annotations.
-The layout follows Kubric's
-[MOVi](https://github.com/google-research/kubric/tree/main/challenges/movi#annotations-and-format)
-datasets — same file and key names — with PhysLoc's annotations added beside them.
+RGB stays as a standalone H.264 MP4. `sample.json` is the readable manifest:
+identity, taxonomy, scene/world settings, object definitions, events, causal
+relations, provenance, and violation descriptions. Dense numeric tensors live
+in one chunked, gzip-compressed, Fletcher32-protected HDF5 file per sample.
 
-| file | shape | contents |
-|---|---|---|
-| `video.mp4` | `uint8 [T,H,W,3]` | the RGB video |
-| `metadata.json` | | everything about the clip (below) |
-| `segmentations.npz` | `uint16 [T,H,W]` | instance ids, `0` = background — stable across frames, so each id is an object track |
-| `instances.npz` | `[k,T,…]` | per object, per frame: `positions`, `quaternions`, `velocities`, `bboxes_3d`, `bboxes`, `image_positions`, `visibility` |
-| `depth` · `forward_flow` · `backward_flow` · `normal` · `object_coordinates` | `[T,H,W,C]` | geometry passes, one `.npz` each |
-| `traj` · `bodies` · `energy` · `energy_map` | | the simulator trajectory, physical quantities, mechanical energy |
-| **`masks.npz`** *(invalid)* | `[T,H,W]` | `violation` uint16 — **where**: `0`, or the instance id of the violating object · `causal` uint8 — `1` a violator, `2` a body it affected · `causal_source` uint16 — which violator |
-| **`objects.npz`** *(invalid)* | `[K,T]` | per violating object, per frame: `severity` — **how badly**, in `[0,1]` · `active`, `intervening`, `consequence`, `observable`, `occluded` — **when** · `residual`, `score` — the raw physical residual and its `[0,1]` scaling |
-| `overlay.mp4` | | every annotation drawn on the video, for review |
+The main HDF5 groups are `/observations`, `/objects`, `/energy`, and
+`/violations`. Stable positive object IDs join segmentation, trajectories,
+energy, events, causal relations, and violation maps; ID 0 is background.
+Every object is classified as `subject`, `context`, `support`, or
+`background`. Floors and scenery are therefore excluded from the default
+analysis view, while all violators are subjects.
 
-`T,H,W` is `25,128,128` at the debug tier and `89,512,512` at the release tier. `k` is the number
-of objects in the scene and `K` the number of violating objects; both vary from clip to clip.
+Energy has an explicit release-wide accounting policy. The physics total
+includes every eligible dynamic subject, distractor/context object, affected
+object, and peer even while occluded; floors, backdrops, supports, barriers,
+walls, occluders, and renderer helpers are excluded. A separate
+`energy_in_frame` curve sums only eligible objects visible in segmentation and
+is the primary overlay curve. Both scopes, plus the per-object tensor and
+object-ID axis, are declared in `dataset.json.dataset_metadata.energy_accounting`.
 
-**Everything else is derived, not stored.** [`physloc/loader.py`](physloc/loader.py) computes it on
-load, and its functions are the definition:
+Shadows are optical observations, not physical objects. Cycles renders them
+from an internal camera-hidden caster; only the real actor is exported.
+`shadow_strength` and `shadow_source_id` support soft shadow localisation,
+and shadow violations map to the actor with component `shadow`.
 
-| annotation | shape | derived as |
-|---|---|---|
-| `violation_mask` | `bool [T,H,W]` | `violation > 0` — the localisation target, unioned over both twins so a vanished body keeps its pixels |
-| `visible_violation` | `bool [T,H,W]` | the part of `violation_mask` where the violator is rendered in *this* video |
-| `severity_map` | `float32 [T,H,W]` | each violator's `severity[k,t]` painted over its visible pixels — over its lawful footprint once it has vanished |
-| `reference_mask` | `bool [T,H,W]` | the violators' pixels in the valid twin: where they should be |
-| `timeline` | `[T]` | the per-object clocks OR-ed over violators (`occluded` is the primary violator's); `severity` is the per-frame max |
-| `latent_grid` | `[F,h,w]` | mask and severity reduced to the video-VAE token grid, `F = (T−1)/4 + 1` |
-| `divergence` | `float32 [T,H,W]` | `|valid − invalid|` — for inspection only, never a target |
-
-`metadata.json` keeps MOVi's four blocks and adds PhysLoc's:
-
-| block | what is in it |
-|---|---|
-| `metadata` | who the clip is: `label`, `scenario`, `family`, `condition`, `complexity`, `frame_rate`, `num_frames`, `resolution`, ... |
-| `camera` | `K` (normalised), `focal_length`, `positions` and `quaternions` per frame |
-| `instances` | one record per object: `id`, `name`, `role`, `asset_id`, `license`, `mass`, `is_violator`, ... — row `i` matches row `i` of `instances.npz` |
-| `events` | `collisions`: frame, the two instance ids, force, position |
-| `violation` | **when and what**: `t_event_frame`, `violation_windows`, `intervention`, `severity_bin`, and `violators` — one entry per violating object with its own moment and windows |
-| `difficulty`, `energy`, `provenance`, `files` | detection difficulty, energy summary, integrity checks, and every array's shape |
-
-The full field reference is [docs/schema.md](docs/schema.md).
+The complete field, dtype, axis, unit, violation, energy, shadow, and validation
+reference is [docs/schema.md](docs/schema.md).
 
 ### Loading the dataset
 
-One form on disk and one reader. A generator run and a downloaded release have the same layout —
-`clips/<release>/<level>/<scenario>/<seed>_<condition>/<clip>/`, one plain folder per clip — and
-[`physloc/loader.py`](physloc/loader.py) reads both. It needs only numpy (plus imageio or OpenCV to
-decode video) and imports nothing from `physloc`, and every export ships a copy as `loader.py`, so
-any other repository reads a download with the loader that came with it:
+The generator, exporter, loader, visualiser, and GUI all consume the same
+schema-v3 sample tree:
 
 ```python
-import sys; sys.path.insert(0, "data/physloc-mini")      # a downloaded release
-from loader import PhysLocDataset, FIELDS, collate        # or: from physloc.loader import ...
+from physloc.loader import (
+    PhysLocDataset, LOCALIZATION_FIELDS, ENERGY_FIELDS, collate
+)
 
-ds = PhysLocDataset("data/physloc-mini", label="invalid", family="permanence",
-                    fields=("video", "violation_mask", "severity_map", "objects"))
-item = ds[0]                 # {"uid", "pair_uid", "label", + the fields asked for}
-item["video"]                # uint8   [T,H,W,3]
-item["violation_mask"]       # bool    [T,H,W]   where
-item["severity_map"]         # float32 [T,H,W]   how badly
-item["objects"]["severity"]  # float32 [K,T]     per violating object
+dataset = PhysLocDataset("data/physloc", fields=LOCALIZATION_FIELDS)
+sample = dataset.samples[0]             # one lazy Sample
+same = dataset.get(sample.uid)
 
-scenes = PhysLocDataset("data/physloc-mini", unit="pair", fields=("video_path",))
-scenes[0]["valid"], scenes[0]["invalid"]          # one scene: its valid clip, every invalid one
+sample.video_path                       # RGB is not decoded
+rgb = sample.decode_rgb()               # explicit uint8 [T,H,W,3]
+sample.objects("subjects")              # default analysis actors
+sample.objects("violators")
+sample.objects("affected")
+sample.object(2)                         # static + temporal + energy + violation
+sample.spatial_mask("violators")        # bool [T,H,W]
 
-clip = ds.clips[0]           # everything, lazily, from one clip
-clip.timeline["active"]      # bool [T]  when
-clip.metadata["violation"]["violators"]           # each violator's moment and windows
+pairs = PhysLocDataset("data/physloc", unit="pair")
+pair = pairs[0]                          # valid Sample + invalid Samples
 
-batch = collate([ds[i] for i in range(8)])        # stacks arrays, pads objects to the largest K
+batch = collate(dataset.samples[:8])     # pads N and returns object_valid
 ```
 
-- **`fields`** picks what an item carries — any of `sorted(FIELDS)`: the video (`video`, or
-  `video_path` for a player), the stored and derived annotations, `instances`, `camera`,
-  `trajectory`, `energy`, the dense passes, `metadata`, `path_info`. It is checked when the dataset
-  is built, and a field whose file a download skipped fails naming that file. Default: `video`,
-  `violation_mask`, `severity_map`, `causal`, `timeline`, `objects`, `metadata`.
-- **Filters** — `release`, `label`, `family`, `scenario`, `level`, `condition`, `severity_bin`,
-  `seed`, each a value or a collection — are read from the path, so indexing opens no file.
-  `split="main"` reads an exported release's `splits/`.
-- **`unit="pair"`** makes an item a scene: filters then choose the invalid clips, the valid clip is
-  always kept, and scenes with nothing left are dropped. This is what LikePhys-style evaluation
-  wants.
-- `torch_dataset(ds)` wraps it for a `DataLoader` (`collate_fn=collate`).
+Loader samples have the same logical shape as the files, with small metadata in
+`sample.json` and dense arrays read lazily from `data.h5`:
 
-To check a dataset by eye:
+```text
+sample
+├── metadata
+│   ├── sample_info
+│   └── scene
+│       ├── info
+│       └── world
+├── observations
+└── annotations
+    ├── objects
+    ├── scene_energy
+    ├── maps
+    ├── events
+    ├── causal_relations
+    └── violation_summary
+```
+
+Below, `T` is frames, `H,W` are image size, and `N` is the number of exported
+objects. A review sample such as `out_old1/review_conditions_f37` uses
+`T=37`, `H=W=128`; release tiers may be larger.
+
+```text
+sample
+├── metadata
+│   ├── sample_info
+│   │   ├── sample_uid, pair_uid, valid_sample_uid, label
+│   │   ├── schema_version, dataset_version, split
+│   │   ├── seed, render_seed, variant, generation_config_id
+│   │   ├── num_frames=T, fps, duration_seconds, resolution=[H,W]
+│   │   ├── latent_frames, latent_hw, size_scale, framing_attempt
+│   │   └── provenance
+│   └── scene
+│       ├── info
+│       │   ├── level, complexity, condition, difficulty
+│       │   ├── type/scenario, family, domain, physics_medium
+│       │   ├── severity, label, variant, prompt
+│       │   └── difficulty_analysis
+│       └── world
+│           ├── camera: intrinsics, extrinsics/projection, trajectory
+│           ├── environment: background, HDRI, lights, floor/support datum
+│           ├── physics: gravity, timestep, substeps, solver settings, units
+│           └── objects_summary: counts by role, group, violator, affected
+├── observations
+│   ├── rgb_path: path to rgb.mp4; decode explicitly with sample.decode_rgb()
+│   ├── rgb: uint8 [T,H,W,3], only when decoded
+│   ├── segmentation: uint16 [T,H,W], object IDs, 0 = background
+│   ├── depth: float32 [T,H,W,1], metres
+│   ├── forward_flow, backward_flow: float32 [T,H,W,2], row/col pixels
+│   ├── normal: [T,H,W,3]
+│   ├── object_coordinates: [T,H,W,3]
+│   ├── shadow_strength: float16 [T,H,W], optional true-shadow strength
+│   └── shadow_source_id: uint16 [T,H,W], optional real actor casting shadow
+└── annotations
+    ├── objects
+    │   ├── definitions: N dicts with id, name, category, role, asset,
+    │   │   analysis_group, static_fields, temporal refs, energy refs
+    │   ├── static_fields: mass, dimensions, inertia/material/friction,
+    │   │   restitution, scales, static/scripted/collidable/visibility flags
+    │   ├── ids: int32 [N], stable object axis shared by all arrays
+    │   ├── analysis_group: list[N] of subject/context/support/background
+    │   ├── positions: float32 [N,T,3], metres
+    │   ├── quaternions: float32 [N,T,4], w,x,y,z
+    │   ├── velocities, angular_velocities: float32 [N,T,3]
+    │   ├── bboxes: float32 [N,T,4]
+    │   ├── bboxes_3d: float32 [N,T,8,3]
+    │   ├── image_positions: float32 [N,T,2]
+    │   ├── visibility: int32 [N,T]
+    │   ├── is_violator: bool [N]
+    │   ├── active/intervening/consequence/observable/occluded/affected:
+    │   │   bool [N,T]
+    │   └── severity/residual/score: float32 [N,T]
+    ├── scene_energy
+    │   ├── total: float32 [T], eligible physical objects, visible or not
+    │   ├── energy_in_frame: float32 [T], visible eligible objects
+    │   ├── kinetic_translational, kinetic_rotational: float32 [T]
+    │   └── residual/anomaly curves, such as excess_loss and contact_anomaly
+    ├── object_energy
+    │   ├── by_body: float32 [N,T], per-object total energy
+    │   ├── kinetic, potential: float [N,T]
+    │   └── momentum, angular_momentum: float [N,T,3]
+    ├── maps
+    │   ├── violation_object_id: uint16 [T,H,W], responsible object ID
+    │   ├── violation_component: uint8 [T,H,W], body/shadow/trajectory/etc.
+    │   ├── causal_level: uint8 [T,H,W], causal/affected level
+    │   ├── causal_source_id: uint16 [T,H,W], source violator object ID
+    │   └── severity: float16 [T,H,W], optional stored severity map
+    ├── events: collisions, occlusions, energy spikes, custom events
+    ├── causal_relations: sparse source/target object edges with intervals
+    └── violation_summary: invalid-only type, intervals, intervention,
+        responsible objects, affected objects, difficulty inputs
+```
+
+The convenience methods keep common analysis paths short:
+
+| call | returns |
+|---|---|
+| `sample.object(object_id)` | one object's static fields plus `temporal`, `energy`, and `violation` arrays |
+| `sample.objects("subjects")` | experiment-relevant actors; floor/background/support objects are excluded |
+| `sample.objects("violators")` | responsible violator objects only |
+| `sample.objects("affected")` | objects affected by a violation, including non-violators |
+| `sample.spatial_mask("subjects")` | `bool [T,H,W]` mask for selected analysis group |
+| `sample.visible_violation` | visible component-aware violation mask |
+| `sample.reference_mask` | valid-twin footprint of the violators, when a twin is available |
+| `sample.timeline` | unioned per-frame clocks over violators, plus max severity |
+| `sample.latent_grid()` | violation mask and severity reduced to the video-token grid |
+| `sample.divergence` | RGB difference from the valid twin, for inspection only |
+
+HDF5 handles open lazily per process, so multi-worker loading is safe. Field
+presets cover metadata, localisation, object localisation, energy, and
+visualisation. Derived masks, timelines, severity maps, latent grids, and
+valid/invalid divergence are computed lazily rather than stored as redundant
+videos.
+
+To inspect the same API visually:
 
 ```bash
-python test_dataset_loader.py out/physloc_mini            # what is in it, every array's shape
-python test_dataset_loader.py out/physloc_mini --gui      # browser viewer, http://localhost:8765
+python test_dataset_loader.py out/physloc_mini
+python test_dataset_loader.py out/physloc_mini --gui
 python test_dataset_loader.py out/physloc_mini --render 3 \
-    --layers violation,reference,bbox3d,labels --panels rgb,valid,segmentation,depth,camera
+  --layers violation,reference,bbox3d,labels \
+  --panels rgb,valid,segmentation,depth,camera
 ```
-
-Both draw the same things: **layers** on the RGB video — `violation`, `visible`, `severity`,
-`causal`, `reference`, `bbox2d`, `bbox3d`, `centers`, `velocity`, `labels`, `events` — and **panels**
-beside it — `valid`, `segmentation`, `depth`, `flow`, `backward_flow`, `normal`,
-`object_coordinates`, `energy`, `mask`, `severity`, `causal`, `divergence`, `camera` — above a
-timeline of every clock with one row per violating object.
 
 ### Before you train on it
 
@@ -221,9 +306,9 @@ timeline of every clock with one row per violating object.
 - **Severity needs a visible body.** Once a body has vanished (`permanence`, `dissolve`) its
   severity is painted on its lawful footprint; a body that is merely hidden — behind a screen,
   under the floor — scores zero. `reference_mask` carries where it should have been.
-- **Encodings that bite:** depth's background is a ~`1e10` sentinel, so mask with
-  `segmentations > 0`; flow is `(row, col)`, not `(x, y)`; `instances.npz` is object-first
-  `[k,T]` while `traj.npz` is time-first `[T,B]`.
+- **Encodings that bite:** mask depth with `segmentation > 0`; flow is
+  `(row, col)`, not `(x, y)`; all per-object HDF5 tensors use the stable
+  object-first axis `[N,T,...]`.
 
 ### How much is generated
 
@@ -367,7 +452,7 @@ a layout, and the two conditions are never combined.
 **Camera motion** is `track` (40%, slides with the aim held), `orbit` (40%, fixed radius) or
 `dolly` (20%) — never a pan, which would make *did the object move or did the camera?*
 unanswerable. Under a moving camera `flow` and `depth` include camera motion; per-frame
-camera poses and intrinsics ship in `metadata.json`.
+camera poses and intrinsics ship in `sample.json`.
 
 ---
 
@@ -378,10 +463,11 @@ out. A clip with eight distractors whose violator fills a quarter of the frame i
 `standard` clip whose two-frame violation happens behind a screen is. `difficulty` is to
 `condition` what `peak_severity` is to `magnitude`.
 
-Every **invalid** clip carries one label (a valid twin has nothing to detect):
+Every **invalid** sample carries one label (a valid twin has nothing to detect)
+under `metadata.scene.info.difficulty_analysis`:
 
 ```json
-"difficulty": {
+"difficulty_analysis": {
   "level": "hard", "rank": 2,
   "binding_factors": ["violation_area"],
   "factors": {"violation_area": {"value": 0.0041, "level": "hard"},
@@ -403,7 +489,7 @@ Every **invalid** clip carries one label (a valid twin has nothing to detect):
 | `camera_motion` | how far does the camera move? | path length / standoff | &le; 0.02 | &le; 0.2 | &gt; 0.2 |
 <!-- /physloc:difficulty -->
 
-A clip is `easy` only when it is easy on **every** factor (KITTI's construction, not a weighted
+A sample is `easy` only when it is easy on **every** factor (KITTI's construction, not a weighted
 score):
 
 - **It says why** — `binding_factors` names the factors that set the label.
@@ -437,24 +523,20 @@ between two balls, `fission`) name both bodies of a single event and are 15% of 
 
 A `multi` clip whose violators are one large obvious body, one small one and one behind a screen
 is not described by any single word, so every violator carries its own label under
-`violation.violators[k].difficulty`, measured on **its** mask, **its** occlusion, **its**
+`annotations.violation_summary.violators[k].difficulty`, measured on **its** mask, **its** occlusion, **its**
 observable window and **its** residual — which is what an object detector is scored against.
 `object_count` and `violators` are left out of it: they count what is in the scene, which is a
 property of the clip and not of any one body in it.
 
-```python
-df[df.difficulty_rank <= 1]                        # the "moderate" evaluation set
-df[df.difficulty == "hard"].binding_factors         # and what made them hard
-```
+The scalar label is searchable as `index.parquet:difficulty`; the per-factor
+measurements and `binding_factors` remain in `sample.json`. Release-wide counts,
+zones, thresholds, and label-setting factors are consolidated under
+`dataset.json:dataset_metadata.difficulty_analysis`.
 
 **Not factors, on purpose:** the complexity level (its own axis — report
 `difficulty × complexity` as a grid, which `physloc stats` plots), the family and scenario, and
 `magnitude` (the knob; `severity` is its measurement). `pour`'s grains count as **one** body for
 `object_count` and `violators`, unless a family targets a genuine subset of them.
-
-Three factors were renamed to say what they measure — `footprint` is now `violation_area`,
-`clutter` is `object_count` (every actor, peer and distractor in the scene), and `camera` is
-`camera_motion`. Clips and configs written under the old names still read.
 
 ### Thresholds
 
@@ -476,7 +558,7 @@ python scripts/fit_difficulty.py out/review_conditions out/review_severity
 ```
 
 > **Freeze them once you publish.** A benchmark whose labels move between releases cannot be
-> compared with itself. The resolved values are recorded in every `metadata.json`; changing them is a
+> compared with itself. The resolved values are recorded in every `sample.json`; changing them is a
 > new release, not a bug fix.
 
 ---
@@ -532,32 +614,33 @@ annotations at that point.
 
 ### The index
 
-`index.parquet` has one row per clip, with the video embedded so it plays in the HuggingFace
-viewer:
+`index.parquet` has one row per sample. It keeps relative paths to the MP4 and
+HDF5 payloads instead of embedding duplicate bytes:
 
 ```python
 import pandas as pd
 df = pd.read_parquet("index.parquet")
 
-df.groupby(["domain", "severity_bin"]).peak_severity.mean()
+df.groupby(["domain", "severity"]).size()
 df.groupby("condition").size()                       # standard / camera / multi / ...
 df[df.complexity == "L3"].groupby("family").size()
-df[df.n_violators > 1]                                # the multi-object clips
+df[df.n_violators > 1]                                # multi-object samples
 df.groupby(["complexity", "difficulty"]).size()      # the grid worth reporting
-df[df.difficulty == "hard"].binding_factors.str.split(",").explode().value_counts()
 ```
 
 | group | columns |
 |---|---|
-| identity | `clip_uid`, `pair_uid`, `twin_uid`, `label`, `split` |
-| taxonomy | `scenario`, `family`, `domain`, `medium` |
-| violation | `severity_bin`, `magnitude`, `peak_severity`, `t_event_frame`, `violation_windows`, `observability_lag` |
-| difficulty | `difficulty`, `difficulty_rank`, `binding_factors` |
-| scene | `complexity`, `condition`, `camera_motion`, `n_distractors`, `n_actors`, `n_violators`, `violator_timing`, `actor_shape`, `actor_material`, `actor_mass` |
-| geometry | `tier`, `num_frames`, `frame_rate`, `seed`, `variant` |
-| media | `video`, `overlay` (embedded mp4) |
+| identity | `sample_uid`, `pair_uid`, `valid_sample_uid`, `label`, `split` |
+| taxonomy | `scenario`, `family`, `domain`, `physics_medium` |
+| violation | `severity`, `n_violators` |
+| difficulty | `difficulty`, `complexity` |
+| scene | `condition`, `n_distractors`, `n_actors`, `n_violators`, `prompt` |
+| geometry | `num_frames`, `fps`, `resolution`, `seed`, `variant` |
+| storage | `sample_path`, `rgb_path`, `data_path` (relative paths) |
 
-Group by `difficulty`; filter by `difficulty_rank`.
+Group by `difficulty` in the index. For the complete measured distribution,
+zone counts, thresholds, and the factors that set each label, read
+`dataset.json["dataset_metadata"]["difficulty_analysis"]`.
 
 ### Evaluating
 
@@ -632,7 +715,7 @@ bash scripts/run_reviews.sh --frames 37   # every config at full clip length, in
 export PHYSLOC_PUSH_OWNER=<user>          # optional: each run lands on the hub as physloc-<config>
 ```
 
-Each run leaves everything worth looking at beside its clips:
+Each run leaves everything worth looking at beside its samples:
 
 ```
 out/<config>/
@@ -647,9 +730,9 @@ out/logs/<config>.txt     what that run printed
 
 `compare` draws at most `PHYSLOC_COMPARE_LIMIT` videos per kind (default 12 per run, 20 across the
 sweep), spread over the scenarios, because every eligible cell is hundreds of videos on a full
-review. It renders nothing new — it reads finished clips.
+review. It renders nothing new — it reads finished samples.
 
-`stats` checks the run came out in the shape it declares; it reads only `metadata.json`, so it takes
+`stats` checks the run came out in the shape it declares; it reads only `sample.json`, so it takes
 seconds over a full release. **`generate` writes it at the end of every run and `export` ships it
 with the release**, where the dataset card shows every figure:
 
@@ -669,7 +752,7 @@ has two cuts, which make three zones; a clip's label is its WORST zone. So a cli
 when every factor is easy, and one hard factor makes it hard. `4_difficulty.png` prints every
 cut and whether it was fitted to the review corpus or chosen from what the quantity means.
 
-`viz` re-reads finished clips — nothing is rendered again — and names its videos so the sort
+`viz` re-reads finished samples — nothing is rendered again — and names its videos so the sort
 order is the reading order:
 
 ```
@@ -688,9 +771,9 @@ out/review_L0/compare/           (or --outdir)
   conditions/drop__solidity.mp4    standard | camera | distractors | multi | camera+multi
 ```
 
-Each tile is the invalid clip with its violation mask and timeline; a missing tile says "not
+Each tile is the invalid sample with its violation mask and timeline; a missing tile says "not
 generated". `--scenario drop --family solidity` draws one cell; `--limit N` draws N cells per kind
-spread over the scenarios. It reads finished clips only, at a few seconds per video.
+spread over the scenarios. It reads finished samples only, at a few seconds per video.
 
 ### Overriding a config
 
@@ -776,7 +859,7 @@ python -m physloc.cli params --config v0_mini   # ...for one run
 | `difficulty` | the detection-difficulty thresholds |
 
 Every layer is validated, so a typo is an error rather than a silently ignored value. The resolved
-values are written to `params.json` and recorded in every `metadata.json`.
+values are written to `params.json` and recorded in every `sample.json`.
 
 ---
 
@@ -833,8 +916,8 @@ python -m physloc.cli taxonomy --config v0_release
   tail -f out/physloc_v0/progress.log
   ```
 
-- **Videos appear as clips finish.** Each clip is annotated — masks, `metadata.json`, `video.mp4`,
-  `overlay.mp4` — the moment its render lands in `out/physloc_v0/clips/`, so the first ones show
+- **Samples appear as renders finish.** Each result is consolidated as
+  `sample.json`, `rgb.mp4`, and `data.h5` under `out/physloc_v0/samples/`, so the first ones show
   up within the first hour, not when a whole job ends. Until then,
   `out/work_v0/<level>/<scenario>/<seed>/_scratch/images/` holds the frames of each clip in
   progress.
@@ -955,24 +1038,99 @@ per job, the render-setting experiments, and how prices are computed — is in
 
 ---
 
-## Publishing
+## Publishing to Hugging Face
+
+Generation already writes the canonical schema-v3 tree. Publishing is a
+validation, packaging, inspection, and upload sequence.
+
+### 1. Validate the generated dataset
 
 ```bash
-python -m physloc.cli export out/physloc_v0 --push-to <user>/physloc
+conda activate physloc
+
+python -m physloc.cli validate out/review_conditions_f37
+python -m physloc.cli stats out/review_conditions_f37
 ```
 
-Packaging always happens; **uploading only when asked**. `run.sh` does both when
-`PHYSLOC_PUSH_TO` is set (`PHYSLOC_PUSH_PRIVATE=1` for a private repository), or set
-`PHYSLOC_PUSH_OWNER` once and every run publishes as `<owner>/physloc-<run>`. A push replaces the
-card and index at that repository id. What lands: the dataset card, `index.parquet` with inline
-video, `taxonomy.json`, `stats/`, `splits/`, `LICENSE`, `loader.py` and `clips/` — the clip
-folders in the layout above (`--with-passes` adds the dense passes to them). A consumer can download
-a subset, e.g. only videos: `hf download <repo> --repo-type dataset --include "*.py" --include
-"*.txt" --include "*/metadata.json" --include "*/video.mp4"`. About nine files per clip, and the Hub
-advises under 100k files per repository, so publish a release past ~10k clips in parts (one per
-level).
+Validation must report `"ok": true`. The stats command writes the six review
+figures and `stats/stats.json`. At the end of generation, PhysLoc also writes
+`dataset.json`, `schema.json`, `index.parquet`, and `splits/` directly
+into the generated root.
 
----
+### 2. Build a clean publication directory
+
+```bash
+python -m physloc.cli export out/review_conditions_f37 \
+  --outdir out/review_conditions_f37_hf \
+  --license CC-BY-4.0
+```
+
+The source and destination must differ. The exported directory contains the
+complete dataset card, licence, global metadata, JSON Schema, Parquet index,
+split lists, standalone loader, and every `sample.json`, `rgb.mp4`, and
+`data.h5`.
+
+### 3. Inspect the packaged dataset locally
+
+```bash
+python test_dataset_loader.py out/review_conditions_f37_hf
+python test_dataset_loader.py out/review_conditions_f37_hf --gui --port 8765
+```
+
+### 4. Authenticate once
+
+```bash
+hf auth login
+```
+
+Use a Hugging Face write token. Authentication is handled by the current
+`hf` CLI; do not use the deprecated `huggingface-cli`.
+
+### 5. Upload
+
+The one-command PhysLoc route packages and uploads:
+
+```bash
+python -m physloc.cli export out/review_conditions_f37 \
+  --outdir out/review_conditions_f37_hf \
+  --license CC-BY-4.0 \
+  --push-to YOUR_USERNAME/physloc-review-conditions
+```
+
+Add `--private` to create a private dataset repository:
+
+```bash
+python -m physloc.cli export out/review_conditions_f37 \
+  --outdir out/review_conditions_f37_hf \
+  --push-to YOUR_USERNAME/physloc-review-conditions \
+  --private
+```
+
+Or upload an already-packaged directory directly:
+
+```bash
+hf upload YOUR_USERNAME/physloc-review-conditions \
+  out/review_conditions_f37_hf . \
+  --type dataset \
+  --commit-message "Publish PhysLoc schema v3"
+```
+
+### 6. Download and verify
+
+```bash
+hf download YOUR_USERNAME/physloc-review-conditions \
+  --repo-type dataset \
+  --local-dir data/physloc-review-conditions
+
+python test_dataset_loader.py data/physloc-review-conditions
+python -m physloc.cli validate data/physloc-review-conditions
+```
+
+The Parquet index stores relative paths only; MP4 and HDF5 bytes are not
+duplicated inside it. For a metadata-only inspection, download
+`dataset.json`, `schema.json`, `index.parquet`, `splits/**`, and
+`samples/**/sample.json`. Full localisation or energy experiments also need
+the corresponding `data.h5`; RGB experiments need `rgb.mp4`.
 
 ## Development
 
@@ -1016,7 +1174,7 @@ physloc/injectors/    the violation families, one file per domain
 physloc/render/       the container worker, and probes for render cost
 physloc/sim/          trajectories and the simulation seam
 physloc/residuals/    the physical residuals severity is measured from
-physloc/annotate/     residuals -> masks, severity, clocks, difficulty, metadata.json
+physloc/annotate/     residuals -> masks, severity, clocks, and schema-v3 samples
 physloc/loader.py     reads a release and derives every annotation (numpy only)
 physloc/release/      export, splits, dataset card
 physloc/viz/          the overlay renderer, browser viewer, grids, sheets; every mp4
@@ -1024,7 +1182,7 @@ test_dataset_loader.py  load a dataset, print its structure, look at it
 physloc/cli.py        the `physloc` command line
 configs/              common.yaml and one file per run
 scripts/              run.sh, run_fast.sh, probes and refresh tools
-docs/schema.md        the clip layout and metadata.json reference
+docs/schema.md        the sample layout, fields, axes, units, and loader contract
 docs/performance.md   how cost and performance were measured
 docs/PLAN.md          the design document
 docs/roadmap.md       what is next

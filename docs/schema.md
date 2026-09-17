@@ -1,283 +1,253 @@
-# PhysLoc clip layout — `metadata.json` and the arrays beside it
+# PhysLoc dataset schema
 
-The human reference for one released clip. `physloc validate` enforces the cross-checks at the
-bottom. The annotation *design* — why each field exists — is [PLAN.md](PLAN.md) Part 3.
+PhysLoc has one dataset format: schema version 3. Generation, export, loading,
+validation, visualisation, and the browser GUI all use this format directly.
+There is no v2 reader or compatibility mode.
 
-**Schema version: 2.** Version 0 was a flat `meta.json` with PhysLoc-only file names. Version 1
-followed Kubric's **MOVi** datasets
-([`refs/kubric/challenges/movi/README.md`](../refs/kubric/challenges/movi/README.md)) wherever MOVi
-has a name for a thing, and shipped eleven annotation files per invalid clip. Version 2 keeps the
-MOVi layout and stores only the two annotation files that cannot be derived; everything else is
-computed by [`physloc/loader.py`](../physloc/loader.py). File names live in
-`physloc/annotate/layout.py`.
+## Directory layout
 
-## One clip directory
-
-`clips/<release>/<level>/<scenario>/<seed>_<condition>/{valid | invalid_<family>_<bin>}/`
-
-| file | MOVi | valid | invalid | contents |
-|---|---|---|---|---|
-| `metadata.json` | ✓ | ✓ | ✓ | everything below |
-| `video.mp4` | ✓ (`video`) | ✓ | ✓ | RGB, `uint8 [T,H,W,3]` once decoded |
-| `segmentations.npz` | ✓ | ✓ | ✓ | `segmentations` uint16 `[T,H,W]`, declared instance ids, **0 = background** |
-| `depth.npz` | ✓ | ✓ | ✓ | `depth` float32 `[T,H,W,1]`, metres from the camera centre |
-| `forward_flow.npz` | ✓ | ✓ | ✓ | `forward_flow` float32 `[T,H,W,2]`, pixels, `(row, col)`, `t → t+1` |
-| `backward_flow.npz` | ✓ | ✓ | ✓ | `backward_flow` float32 `[T,H,W,2]`, pixels, `(row, col)`, `t → t-1` |
-| `normal.npz` | ✓ | ✓ | ✓ | `normal` uint16 `[T,H,W,3]`, `0..65535` maps to `-1..1` |
-| `object_coordinates.npz` | ✓ | ✓ | ✓ | `object_coordinates` uint16 `[T,H,W,3]` |
-| `instances.npz` | ✓ (`instances[*]` tensors) | ✓ | ✓ | per-instance, per-frame arrays — see below |
-| `traj.npz` | | ✓ | ✓ | the simulator trajectory (the seam file) |
-| `bodies.npz`, `energy.npz`, `energy_map.npz` | | ✓ | ✓ | physical quantities and mechanical energy |
-| **`masks.npz`** | | | ✓ | the dense annotations — see below |
-| **`objects.npz`** | | | ✓ | the per-violator table — see below |
-| `overlay.mp4` | | | optional | review video, `viz.overlay` |
-
-MOVi's raw data (`rgba`, `data_ranges.json`) is not shipped: depth and flow are stored as float32
-in real units, so no range table is needed.
-
-`T,H,W` is `25,128,128` at the debug tier and `89,512,512` at the release tier; `metadata`
-records `num_frames`, `resolution`, `latent_frames` and `latent_hw`.
-
-## `masks.npz` — invalid clips only
-
-| key | dtype | shape | |
-|---|---|---|---|
-| `violation` | uint16 | `[T,H,W]` | `0`, or the instance id of the violator whose footprint covers the pixel in **either** twin; the invalid-side footprint wins where two overlap |
-| `causal` | uint8 | `[T,H,W]` | `0` nothing, `1` a violator, `2` a body it affected — invalid side only |
-| `causal_source` | uint16 | `[T,H,W]` | the violator each `causal` pixel belongs to; non-zero exactly where `causal` is |
-
-`violation[t]` is, per violator, `footprint(invalid, t) ∪ footprint(valid, t)`, gated to that
-violator's own active **and** observable frames. Only *dynamic* violators contribute; a static
-participant (the floor a ball sinks through) appears in `causal` level 2 instead. `causal` level
-2 is measured: bodies whose trajectory provably departs from the valid twin *and* that a violator
-reached at or after its moment, gated on the consequence window unioned with the frames where
-behaviour still differs.
-
-## `objects.npz` — invalid clips only
-
-`K` violators, in the order of `metadata.violation.violators`.
-
-| key | dtype | shape | |
-|---|---|---|---|
-| `ids` | int32 | `[K]` | violator instance ids |
-| `severity` | float32 | `[K,T]` | how badly, in `[0,1]`: `score`, restricted to the frames where the violation is scored **and** visible (see *Three clocks*) |
-| `active` | bool | `[K,T]` | the violator's `violation_windows`, rasterised |
-| `intervening` | bool | `[K,T]` | its `intervention_windows` — something is being changed |
-| `consequence` | bool | `[K,T]` | its `consequence_windows` — the scene differs as a result |
-| `observable` | bool | `[K,T]` | a viewer could tell the twins apart on this body |
-| `occluded` | bool | `[K,T]` | the body has no pixels in the invalid render |
-| `residual` | float32 | `[K,T]` | the family's physical-law residual `r` on this body, in its own units (`violation.peak_residual.law`) |
-| `score` | float32 | `[K,T]` | `r` on `[0,1]`: `clip((r − μ) / (r_strong − μ), 0, 1)`, with `μ`, `σ` and `r_strong` in `metadata.noise_floor` |
-
-The z-score is `(residual − mu) / sigma_eff` from the same block, and is not stored.
-
-## Derived by the loader
-
-These are what v1 stored; v2 derives them, and `physloc/loader.py` is their definition. Each
-matched the v1 file exactly on all 372 invalid clips on disk when v2 was introduced.
-
-| annotation | shape | derived as |
-|---|---|---|
-| `violation_mask` | `bool [T,H,W]` | `violation > 0` — **the training target**; the only mask with pixels for a vanished body |
-| `visible_violation` | `bool [T,H,W]` | `(violation > 0) & (segmentations == violation)` — where the wrong thing is, in the video a model sees (v1 `mask_invalid`) |
-| `severity_map` | `float32 [T,H,W]` | `severity[k,t]` painted on violator k's visible pixels; on a frame where k has none, on `violation == k` (its lawful footprint once it vanished) |
-| `reference_mask` | `bool [T,H,W]` | `isin(valid twin's segmentations, objects.ids)` — where the violators should be, ungated in time |
-| `timeline` | `[T]` | `active`, `intervening`, `consequence`, `observable`: any over violators; `occluded`: the primary violator's row; `severity`: max over violators |
-| `latent_grid` | `[F,h,w]` | masks by max and severity by max and mean over `4x` temporal bins (`latent 0 ← frame 0`, `latent i ← frames 4i−3..4i`) and exact spatial blocks; time-major |
-| `divergence` | `float32 [T,H,W]` | `|valid − invalid|` over RGB, in `[0,1]`. Diverges everywhere downstream of the event. **Never a training target.** |
-
-A valid clip has no violation: the loader returns correctly shaped zeros and `K = 0`.
-
-## `metadata.json`
-
-```json
-{
-  "metadata":    { "schema_version": 2, "clip_uid": "...", "label": "invalid", ... },
-  "camera":      { "focal_length": 50.0, "sensor_width": 36.0, "K": [[...]], "positions": [...], ... },
-  "instances":   [ { "id": 2, "name": "ball", "asset_id": "sphere", "mass": 1.0, ... } ],
-  "events":      { "collisions": [ { "instances": [1, 2], "frame": 9, "force": 12.3, ... } ] },
-  "segmentation": { "encoding": "instance", "background_id": 0, "id_to_name": {...} },
-  "violation":   { "t_event_frame": 7, "violator_timing": "independent", "violators": [...], ... },
-  "difficulty":  { "level": "moderate", "rank": 1, ... },
-  "energy":      { "E0": ..., ... },
-  "noise_floor": { "position_continuity": {...} },
-  "provenance":  { "prefix_identical_verified": true, ... },
-  "real2sim":    null,
-  "files":       { "masks.npz": {"arrays": {"violation": {"dtype": "uint16", "shape": [25, 128, 128]}, ...}}, ... }
-}
+```text
+dataset-root/
+├── README.md
+├── LICENSE
+├── dataset.json
+├── schema.json
+├── index.parquet                 # index.jsonl only when PyArrow is unavailable
+├── splits/
+│   ├── main.txt
+│   ├── held_out.txt
+│   └── debug.txt
+└── samples/
+    └── <sample_uid>/
+        ├── sample.json
+        ├── rgb.mp4
+        └── data.h5
 ```
 
-### `metadata` — identity, taxonomy, geometry
+`sample_uid` may contain path components. All stored paths are relative to the
+dataset root. RGB remains a normal H.264 MP4, making it streamable and easy to
+inspect. Numeric annotations are consolidated into one chunked HDF5 file per
+sample; there is no collection of small NPZ files.
 
-| field | notes |
-|---|---|
-| `schema_version` | `2`. Check it before trusting anything else. |
-| `clip_uid`, `pair_uid`, `twin_uid` | `twin_uid` is null on a valid clip, which is shared by every family on its scene. **Never split a pair across splits.** |
-| `label` | `valid` \| `invalid` |
-| `tier`, `release` | geometry (`debug` / `release`) and what the published dataset is called |
-| `latent_frames`, `latent_hw` | the token grid `loader.Clip.latent_grid` reduces to by default |
-| `domain`, `family` | null on a valid clip |
-| `scenario`, `seed`, `variant`, `condition` | `condition` is one of `standard`, `camera`, `distractors`, `multi`, `camera+multi` |
-| `n_distractors`, `n_actors`, `n_violators` | what landed in the scene |
-| `physics_medium` | `rigid` \| `granular` (`pour`). Never `fluid`. |
-| `complexity` | the realism level block (`L0`..`L3`) |
-| `params` | every generation knob in force |
-| `size_scale` | the per-scene size multiplier (`params.objects.size_scale`); absent on `pour` |
-| `framing_attempt` | which resampled scene this is when earlier draws let the actors leave the frame (0 = the seed's first scene) |
-| `background` | `hdri_id` (L2+) and the flat background `color` |
-| `intphys2_category`, `likephys_domain` | cross-references |
-| `frame_rate`, `num_frames`, `resolution`, `step_rate`, `gravity` | MOVi's geometry fields |
-| `prompt` | caption of the clip's *valid* physics |
-| `controls` | `is_surprising_but_valid`, `is_artifact_probe` |
+## Dataset metadata and index
 
-### `camera` — MOVi's, plus the aim point
+`dataset.json.dataset_metadata` records the dataset version, schema version,
+sample and pair counts, split definitions and distributions, complexity
+distribution, scenario/family/domain taxonomy, units, coordinate convention,
+generation configuration IDs, analysis groups, violation-component codes,
+shadow threshold, licence, checksum policy, `difficulty_analysis`, and the
+explicit `energy_accounting` policy.
 
-| field | notes |
-|---|---|
-| `focal_length`, `sensor_width` | mm; Kubric's defaults, 50 and 36 |
-| `field_of_view` | horizontal, degrees |
-| `K` | 3×3, Kubric's **normalised** intrinsics (`PerspectiveCamera.intrinsics`); projects to `(x, y)` in `[0,1]`, y down |
-| `positions` | `[s,3]` world, per frame |
-| `quaternions` | `[s,4]` `(w,x,y,z)`, camera-to-world, looking down −Z (`look_at_quat`) |
-| `motion` | `static`, `track`, `orbit` or `dolly` |
-| `look_at` | the aim point, fixed for the whole clip |
-| `position`, `end_position` | where a moving camera starts and ends |
+`difficulty_analysis` is the authoritative release-wide difficulty report. It
+contains the invalid-sample count, easy/moderate/hard distribution, labels by
+complexity, the factors that set labels, all factor thresholds, and—for each
+factor—count, zone counts, min, p05, median, mean, p95, and max. The full
+per-sample measurement remains in
+`sample.json:metadata.scene.info.difficulty_analysis`; its scalar label is
+`metadata.scene.info.difficulty`.
 
-The eye is always at least 0.6 m above the floor (`base.CAMERA_MIN_HEIGHT`).
+`energy_accounting` distinguishes the physics-wide `world_total` from the
+camera-grounded `visible_scene_total` and records the per-object tensor and its
+object-ID axis. Dynamic subjects, distractors/context, affected objects, and
+peers contribute. Floors, backdrops, supports, barriers, walls, occluders, and
+renderer-only shadow casters do not. This policy is stored in the release—not
+left as an implicit visualizer convention.
 
-### `instances` — one record per body, in `spec.bodies` order
+`index.parquet` has one row per sample. It contains searchable scalar values:
+sample, pair, and valid-reference IDs; split and label; scenario taxonomy;
+condition, complexity, difficulty, and severity; seed and variant; frame
+geometry; object counts; prompt; generation configuration; and relative paths
+to the sample directory, `rgb.mp4`, and `data.h5`. Video bytes are never
+duplicated in Parquet.
 
-`id` (= `track_id`, the pixel value in `segmentations`), `name`, `category`, `asset_id`,
-`source`, **`license`** (mandatory), `held_out`, `material`, `color`, `role`, `scale`,
-`static`, `dormant`, `collides`, `mass`, `friction`, `restitution`, `is_violator`,
-`violator_index` (position in `violation.causal_body_ids`), `bbox_frames`, `first_frame`,
-`last_frame`, `frames_visible`, `pixels_peak`.
+Split assignment is deterministic, stratified by scenario, and performed on
+`pair_uid`, so a valid sample and its invalid siblings cannot cross a split.
 
-**Not re-sorted by visibility, unlike MOVi**: the valid and invalid twins must agree on who is
-who. Row `i` of `instances` is row `i` of every array in `instances.npz`.
+## `sample.json`
 
-`role`: `actor` (a family may target it), `floor`, `prop`, `occluder`, `distractor` (scenery no
-family targets), `shadow` (the scripted stand-in on `shadow_track`, carrying no energy),
-`backdrop` (the HDRI dome at L2–L3, which covers the floor, so there the floor has no pixels).
+```text
+sample
+├── metadata
+│   ├── sample_info
+│   └── scene
+│       ├── info
+│       └── world
+├── observations
+├── annotations
+│   ├── objects
+│   ├── scene_energy
+│   ├── maps
+│   ├── events
+│   ├── causal_relations
+│   └── violation_summary       # invalid samples only
+└── storage
+```
 
-### `instances.npz` — MOVi's per-frame instance tensors
+### `metadata.sample_info`
 
-| key | shape | |
-|---|---|---|
-| `ids` | `[k]` | the instance ids, in order |
-| `positions`, `quaternions` | `[k,s,3]`, `[k,s,4]` | world; `(w,x,y,z)` |
-| `velocities`, `angular_velocities` | `[k,s,3]` | |
-| `bboxes_3d` | `[k,s,8,3]` | world corners, Kubric's corner order (`product(x, y, z)`), following any resize |
-| `image_positions` | `[k,s,2]` | `(x, y)` in `[0,1]`, y down (`Camera.project_point`) |
-| `bboxes` | `[k,s,4]` | `(ymin, xmin, ymax, xmax)` in `[0,1]` from the segmentation; **NaN** where not visible |
-| `visibility` | `[k,s]` | pixels per frame |
+Required fields are `sample_uid`, `pair_uid`, `valid_sample_uid`, `label`,
+`num_frames`, `fps`, and `resolution`. It also records schema and dataset
+versions, split, seed and render seed, variant, generation-config ID,
+provenance, duration, latent dimensions, framing attempt, and scene scale.
 
-A body that vanished keeps a pose here; `traj.npz` `present` says whether it exists.
+A valid sample points `valid_sample_uid` to itself. Every invalid sample points
+to the valid sample for its pair.
 
-### `events.collisions`
+### `metadata.scene`
 
-One record per **(frame, pair of bodies)**: `instances` `[a, b]` (instance ids, not indices),
-`frame`, `force` (largest over the frame's contact rows), `position` (force-weighted mean),
-`image_position`, `contact_normal`. The trajectory stores a row per solver substep and contact
-point; the events group them.
+`scene.info` contains level, scenario type, family, domain, physics medium,
+condition, complexity, difficulty, severity, label, variant, and prompt.
 
-### `violation` — null on valid clips
+`scene.world` contains:
 
-| field | notes |
-|---|---|
-| `kind` | `instant` \| `sustained` \| `repeated` |
-| `t_event_frame` | the **earliest** violator's moment; the law breaks in simulator state |
-| `t_observable_frame`, `observability_lag_frames` | first frame with visual evidence, and the lag |
-| `t_end_frame`, `t_intervention_end_frame`, `t_consequence_end_frame` | ends of the three window families |
-| `violation_windows`, `intervention_windows`, `consequence_windows`, `observable_windows` | lists of inclusive `[s, e]`; the clip's are the union over violators |
-| `occluded_at_event` | whether the primary violator was hidden |
-| `causal_body_ids` | instance ids; `[0]` is the primary violator the residual is scored on |
-| `spatial_extent` | `global` for `global_gravity` only |
-| `intervention` | `type`, `params`, `magnitude`, `magnitude_unit`, `severity_bin` |
-| `peak_residual` | `law`, `value`, `z_vs_valid`, `score`, `frame` |
-| **`violator_timing`** | `independent`, `sync` or `shared` — see below |
-| **`violators`** | one record per dynamic violator, below; row `k` of `objects.npz` |
-| `difficulty_inputs` | the two array-derived difficulty values |
+- `camera`: intrinsics, projection information, coordinate convention, and the
+  complete per-frame camera trajectory.
+- `environment`: background, HDRI, lights, and floor/support datum.
+- `physics`: gravity, timestep, step rate, substeps, solver and generation
+  settings, and units.
+- `objects_summary`: counts by analysis group, actor/distractor status,
+  violator status, and affected status.
 
-**Each violator on its own clock.** In a `multi` clip whose family acts on each body separately,
-every violator gets its own moment: `violator_timing: "independent"`. A quarter of such clips
-(`params.objects.multi_sync_share`) deliberately give all violators one moment: `"sync"`.
-Scene-wide families, granular media and families that act on a pair together are `"shared"`.
+### Objects and analysis groups
 
-Each `violators[]` record: `instance_id`, `t_event_frame`, `t_observable_frame`,
-`observability_lag_frames`, `violation_windows`, `intervention_windows`,
-`consequence_windows`, `observable_windows`, `occluded_at_event`,
-`frames_visible_after_event`, `magnitude`, `peak_residual`, `peak_severity`,
-`affected_instance_ids` (level-2 bodies this violator reached first).
+Background pixel ID `0` is reserved and is not an object row. Every exported
+object has one positive stable `id`, shared across valid/invalid siblings and
+used by segmentation, trajectories, energy, events, violations, and causal
+relations.
 
-**When events happen.** Absent a physical cue, a moment is drawn per (scene, family, violator)
-from 15–70% of the clip, never per severity bin, leaving at least 35% of the clip (0.8 s) for
-the effect. Families about motion fire only before their actor comes to rest. The worker
-rejects a moment after which the violators leave the shot and tries another; a scene whose
-actors leave the frame early is resampled before anything renders.
+Each object definition contains identity (`id`, name, category, role), an asset
+record (source and licence), `analysis_group`, `static_fields`, and row
+references into the temporal, energy, and violation HDF5 groups.
 
-**Why windows are lists.** `superelastic` fires once per bounce; an object can appear, re-hide
-and re-emerge; staggered violators leave gaps. `t_event_frame` / `t_end_frame` are the min and
-max across windows.
+The four analysis groups are:
 
-**Three clocks.** `intervention_windows` is when we are actively changing something;
-`consequence_windows` is when the scene differs as a result (and may run past the evidence);
-`violation_windows` is **where the evidence is** — the intervention window for a family whose
-evidence is the change itself (`detectable == "event"`), the consequence window otherwise. So
-`intervention_windows ⊆ violation_windows`. `severity` is scored on the same window.
+- `subject`: experiment-relevant actors; every violator must be a subject.
+- `context`: distractors and other potentially relevant dynamic context.
+- `support`: floors, ramps, tables, barriers, and passive receiving geometry.
+- `background`: exported scenery that is not normally analysed.
 
-`magnitude` is the knob turned (exact); `peak_residual.value` is the measured consequence.
+The loader defaults to subjects and exposes named object and spatial masks for
+subjects, contexts, supports, violators, affected objects, and all objects.
 
-### `segmentation`, `difficulty`, `energy`, `noise_floor`, `provenance`, `files`
+## `data.h5`
 
-- `segmentation`: `encoding`, `dtype`, `background_id`, `ids_are_declared`, `id_to_name`.
-- `difficulty` (invalid only): `level`, `rank`, `binding_factors`, `factors` — seven factors,
-  worst one wins; thresholds in `configs/common.yaml`, frozen per release.
-- `energy`: `E0`, `E_end`, dissipation and the three anomaly peaks, as fractions of `E0`.
-- `noise_floor`: per law, `mu`, `sigma`, `sigma_eff`, `n_samples` and `r_strong` — the
-  calibration `objects.score` was computed with.
-- `provenance`: `generator_commit`, `kubric_image_digest`, `blender_version`, `render_seed`,
-  `prefix_identical_verified` (**measured** pixel by pixel over `[0, t_event)`),
-  `prefix_differing_pixels`, `prefix_identical_upto_frame`.
-- `files`: every file beside the metadata, with each array's key, dtype and shape.
+Arrays carry `axes`, `units` where applicable, and a documented fill value.
+Non-scalar arrays use shuffle, gzip level 4, and Fletcher32. Image tensors are
+chunked by frame; object trajectories are chunked by object and time.
 
-## `traj.npz`, `bodies.npz`, `energy.npz`
+```text
+/observations
+  segmentation              uint16 [T,H,W], background = 0
+  depth                     float  [T,H,W] or [T,H,W,1], metres
+  forward_flow              float  [T,H,W,2], pixels
+  backward_flow             float  [T,H,W,2], pixels
+  normal                    float  [T,H,W,3]
+  object_coordinates        float  [T,H,W,3]
+  shadow_strength           float16[T,H,W], optional
+  shadow_source_id          uint16 [T,H,W], optional
 
-- `traj.npz`: the seam, **time-major** — `pos [T,B,3]`, `quat`, `lin_vel`, `ang_vel`, `present`,
-  `scale_mul`, `colour`, `opacity`, contacts, `fps`, `gravity`, and the spec as JSON.
-- `bodies.npz`: the quantities the energy was computed from; `mass [T,B]` follows volume.
-- `energy.npz` / `energy_map.npz`: the trace and the per-pixel map. See [energy.md](energy.md).
+/objects
+  ids                       int32  [N]
+  positions                 float  [N,T,3], metres
+  quaternions               float  [N,T,4], w,x,y,z
+  velocities                float  [N,T,3], metres/second
+  angular_velocities        float  [N,T,3], radians/second
+  bboxes                    float  [N,T,4]
+  bboxes_3d                 float  [N,T,8,3]
+  image_positions           float  [N,T,2]
+  visibility                int    [N,T]
 
-**Encodings that bite:** depth's background is a sentinel (~`1.1e10`), so mask with
-`segmentations > 0`; flow is `(row, col)`, not `(x, y)`; `instances.npz` is instance-major
-`[k,T]` while `traj.npz` is time-major `[T,B]`.
+/energy/scene               scene time series and residuals
+/energy/objects             per-object kinetic, potential, momentum, etc. [N,T,...]
+/energy/map                 float [T,H,W]
 
-## Cross-checks enforced by `physloc validate`
+/violations/objects
+  is_violator               bool  [N]
+  active                    bool  [N,T]
+  intervening               bool  [N,T]
+  consequence              bool  [N,T]
+  observable                bool  [N,T]
+  occluded                  bool  [N,T]
+  affected                  bool  [N,T]
+  severity                  float [N,T]
+  residual                  float [N,T]
+  score                     float [N,T]
 
-Checks on annotations read through the loader, so they validate what a consumer receives.
+/violations/maps
+  violation_object_id       uint16[T,H,W]
+  violation_component       uint8 [T,H,W]
+  causal_level              uint8 [T,H,W]
+  causal_source_id          uint16[T,H,W]
+  severity                  float16[T,H,W]
+```
 
-0. `metadata.schema_version == 2`
-1. every instance carries a non-empty `license` (both twins)
-2. `t_event_frame ≤ t_observable_frame` and `t_event_frame ≤ t_end_frame`
-3. `violation_windows` sorted, non-overlapping, within `[0, num_frames)`; `t_event_frame` and
-   `t_end_frame` equal their extremes
-4. the clip timeline's `active` is exactly the rasterisation of `violation_windows`; likewise
-   `observable`
-5. `violation_mask` is non-empty on every `active ∧ observable` frame, and empty on
-   `active ∧ ¬observable` frames
-6. `severity_map` has no pixels outside `violation_mask`
-7. every `causal_body_id` is an instance; `newton3_reaction` has ≥ 2
-8. `spatial_extent == "global"` iff `family == "global_gravity"`
-9. `domain` matches `family`; `(scenario, family)` is in the compatibility matrix;
-   `physics_medium == "granular"` iff `scenario == "pour"`
-10. `intervention_windows ⊆ violation_windows`; an invalid clip has `masks.npz` and `objects.npz`
-11. `provenance.prefix_identical_verified` is true
-12. `violation` is null iff `label == "valid"`
-13. every pair has one valid and at least one invalid clip
-14. each violator is a causal body, with `t_event ≤ t_observable` and in-range windows; the
-    earliest violator's moment is the clip's
-15. `masks.npz` `violation` and `causal_source` name only violators; `causal_source` covers
-    exactly `causal`
-16. `instances.npz` has `k` rows in instance order and `num_frames` columns
-17. `objects.npz` `ids` are `violation.violators` in order, every `[K,T]` array has that shape,
-    `severity` lies in `[0,1]`, and every `masks.npz` array is `[T,H,W]` like `segmentations`
+Violation component codes are `0 none`, `1 body`, `2 shadow`, `3 trajectory`,
+`4 interaction`, and `5 energy`. This explicitly permits a violation footprint
+to differ from visible body segmentation.
+
+## Per-object violations and causality
+
+An invalid sample's `violation_summary` describes the violation type,
+intervention, global intervals, first observable frame, peak, and its list of
+violators. Every violator record names its responsible `instance_id`, target
+component, severity, active/intervention/consequence/observable intervals, and
+affected object IDs. The dense `[N,T]` tensors make per-object temporal
+experiments direct; non-violators retain zero rows. The spatial maps make
+selected-object and union localisation direct.
+
+`causal_relations` stores source and target object IDs, relation type,
+intervals, and confidence. An affected non-violator is therefore distinct from
+the responsible object.
+
+Valid samples contain all ordinary observations, objects, trajectories,
+events, and energy, omit `violation_summary`, and carry zero violation tensors.
+
+## Shadows
+
+A shadow is an optical observation, never a physical object. The renderer uses
+a camera-hidden Cycles caster associated with the real actor. That internal
+caster is excluded from public objects, segmentation, bounding boxes, physics,
+and energy.
+
+For shadow experiments, a matched Cycles render isolates continuous
+`shadow_strength`; `shadow_source_id` names the real actor. The dataset-wide
+binary threshold is `shadow_strength > 1/255`. Shadow violation pixels use the
+actor's ID in `violation_object_id` and component code `shadow`; they need not
+match the support object's segmentation. Metadata records the actor, light,
+receivers, render method, and threshold.
+
+## Loader contract
+
+```python
+from physloc.loader import PhysLocDataset
+
+dataset = PhysLocDataset("/path/to/dataset")
+sample = dataset.samples[0]
+same = dataset.get(sample.uid)
+
+sample.video_path                 # no decoding
+rgb = sample.decode_rgb()         # explicit decoding
+sample.objects("subjects")
+sample.objects("violators")
+sample.objects("affected")
+sample.object(2)
+sample.spatial_mask("subjects")
+```
+
+HDF5 files open lazily with process-local handles, making worker processes safe.
+Field presets support metadata, localisation, object localisation, energy, and
+visualisation. Batch collation pads the object dimension and returns
+`object_valid`. Pair access is an explicit dataset view based on `pair_uid` and
+`valid_sample_uid`.
+
+The visualiser and GUI consume this same `Sample` interface. They never open
+HDF5 directly. Overlays are derived in memory; redundant overlay videos are
+not part of a published dataset.
+
+## Validation rules
+
+`physloc validate` checks the version, required fields, safe paths, required
+files, axes and shapes, dtypes, IDs, HDF5 references, pair membership, stable
+object order, segmentation ownership, causal references, analysis groups, and
+shadow invariants. Any old layout fails with a clear “no schema-v3 samples”
+error; it is not interpreted or migrated implicitly.

@@ -1,4 +1,4 @@
-"""A browser viewer over the overlay renderer: browse clips, play them at their
+"""A browser viewer over the overlay renderer: browse samples, play them at their
 real frame rate, lay annotation panels beside the video, hover an object to
 read it.
 
@@ -49,7 +49,7 @@ SIZES = (128, 1024)
 def serve(root: str, port: int = 8765, host: str = "127.0.0.1") -> None:
     ds = loader.PhysLocDataset(root)
     if not len(ds):
-        raise SystemExit("no clips under %s" % root)
+        raise SystemExit("no samples under %s" % root)
     app = _App(ds, root)
 
     class Handler(BaseHTTPRequestHandler):
@@ -68,8 +68,8 @@ def serve(root: str, port: int = 8765, host: str = "127.0.0.1") -> None:
                     self._send(200, "text/html; charset=utf-8", PAGE.encode())
                 elif url.path == "/api/index":
                     self._json(app.index())
-                elif url.path == "/api/clip":
-                    self._json(app.clip(int(q["i"])))
+                elif url.path == "/api/sample":
+                    self._json(app.sample(int(q["i"])))
                 elif url.path == "/api/panel":
                     body = app.panel(int(q["i"]), int(q.get("t", 0)), q.get("p", "rgb"),
                                      _split(q.get("l")), int(q.get("s", overlay.PANEL)))
@@ -106,7 +106,7 @@ def serve(root: str, port: int = 8765, host: str = "127.0.0.1") -> None:
             self.wfile.write(body)
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print("PhysLoc viewer: %d clips from %s -> http://%s:%d  (Ctrl+C to stop)"
+    print("PhysLoc viewer: %d samples from %s -> http://%s:%d  (Ctrl+C to stop)"
           % (len(ds), root, "localhost" if host == "127.0.0.1" else host, port),
           flush=True)
     try:
@@ -149,44 +149,49 @@ class _App:
 
     # ---- JSON --------------------------------------------------------------
     def index(self) -> Dict[str, object]:
-        clips = [dict(self.ds.info(i), i=i, uid=c.uid) for i, c in enumerate(self.ds.clips)]
-        return {"clips": clips, "layers": overlay.LAYERS, "panels": overlay.PANELS,
+        samples = [dict(self.ds.info(i), i=i, uid=s.uid)
+                   for i, s in enumerate(self.ds.samples)]
+        return {"samples": samples, "layers": overlay.LAYERS, "panels": overlay.PANELS,
                 "token": self.token,
                 "root": os.path.basename(os.path.normpath(self.root))}
 
-    def clip(self, i: int) -> Dict[str, object]:
-        c = self.ds.clips[i]
+    def sample(self, i: int) -> Dict[str, object]:
+        c = self.ds.samples[i]
         r = self._renderer(i, (), 256)
-        meta, md = c.metadata, c.info
+        meta, md = c.display_metadata, c.info
         v = meta.get("violation") or {}
-        obj = c.objects
-        row = {int(iid): k for k, iid in enumerate(obj["ids"])}
+        obj = c.object_table
+        row = {int(iid): k for k, iid in enumerate(obj["ids"])
+               if bool(obj["is_violator"][k])}
         # A `multi` clip's violators differ -- one obvious, one behind a screen
         # -- so each carries its own easy / moderate / hard beside the clip's.
         own = {int(o.get("instance_id", -1)): (o.get("difficulty") or {})
                for o in (v.get("violators") or [])}
         static = {int(x["id"]): x for x in meta.get("instances", [])}
 
-        # Per-body energy, so an object's own trace sits beside its speed and
-        # severity: `by_body` is [T, bodies] against `body_ids`.
+        # Per-object energy is stored on the stable [N,T] object axis.
         energy: Dict[int, list] = {}
-        if c.has(loader.ENERGY):
-            e = c.energy
-            if "by_body" in e and "body_ids" in e:
+        if c.has("energy"):
+            e = c.object_energy
+            if "by_body" in e:
                 by = np.asarray(e["by_body"], np.float64)
-                energy = {int(b): _rounded(by[:, j], 4)
-                          for j, b in enumerate(e["body_ids"]) if j < by.shape[1]}
+                energy = {int(object_id): _rounded(by[j], 4)
+                          for j, object_id in enumerate(c.object_ids)
+                          if j < by.shape[0]}
 
         objects = []
-        if c.has(loader.INSTANCES):
+        if c.object_definitions:
             inst = c.instances
             for j, iid in enumerate(int(x) for x in inst["ids"]):
                 m = static.get(iid, {})
+                fields = m.get("static_fields") or {}
+                asset = m.get("asset") or {}
                 entry = {"id": iid, "name": m.get("name", str(iid)), "role": m.get("role"),
-                         "category": m.get("category"), "material": m.get("material"),
-                         "mass": m.get("mass"), "friction": m.get("friction"),
-                         "restitution": m.get("restitution"), "static": m.get("static"),
-                         "asset": m.get("asset_id"), "colour": _hex(r.colour(iid)),
+                         "analysis_group": m.get("analysis_group", "context"),
+                         "category": m.get("category"), "material": fields.get("material"),
+                         "mass": fields.get("mass"), "friction": fields.get("friction"),
+                         "restitution": fields.get("restitution"), "static": fields.get("static"),
+                         "asset": asset.get("id"), "colour": _hex(r.colour(iid)),
                          "violator": iid in row,
                          "pos": _rounded(inst["positions"][j]),
                          "vel": _rounded(inst["velocities"][j]),
@@ -223,7 +228,7 @@ class _App:
         with self.lock:
             r = self.renderers.get(key)
             if r is None:
-                r = overlay.Renderer(self.ds.clips[i], layers, ("rgb",), size)
+                r = overlay.Renderer(self.ds.samples[i], layers, ("rgb",), size)
                 self.renderers[key] = r
                 while len(self.renderers) > KEEP:
                     _, old = self.renderers.popitem(last=False)
@@ -253,7 +258,7 @@ class _App:
         return body
 
     def seg(self, i: int, t: int) -> Tuple[bytes, int, int, int]:
-        seg = self.ds.clips[i].segmentations
+        seg = self.ds.samples[i].segmentations
         t = max(0, min(t, len(seg) - 1))
         step = max(1, math.ceil(max(seg.shape[1:]) / SEG_MAX))
         a = np.asarray(seg[t, ::step, ::step])
@@ -423,14 +428,14 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
 </style></head><body>
 <aside id="left">
   <div class="brand"><span class="logo"></span>PhysLoc <small id="rootname"></small></div>
-  <div class="search"><input id="q" placeholder="Search clips   /" autocomplete="off" spellcheck="false"></div>
+  <div class="search"><input id="q" placeholder="Search samples   /" autocomplete="off" spellcheck="false"></div>
   <div class="filters" id="filters"></div>
   <div class="count"><span id="count"></span><button class="link" id="clear">Reset filters</button></div>
   <ul id="clips"></ul>
 </aside>
 <main>
   <div class="top">
-    <button class="icon" id="toggleLeft" title="Clip list  ( [ )"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
+    <button class="icon" id="toggleLeft" title="Sample list  ( [ )"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
     <div class="title"><h2 id="title">Loading...</h2><p id="prompt"></p><div class="siblings" id="siblings"></div></div>
     <button class="icon" id="helpBtn" title="Keyboard shortcuts  ( ? )">?</button>
     <button class="icon" id="toggleRight" title="Inspector  ( ] )"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M10 2.5v11"/></svg></button>
@@ -460,7 +465,7 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
   </div>
 </main>
 <aside id="right">
-  <div class="tabs"><button data-tab="view" class="on">View</button><button data-tab="clip">Clip</button><button data-tab="object">Objects</button></div>
+  <div class="tabs"><button data-tab="view" class="on">View</button><button data-tab="clip">Sample</button><button data-tab="object">Objects</button></div>
   <div class="pane on" id="pane-view"></div>
   <div class="pane" id="pane-clip"></div>
   <div class="pane" id="pane-object"></div>
@@ -472,12 +477,12 @@ kbd{font:11px ui-monospace,monospace;background:var(--panel2);border:1px solid v
   <div class="row"><span>Jump 10 frames</span><span><kbd>shift</kbd> + <kbd>&larr;</kbd> <kbd>&rarr;</kbd></span></div>
   <div class="row"><span>First / last frame</span><span><kbd>home</kbd> <kbd>end</kbd></span></div>
   <div class="row"><span>Jump to the violation</span><kbd>e</kbd></div>
-  <div class="row"><span>Previous / next clip</span><span><kbd>&uarr;</kbd> <kbd>&darr;</kbd></span></div>
-  <div class="row"><span>Valid twin &harr; last violated clip</span><kbd>t</kbd></div>
+  <div class="row"><span>Previous / next sample</span><span><kbd>&uarr;</kbd> <kbd>&darr;</kbd></span></div>
+  <div class="row"><span>Valid twin &harr; last violated sample</span><kbd>t</kbd></div>
   <div class="row"><span>Slower / faster</span><span><kbd>-</kbd> <kbd>+</kbd></span></div>
   <div class="row"><span>Loop</span><kbd>l</kbd></div>
   <div class="row"><span>Toggle violation mask</span><kbd>m</kbd></div>
-  <div class="row"><span>Clip list / inspector</span><span><kbd>[</kbd> <kbd>]</kbd></span></div>
+  <div class="row"><span>Sample list / inspector</span><span><kbd>[</kbd> <kbd>]</kbd></span></div>
   <div class="row"><span>Search</span><kbd>/</kbd></div>
   <div class="row"><span>Unpin object, close</span><kbd>esc</kbd></div>
 </div></div>
@@ -509,10 +514,11 @@ const ICON_PLAY = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2.
 const ICON_PAUSE = '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="2.8" width="3" height="10.4" rx="1"/><rect x="9.5" y="2.8" width="3" height="10.4" rx="1"/></svg>';
 
 const S = {
-  index: null, byUid: new Map(), shown: [], cur: -1, clip: null, clips: new Map(),
+  index: null, byUid: new Map(), shown: [], cur: -1, clip: null, sampleCache: new Map(),
   t: 0, playing: false, speed: 1, loop: true, acc: 0, last: 0, lastInvalid: -1,
   layers: ["violation", "reference"], panels: ["segmentation", "depth", "mask", "severity"], main: "rgb",
   quality: 0, mainSize: 512, tab: "view",
+  objectGroup: "subjects",
   mouse: null, hoverId: 0, pinned: 0, seg: new Map(), segDone: new Map(),
 };
 
@@ -583,7 +589,7 @@ function bufferState() {
 // ------------------------------------------------------------ boot
 async function boot() {
   S.index = await (await fetch("api/index")).json();
-  S.index.clips.forEach(c => S.byUid.set(c.uid, c.i));
+  S.index.samples.forEach(c => S.byUid.set(c.uid, c.i));
   $("#rootname").textContent = S.index.root;
   document.title = `${S.index.root} - PhysLoc Viewer`;
   buildFilters();
@@ -623,7 +629,7 @@ function buildFilters() {
   const box = $("#filters");
   for (const [f, label] of FILTERS) {
     const counts = {};
-    for (const c of S.index.clips) { const v = c[f] ?? "-"; counts[v] = (counts[v] || 0) + 1; }
+    for (const c of S.index.samples) { const v = c[f] ?? "-"; counts[v] = (counts[v] || 0) + 1; }
     const values = Object.keys(counts).sort();
     if (values.length < 2 && f !== "label") continue;
     const sel = document.createElement("select");
@@ -642,15 +648,15 @@ function buildFilters() {
 function list() {
   const want = FILTERS.map(([f]) => [f, $("#f_" + f)?.value || ""]).filter(([, v]) => v);
   const words = $("#q").value.toLowerCase().split(/\s+/).filter(Boolean);
-  S.shown = S.index.clips.filter(c =>
+  S.shown = S.index.samples.filter(c =>
     want.every(([f, v]) => String(c[f] ?? "-") === v) &&
     words.every(w => c.uid.toLowerCase().includes(w))).map(c => c.i);
-  $("#count").textContent = `${S.shown.length} of ${S.index.clips.length} clips`;
+  $("#count").textContent = `${S.shown.length} of ${S.index.samples.length} samples`;
   const ul = $("#clips");
   ul.innerHTML = "";
   const LIMIT = 400;
   for (const i of S.shown.slice(0, LIMIT)) {
-    const c = S.index.clips[i];
+    const c = S.index.samples[i];
     const li = document.createElement("li");
     li.dataset.i = i;
     if (i === S.cur) li.className = "on";
@@ -667,7 +673,7 @@ function list() {
     li.innerHTML = `<span></span><span class="more">+${S.shown.length - LIMIT} more &mdash; narrow the filters</span>`;
     ul.append(li);
   }
-  if (!S.shown.length) ul.innerHTML = `<div class="empty">No clip matches.</div>`;
+  if (!S.shown.length) ul.innerHTML = `<div class="empty">No sample matches.</div>`;
 }
 function markList() {
   document.querySelectorAll("#clips li").forEach(li => {
@@ -680,14 +686,14 @@ function markList() {
 // ------------------------------------------------------------ opening a clip
 async function openClip(i, t = 0) {
   if (i == null || i < 0) return;
-  let clip = S.clips.get(i);
+  let clip = S.sampleCache.get(i);
   if (!clip) {
     $("#title").textContent = "Loading...";
-    const r = await fetch("api/clip?i=" + i);
-    if (!r.ok) { $("#title").textContent = "Could not load clip: " + (await r.text()); return; }
+    const r = await fetch("api/sample?i=" + i);
+    if (!r.ok) { $("#title").textContent = "Could not load sample: " + (await r.text()); return; }
     clip = await r.json();
-    S.clips.set(i, clip);
-    if (S.clips.size > 12) S.clips.delete(S.clips.keys().next().value);
+    S.sampleCache.set(i, clip);
+    if (S.sampleCache.size > 12) S.sampleCache.delete(S.sampleCache.keys().next().value);
   }
   if (S.clip && S.clip.label === "invalid") S.lastInvalid = S.cur;
   S.cur = i; S.clip = clip;
@@ -709,7 +715,7 @@ function header() {
     (c.severity_bin ? `<span class="badge">${esc(c.severity_bin)}</span>` : "") +
     (d ? `<span class="badge ${d.level}" title="detection difficulty; set by ${esc((d.binding_factors || []).join(", "))}">${d.level}</span>` : "");
   $("#prompt").textContent = c.prompt || c.uid;
-  const pair = S.index.clips.filter(x => x.pair_uid === S.index.clips[S.cur].pair_uid);
+  const pair = S.index.samples.filter(x => x.pair_uid === S.index.samples[S.cur].pair_uid);
   const box = $("#siblings");
   box.innerHTML = pair.length > 1 ? `<span class="lab">same scene</span>` : "";
   for (const x of pair) {
@@ -1122,14 +1128,21 @@ function objectCard(rebuild) {
     } else {
       h += `<div class="hint" style="margin-top:12px">Hover the video to read an object; click it to pin it here.</div>`;
     }
-    const order = [...c.objects].sort((a, b) => (b.violator - a.violator) || a.id - b.id);
-    h += `<div class="group"><h5>In this clip (${order.length})</h5><div class="objlist">` +
+    const selected = c.objects.filter(x => S.objectGroup === "all" ||
+      (S.objectGroup === "subjects" && (x.analysis_group === "subject" || x.violator)) ||
+      x.analysis_group === S.objectGroup);
+    const order = [...selected].sort((a, b) => (b.violator - a.violator) || a.id - b.id);
+    h += `<div class="group"><h5>Objects (${order.length}) <select id="objectGroup">` +
+      [["subjects","Subjects + violators"],["context","Context"],["support","Support"],["background","Background"],["all","All"]]
+        .map(([v,n]) => `<option value="${v}"${S.objectGroup === v ? " selected" : ""}>${n}</option>`).join("") +
+      `</select></h5><div class="objlist">` +
       order.slice(0, 300).map(x => `<div class="obj${x.id === S.pinned ? " on" : ""}" data-obj="${x.id}"><span class="swatch" style="background:${x.colour}"></span>` +
         `${esc(pretty(x.name))} <span class="badge">#${x.id}</span>` +
         (x.difficulty ? `<span class="badge ${x.difficulty.level}">${x.difficulty.level}</span>` : "") +
         `<span class="role">${x.violator ? "violator" : esc(x.role || "")}</span></div>`).join("") + `</div></div>`;
     P.innerHTML = h;
     P.querySelectorAll("[data-obj]").forEach(b => b.onclick = () => pin(+b.dataset.obj));
+    $("#objectGroup")?.addEventListener("change", e => { S.objectGroup = e.target.value; objectCard(true); });
     $("#unpin")?.addEventListener("click", () => pin(S.pinned));
     P.querySelectorAll("[data-obj]").forEach(b => {
       b.onmouseenter = () => { if (!S.pinned) { S.hoverId = +b.dataset.obj; segFor(S.t).then(drawHover); } };
@@ -1220,10 +1233,10 @@ function wire() {
     }
     else if (k === "e" && S.clip.violation) { play(false); setT(Math.max(0, S.clip.violation.t_event_frame)); }
     else if (k === "t") {
-      const me = S.index.clips[S.cur];
-      if (me.label === "invalid") { const v = S.index.clips.find(x => x.pair_uid === me.pair_uid && x.label === "valid"); if (v) openClip(v.i, S.t); }
-      else if (S.lastInvalid >= 0 && S.index.clips[S.lastInvalid].pair_uid === me.pair_uid) openClip(S.lastInvalid, S.t);
-      else { const v = S.index.clips.find(x => x.pair_uid === me.pair_uid && x.label === "invalid"); if (v) openClip(v.i, S.t); }
+      const me = S.index.samples[S.cur];
+      if (me.label === "invalid") { const v = S.index.samples.find(x => x.pair_uid === me.pair_uid && x.label === "valid"); if (v) openClip(v.i, S.t); }
+      else if (S.lastInvalid >= 0 && S.index.samples[S.lastInvalid].pair_uid === me.pair_uid) openClip(S.lastInvalid, S.t);
+      else { const v = S.index.samples.find(x => x.pair_uid === me.pair_uid && x.label === "invalid"); if (v) openClip(v.i, S.t); }
     }
     else if (k === "l") $("#loop").click();
     else if (k === "m") setLayers(S.layers.includes("violation") ? S.layers.filter(x => x !== "violation") : [...S.layers, "violation"]);

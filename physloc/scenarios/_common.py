@@ -56,6 +56,11 @@ def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
 #: and above the extras, so adding it cannot renumber anything else.
 SEG_BACKDROP = 900
 
+#: The visible HDRI ground sits just below the physical support plane. Keeping
+#: them exactly coplanar caused z-fighting and made resting meshes look sliced
+#: by the background surface.
+HDRI_GROUND_GAP = 0.01
+
 
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
     """A plain cube slab, at EVERY level. THE THING THE OBJECTS LAND ON.
@@ -99,18 +104,17 @@ def backdrop(cx: Complexity) -> Optional[BodySpec]:
     consult it, because "is there a static surface under this body" is a
     question about colliders, not about staging.
 
-    ONE VISIBLE CONSEQUENCE, checked in a render rather than assumed. The dome's
-    inner surface sits at z = 0, exactly where the slab's top is, and the dome
-    wins: at L2 and L3 the ground you SEE is this body, and the slab reports
-    `frames_visible: 0` and holds no pixels. That is the MOVi look and it is
-    what an HDRI environment should give you -- the ground belongs to the
-    capture rather than being a grey rectangle floating in it. It is also
-    uniform, not speckled: the two surfaces are coplanar but the dome is drawn
-    as the background, so there is no z-fighting to see.
+    ONE VISIBLE CONSEQUENCE, checked in a render rather than assumed. At L2 and
+    L3 this is the ground the camera sees; the physical slab is camera-hidden.
+    Its inner surface sits one centimetre below the collision plane so resting
+    meshes are not clipped by a coplanar HDRI surface. The ground therefore
+    belongs to the photographic environment instead of appearing as a grey
+    rectangle floating inside it.
     """
     if cx.background != "hdri":
         return None
-    return BodySpec(name="backdrop", kind="dome", position=(0.0, 0.0, 0.0),
+    return BodySpec(name="backdrop", kind="dome",
+                    position=(0.0, 0.0, -HDRI_GROUND_GAP),
                     mass=0.0, static=True, collides=False,
                     friction=0.6, restitution=0.4,
                     segmentation_id=SEG_BACKDROP, role="backdrop")

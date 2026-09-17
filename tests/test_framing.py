@@ -35,14 +35,18 @@ MIN_VISIBLE = 0.90
 SEEDS = 5
 
 
-def _visible_fraction(spec, traj, body, lo, hi) -> float:
+def _visible_frames(spec, traj, body) -> np.ndarray:
     bi = traj.index_of(int(body.segmentation_id))
     r = float(body.bounding_radius)
     p = np.asarray(traj.pos[:, bi, :], np.float64)
     ok = np.ones(traj.num_frames, bool)
     for d in list(np.eye(3) * r) + list(-np.eye(3) * r):
         ok &= _geom.in_frame(spec, p + d[None], margin=0.0)
-    return float(ok[lo:hi].mean())
+    return ok
+
+
+def _visible_fraction(spec, traj, body, lo, hi) -> float:
+    return float(_visible_frames(spec, traj, body)[lo:hi].mean())
 
 
 @pytest.mark.parametrize("tier_name", ["debug", "release"])
@@ -54,9 +58,22 @@ def test_violators_stay_in_frame(scenario, tier_name):
         traj = mockroll.roll(spec, sc)
         lo = int(BAND[0] * traj.num_frames)
         hi = int(BAND[1] * traj.num_frames)
-        for body in spec.bodies:
-            if body.dormant or body.static or body.role not in ("actor", "shadow"):
-                continue
+        actors = [body for body in spec.bodies
+                  if not body.dormant and not body.static and body.role == "actor"]
+        if spec.physics_medium == "granular":
+            # A granular pour is one analysis subject, not one subject per
+            # grain. Individual grains naturally leave the frame; require the
+            # represented medium to remain visible collectively. Injectors
+            # that target a true subset still check their selected bodies in
+            # the worker's post-intervention visibility gate.
+            visible = np.any([_visible_frames(spec, traj, body)
+                              for body in actors], axis=0)
+            frac = float(visible[lo:hi].mean())
+            assert frac >= MIN_VISIBLE, (
+                "%s/%s seed %d: granular medium is in frame for only %.0f%% "
+                "of the window band" % (scenario, tier_name, seed, 100 * frac))
+            continue
+        for body in actors:
             frac = _visible_fraction(spec, traj, body, lo, hi)
             assert frac >= MIN_VISIBLE, (
                 "%s/%s seed %d: %s is in frame for only %.0f%% of the window "

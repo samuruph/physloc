@@ -58,10 +58,8 @@ def _specs(name):
 def test_the_floor_stands_clear_of_every_actor(name):
     """What `MIN_SCENERY_SEPARATION` says, actually applied.
 
-    The shadow counts as an actor: `shadow_track` stages its cast shadow as a
-    real near-black body, and the family is about whether that shadow tracks
-    the object faithfully -- which nobody can judge on a floor the same
-    darkness.
+    Only camera-visible actors count.  `shadow_track`'s Cycles caster is hidden
+    from camera rays and is intentionally not an exported dataset object.
     """
     for cx, seed, spec in _specs(name):
         floors = [b for b in spec.bodies if b.role == "floor"]
@@ -69,7 +67,7 @@ def test_the_floor_stands_clear_of_every_actor(name):
             continue
         lf = _lab(floors[0].color)
         for body in spec.bodies:
-            if body.role not in ("actor", "shadow"):
+            if body.role != "actor":
                 continue
             gap = float(np.linalg.norm(lf - _lab(body.color)))
             assert gap >= MIN_SCENERY_SEPARATION, (

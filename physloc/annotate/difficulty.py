@@ -46,9 +46,9 @@ and is the one that belongs here.
 
 ## The factors
 
-Five of the seven read straight off `metadata.json`; `violation_area` and `occlusion`
+Five of the seven read straight off `sample.json`; `violation_area` and `occlusion`
 need the rendered masks, so `annotate` measures them where the arrays are in
-hand and writes the raw values into `metadata.json` beside the label. A consumer
+hand and writes the raw values into `sample.json` beside the label. A consumer
 re-deriving a difficulty never has to open an `.npz`.
 """
 from __future__ import annotations
@@ -178,20 +178,6 @@ FACTORS: Sequence[Factor] = (
 
 BY_NAME = {f.name: f for f in FACTORS}
 
-#: The names three factors shipped under before they were renamed to say what
-#: they measure. Clips generated earlier carry them in `difficulty.factors`,
-#: `difficulty.binding_factors` and `violation.difficulty_inputs`, and a config
-#: may still set their cuts under them; every reader maps through here.
-RENAMED = {"footprint": "violation_area", "clutter": "object_count",
-           "camera": "camera_motion",
-           # Before culprits were called violators.
-           "culprits": "violators"}
-
-
-def canonical(name: str) -> str:
-    """A factor's current name, given a current or a pre-rename one."""
-    return RENAMED.get(name, name)
-
 
 # --------------------------------------------------------------------- values
 def _windows_frames(windows, num_frames: int) -> np.ndarray:
@@ -240,7 +226,7 @@ def measure(meta: Dict[str, object],
 
     `vmask` and `seg_invalid` are optional: pass them from `annotate`, where
     they are already in memory, and omit them when re-deriving from a shipped
-    `metadata.json`, which carries the two values they produce.
+    `sample.json`, which carries the two values they produce.
     """
     violation = meta.get("violation") or {}
     md = meta.get("metadata") or {}
@@ -257,7 +243,7 @@ def measure(meta: Dict[str, object],
         violation_area = float(vmask.reshape(len(vmask), -1).sum(axis=1).max()
                                / pixels)
     else:
-        violation_area = stored.get("violation_area", stored.get("footprint"))
+        violation_area = stored.get("violation_area")
 
     # 2. OCCLUSION -- FULLY hidden, per this project's rule that a few visible
     # actor pixels make a violation instantly observable. Measured over the
@@ -368,7 +354,7 @@ def assess(meta: Dict[str, object],
            vmask: Optional[np.ndarray] = None,
            seg_invalid: Optional[np.ndarray] = None
            ) -> Optional[Dict[str, object]]:
-    """The block that ships in `metadata.json`, or `None` for a valid clip.
+    """The block that ships in `sample.json`, or `None` for a valid sample.
 
     A valid twin has no violation to detect. Giving it a difficulty would put
     it in an evaluation set it does not belong to, exactly as giving it a
@@ -422,32 +408,23 @@ def evaluation_set(metas, level: str) -> List[Dict[str, object]]:
 
 
 # ------------------------------------------------------------------ relabel
-def violator_values_from_clip(clip, k: int) -> Dict[str, float]:
-    """`violator_values` for the k-th violator of a finished INVALID clip.
-
-    The same five numbers `annotate` measures, read back from what the clip
-    ships: `objects.npz` carries the clocks and the score, the invalid
-    segmentation the violator's own pixels, `traj.npz` whether it was absent,
-    and `masks.npz` its lawful footprint on the frames it had vanished (the
-    `violation` id map is the union of both twins, so on a frame the body is
-    absent from the invalid render its pixels there are the valid ones).
-    """
-    obj = clip.objects
+def violator_values_from_sample(sample, k: int) -> Dict[str, float]:
+    """Return difficulty inputs for one row of a finished invalid sample."""
+    obj = sample.object_table
     vid = int(obj["ids"][k])
-    seg = clip.segmentations
+    seg = sample.segmentations
     T = int(seg.shape[0])
     where = seg == vid
     have = where.reshape(T, -1).any(axis=1)
-    traj = clip.trajectory
+    temporal = sample.object_arrays
     absent = np.zeros((T,), bool)
-    ids = [int(b) for b in traj["body_ids"]]
-    if vid in ids:
-        present = np.asarray(traj["present"][:, ids.index(vid)], bool)[:T]
+    if "present" in temporal:
+        present = np.asarray(temporal["present"][k], bool)[:T]
         absent[:len(present)] = ~present
     gone = absent & ~have
     if gone.any():
-        where = where | ((clip.violation == vid) & gone[:, None, None])
-    res = (clip.metadata.get("metadata") or {}).get("resolution") or seg.shape[1:]
+        where = where | ((sample.violation == vid) & gone[:, None, None])
+    res = sample.sample_info.get("resolution") or seg.shape[1:]
     pixels = float(int(res[0]) * int(res[1])) or 1.0
     active = np.asarray(obj["active"][k], bool)
     n_active = int(active.sum())
@@ -457,41 +434,40 @@ def violator_values_from_clip(clip, k: int) -> Dict[str, float]:
         occlusion=float((hidden & active).sum()) / n_active if n_active else 0.0,
         duration=float(np.asarray(obj["observable"][k], bool).sum()) / T if T else 0.0,
         severity=max(0.0, float(np.asarray(obj["score"][k]).max(initial=0.0))),
-        camera=clip.metadata.get("camera"))
+        camera=sample.camera)
 
 
-def relabel(cdir: str) -> Optional[Dict[str, object]]:
-    """Re-derive every difficulty label of one clip directory, in place.
+violator_values_from_clip = violator_values_from_sample
 
-    For clips annotated before a threshold or a factor changed: the clip's
-    label and each violator's are measured again from the arrays beside the
-    metadata, under the CURRENT cuts, and `metadata.json` is rewritten. A
-    valid twin, or a clip without its v2 arrays, is returned untouched.
-    Returns the rewritten metadata, or None if nothing was written.
-    """
+
+def relabel(sample_dir: str) -> Optional[Dict[str, object]]:
+    """Re-derive one schema-v3 sample's difficulty metadata in place."""
     import json
     import os
 
     from .. import loader
 
-    clip = loader.Clip.from_dir(cdir)
-    meta = clip.metadata
-    violation = meta.get("violation")
-    if not violation or not (clip.has(loader.MASKS) and clip.has(loader.OBJECTS)
-                             and clip.has(loader.SEGMENTATIONS)):
+    sample = loader.Sample.from_dir(sample_dir)
+    document = sample._document
+    violation = (document.get("annotations") or {}).get("violation_summary")
+    if not violation or sample.is_valid:
         return None
-    vmask, seg = clip.violation_mask, clip.segmentations
+    meta = sample.display_metadata
+    vmask, seg = sample.violation_mask, sample.segmentations
     violation["difficulty_inputs"] = inputs_for_meta(vmask, seg, meta)
-    meta["difficulty"] = assess(meta, vmask, seg)
-    ids = [int(i) for i in clip.objects["ids"]]
+    difficulty = assess(meta, vmask, seg)
+    document["metadata"]["scene"]["info"]["difficulty"] = (
+        difficulty or {}).get("level")
+    ids = [int(i) for i in sample.object_ids]
     for rec in violation.get("violators") or []:
         iid = int(rec.get("instance_id", -1))
         if iid in ids:
             rec["difficulty"] = assess_violator(
-                violator_values_from_clip(clip, ids.index(iid)))
-    path = os.path.join(cdir, loader.METADATA)
+                violator_values_from_sample(sample, ids.index(iid)))
+    path = os.path.join(sample_dir, loader.SAMPLE_METADATA)
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
-        json.dump(meta, fh, indent=2, sort_keys=True)
+        json.dump(document, fh, indent=2, sort_keys=True)
     os.replace(tmp, path)
-    return meta
+    sample.release()
+    return document

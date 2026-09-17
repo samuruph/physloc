@@ -277,18 +277,13 @@ def test_the_shadow_follows_whatever_the_caster_does(family):
     out = inj.apply(spec, traj, plan)
     sc.rescript(spec, out, plan)
 
-    from physloc.scenarios.shadow_track import project
-
-    ja, js = spec.index_of("body"), spec.index_of("shadow")
-    want = project(np.asarray(out.pos[:, ja, :], np.float64),
-                   spec.notes["light_dir"], float(spec.notes["surface_top"]),
-                   0.006)
-    assert np.allclose(out.pos[:, js, :], want, atol=1e-4), (
-        "%s: shadow is not under its caster" % family)
-    assert np.allclose(out.scale_mul[:, js, :2], out.scale_mul[:, ja, :2]), (
-        "%s: shadow did not follow the caster's size" % family)
+    ja, js = spec.index_of("body"), spec.index_of("shadow_caster")
+    assert np.allclose(out.pos[:, js, :], out.pos[:, ja, :], atol=1e-4), (
+        "%s: hidden Cycles caster did not follow its actor" % family)
+    assert np.allclose(out.scale_mul[:, js], out.scale_mul[:, ja]), (
+        "%s: hidden Cycles caster did not follow the actor's size" % family)
     assert np.array_equal(out.present[:, js], out.present[:, ja]), (
-        "%s: shadow outlived its caster" % family)
+        "%s: hidden Cycles caster outlived its actor" % family)
 
 
 @pytest.mark.parametrize("family", ["shadow", "shadow_inverted", "shadow_shape"])
@@ -303,10 +298,10 @@ def test_a_violation_of_the_shadow_survives_rescripting(family):
     plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
     assert plan is not None
     out = inj.apply(spec, traj, plan)
-    before = np.array(out.pos[:, spec.index_of("shadow"), :], copy=True)
-    scale_before = np.array(out.scale_mul[:, spec.index_of("shadow"), :],
+    before = np.array(out.pos[:, spec.index_of("shadow_caster"), :], copy=True)
+    scale_before = np.array(out.scale_mul[:, spec.index_of("shadow_caster"), :],
                             copy=True)
     sc.rescript(spec, out, plan)
-    assert np.array_equal(out.pos[:, spec.index_of("shadow"), :], before)
-    assert np.array_equal(out.scale_mul[:, spec.index_of("shadow"), :],
+    assert np.array_equal(out.pos[:, spec.index_of("shadow_caster"), :], before)
+    assert np.array_equal(out.scale_mul[:, spec.index_of("shadow_caster"), :],
                           scale_before)

@@ -1,7 +1,7 @@
 """Annotation pipeline -- runs on the HOST side of the seam.
 
 Reads what the container worker produced (traj_*.npz, passes_*.npz, plan.json)
-and writes the released clip layout of docs/PLAN.md Part 4.
+and writes schema-v3 samples.
 
     conda activate physloc
     python -m physloc.cli annotate out/phase0/drop/0173
@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
 from .. import injectors
-from ..params import upgrade_keys
 from ..residuals import laws
 from ..scenarios import TIERS
 from ..scenarios.base import Tier
@@ -97,9 +95,9 @@ def _asset_block(spec, spec_d):
 def annotate_pair(workdir: str, vdir: str, outroot: str,
                   release: str = "physloc_v0",
                   write_video: bool = True) -> Dict[str, object]:
-    """Turn one worker variant into a released valid/invalid clip pair."""
+    """Turn one worker variant into a released valid/invalid sample pair."""
     with open(os.path.join(vdir, "plan.json")) as fh:
-        blob = upgrade_keys(json.load(fh))
+        blob = json.load(fh)
     spec_d, plan_d = blob["spec"], blob["plan"]
 
     scenario = spec_d["scenario"]
@@ -115,6 +113,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     pi = np.load(os.path.join(vdir, "passes_invalid.npz"))
     seg_v, seg_i = _seg(pv), _seg(pi)
     T = tier.num_frames
+    shadow_component = family in {"shadow", "shadow_inverted", "shadow_shape"}
+    shadow_v = shadow_i = None
+    if shadow_component:
+        required = ("shadow_strength", "shadow_source_id")
+        if any(key not in pv or key not in pi for key in required):
+            raise ValueError(
+                "%s requires the true-Cycles shadow isolation pass; regenerate "
+                "this sample with shadow_strength and shadow_source_id" % family)
+        shadow_v = np.asarray(pv["shadow_strength"], np.float32) > (1.0 / 255.0)
+        shadow_i = np.asarray(pi["shadow_strength"], np.float32) > (1.0 / 255.0)
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the
@@ -131,7 +139,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # The variant index matters: camera motion is spread across a scenario's
     # variants, so re-sampling without it can reconstruct a static scene for a
     # clip that was rendered with a moving camera -- and every framing guard
-    # and every camera field in `metadata.json` would then describe the wrong shot.
+    # and every camera field in `sample.json` would then describe the wrong shot.
     # And the framing attempt: a scene the worker resampled because its actors
     # left the frame is a different scene, and re-sampling attempt 0 here would
     # annotate the one that was rejected.
@@ -286,16 +294,19 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # note in windows.observable_frames -- and it gates the *spatial*
     # annotations, which answer "where can this be seen" rather than "when is
     # it happening". `active` remains the ground-truth timeline.
-    observable_all = win_mod.observable_frames(
-        seg_v, seg_i, dynamic_ids or causal_ids,
-        rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"])
+    observable_all = ((shadow_v ^ shadow_i).reshape(T, -1).any(axis=1)
+                      if shadow_component else
+                      win_mod.observable_frames(
+                          seg_v, seg_i, dynamic_ids or causal_ids,
+                          rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"]))
     # A SECOND gate, for the annotations that are invalid-side only.
     # `observable` is a disagreement between the twins, so it is true on frames
     # where the violator is seen in the VALID render and not in the invalid one
     # -- whenever an intervention leaves the body where the camera cannot see
     # it. `mask_invalid` and `severity_map` have no pixels to put anywhere on
     # such a frame, so their severity waits for a frame the body is seen on.
-    seen_all = masks_mod.footprint(seg_i, dynamic_ids or causal_ids).any(axis=(1, 2))
+    seen_all = (shadow_i.reshape(T, -1).any(axis=1) if shadow_component else
+                masks_mod.footprint(seg_i, dynamic_ids or causal_ids).any(axis=(1, 2)))
 
     clocks = ([(int(c["body_id"]), c) for c in plan_d["violators"]] if independent
               else [(int(b), plan_d) for b in (dynamic_ids or [primary_id])])
@@ -307,13 +318,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             [tuple(w) for w in clock.get("intervention_windows", wins)], T)
         c_cq = win_mod.rasterise(
             [tuple(w) for w in clock.get("consequence_windows", wins)], T)
-        own_obs = win_mod.observable_frames(seg_v, seg_i, [bid],
-                                            rgb_valid=pv["rgba"],
-                                            rgb_invalid=pi["rgba"])
+        own_obs = (observable_all if shadow_component else
+                   win_mod.observable_frames(seg_v, seg_i, [bid],
+                                             rgb_valid=pv["rgba"],
+                                             rgb_invalid=pi["rgba"]))
         if independent:
             scored_on = _score(bid, clock.get("notes") or {})
             obs = own_obs
-            seen = masks_mod.footprint(seg_i, [bid]).any(axis=(1, 2))
+            seen = (seen_all if shadow_component else
+                    masks_mod.footprint(seg_i, [bid]).any(axis=(1, 2)))
         else:
             scored_on, obs, seen = primary, observable_all, seen_all
         scored = c_iv if detectable == "event" else c_cq
@@ -346,9 +359,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     imask = np.zeros(seg_i.shape, bool)
     vids = np.zeros(seg_i.shape, np.uint16)
     for c in violators:
-        c["vmask"] = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
-                                              c["visible"] | c["visible_inv"])
-        c["imask"] = masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
+        if shadow_component:
+            gate = np.asarray(c["visible"] | c["visible_inv"], bool)[:, None, None]
+            c["vmask"] = (shadow_v | shadow_i) & gate
+            c["imask"] = shadow_i & np.asarray(c["visible_inv"], bool)[:, None, None]
+        else:
+            c["vmask"] = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
+                                                  c["visible"] | c["visible_inv"])
+            c["imask"] = masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
         vmask |= c["vmask"]
         imask |= c["imask"]
         vids[c["vmask"]] = c["id"]
@@ -397,10 +415,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             traj_v, traj_i, ([c["id"]] if independent else list(causal_ids))
             + affected, c["t_event"], T)
         gate = (c["consequence"] | diverged) & c["obs"]
-        part = masks_mod.causal_mask(
-            seg_v, seg_i, [c["id"]], list(static_ids) + owned, gate,
-            static_ids=static_ids,
-            secondary_active={b: (frames >= reach[b][0]) & gate for b in owned})
+        if shadow_component:
+            part = np.zeros(seg_i.shape, np.uint8)
+            part[c["imask"] & gate[:, None, None]] = 1
+        else:
+            part = masks_mod.causal_mask(
+                seg_v, seg_i, [c["id"]], list(static_ids) + owned, gate,
+                static_ids=static_ids,
+                secondary_active={b: (frames >= reach[b][0]) & gate for b in owned})
         second = (part == 2) & (cmask != 1)
         cmask[second], cids[second] = 2, c["id"]
         first = part == 1
@@ -412,7 +434,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # the invalid video and there is nothing wrong to see at a body's lawful
     # footprint. The cost, accepted deliberately: `permanence` and `dissolve`
     # get an all-zero map once the body is gone -- except below.
-    smap = sev_mod.paint(seg_i, {c["id"]: c["s_inv_visible"] for c in violators})
+    if shadow_component:
+        smap = np.zeros(seg_i.shape, np.float32)
+        for c in violators:
+            smap = np.where(c["imask"],
+                            np.asarray(c["s_inv_visible"], np.float32)[:, None, None],
+                            smap)
+    else:
+        smap = sev_mod.paint(seg_i, {c["id"]: c["s_inv_visible"] for c in violators})
 
     # ONE exception, and only where the invalid side has nothing at all for
     # that violator. A body that VANISHED has no invalid footprint anywhere, so
@@ -471,7 +500,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     tinfo["t_consequence_end_frame"] = int(
         max(e for _, e in tinfo["consequence_windows"]))
 
-    # ---- per-violator records: metadata.json and objects.npz ------------------
+    # ---- per-violator records: sample metadata and dense object tensors -------
     smap32 = smap.astype(np.float32)
     # The camera factor is the same for every body in the clip, so measure the
     # track once. `movi.camera_track` is the poses the renderer keyframed.
@@ -483,8 +512,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         t = int(np.clip(c["t_event"], 0, T - 1))
         after = np.flatnonzero(c["own_obs"] & (frames >= t))
         t_obs = int(after[0]) if after.size else t
-        rendered = masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2))
-        where = masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"]
+        rendered = (shadow_i.reshape(T, -1).any(axis=1) if shadow_component else
+                    masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2)))
+        where = (c["imask"] if shadow_component else
+                 masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"])
         c["severity_t"] = np.where(where, smap32, 0.0).reshape(T, -1).max(axis=1)
         # THIS VIOLATOR'S OWN DIFFICULTY, on its own evidence: its mask at its
         # biggest, how much of its own window it spends fully hidden, how long
@@ -494,7 +525,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # the per-object one an object detector is scored against.
         own_peak = sev_mod.peak(c["score"]["r_invalid"], c["score"]["s_invalid"],
                                 c["score"]["floor"], law_name)
-        own_hidden = win_mod.occluded_frames(seg_i, c["id"])
+        own_hidden = (~seen_all if shadow_component else
+                      win_mod.occluded_frames(seg_i, c["id"]))
         n_active = int(c["active"].sum())
         own_values = diff_mod.violator_values(
             area=float(where.reshape(T, -1).sum(axis=1).max()) / pixels,
@@ -532,8 +564,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     for key in ("active", "intervening", "consequence"):
         arrays["violator_" + key] = np.stack([c[key] for c in violators])
     arrays["violator_observable"] = np.stack([c["own_obs"] for c in violators])
-    arrays["violator_occluded"] = np.stack(
-        [win_mod.occluded_frames(seg_i, c["id"]) for c in violators])
+    arrays["violator_occluded"] = np.stack([
+        (~seen_all if shadow_component else win_mod.occluded_frames(seg_i, c["id"]))
+        for c in violators])
     arrays["violator_severity_t"] = np.stack(
         [c["severity_t"] for c in violators]).astype(np.float32)
     violator_residuals = {
@@ -545,7 +578,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     }
 
 
-    # ---- write both clips -------------------------------------------------
+    # ---- write both schema-v3 samples ------------------------------------
+    from ..schema import write as v3
+
     sev_bin = plan_d["intervention"]["severity_bin"]
     # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY, so a level is a
     # directory you can hold up on its own -- copy one out, delete one, point a
@@ -555,7 +590,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # THE CONDITION IS IN THE PATH, because a seed is opaque. Browsing a run,
     # `0783_distractors` says what the clip is and `0783` says nothing -- and
     # the condition is the axis you most often want to compare along, so it
-    # should not require opening `metadata.json` to find. It sorts after the seed
+    # should not require opening `sample.json` to find. It sorts after the seed
     # so a scenario's variants stay in generation order.
     pair_uid = "%s/%s/%s/%04d_%s" % (release, level, scenario, seed,
                                      _condition_of(spec_d).replace("+", "-"))
@@ -567,70 +602,12 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     for label in ("valid", "invalid"):
         uid = "%s/%s" % (pair_uid, "valid" if label == "valid"
                          else "invalid_%s_%s" % (family, sev_bin))
-        cdir = os.path.join(outroot, "clips", uid)
-        os.makedirs(cdir, exist_ok=True)
         p = pv if label == "valid" else pi
         traj = traj_v if label == "valid" else traj_i
 
         seg_here = seg_v if label == "valid" else seg_i
-        np.savez_compressed(os.path.join(cdir, layout.SEGMENTATIONS),
-                            segmentations=seg_here.astype(np.uint16))
-
-        # Mechanical energy, on BOTH twins -- the valid clip's trace is the
-        # baseline every anomaly is judged against, and shipping it means a
-        # consumer never has to load the twin to know what lawful looked like.
         etrace = energy_mod.compute(traj, spec, seg=seg_here)
-        np.savez_compressed(os.path.join(cdir, "energy.npz"), **etrace.to_npz())
-        np.savez_compressed(
-            os.path.join(cdir, "energy_map.npz"),
-            energy=energy_mod.energy_map(etrace, seg_here))
-        # The physical quantities the energy was computed from, DERIVED from
-        # the trajectory rather than additional to it -- `traj.npz` ships beside
-        # this and carries pos, quat, velocities, radius, gravity and contacts.
-        #
-        # Worth its own file for two reasons. `traj.mass` is the declared mass,
-        # a per-body constant; `bodies.mass` is [T,B] and follows volume, which
-        # is what the energy is actually computed against. And every derived
-        # column here comes off the same code path as the energy trace, so the
-        # two can never disagree about what a body weighed or how it was
-        # spinning.
-        np.savez_compressed(os.path.join(cdir, "bodies.npz"),
-                            **energy_mod.body_state(traj, spec))
         energy_summary = etrace.summary()
-        for src, dst in PASS_FILES.items():
-            if src in p.files:
-                np.savez_compressed(os.path.join(cdir, "%s.npz" % dst), **{dst: p[src]})
-        traj.save(os.path.join(cdir, "traj.npz"))
-        # MOVi's per-instance tensors -- poses, velocities, 3D and 2D boxes,
-        # image positions, visibility -- in `spec.bodies` order, which is the
-        # order of `instances` in the metadata.
-        np.savez_compressed(
-            os.path.join(cdir, layout.INSTANCES),
-            **movi_mod.instance_arrays(spec, traj, seg_here, cam_track, K))
-
-        # SCHEMA v2: ONLY WHAT CANNOT BE DERIVED, and only on the invalid clip.
-        # `violation` is the id map whose `> 0` is the localisation target;
-        # `causal` and `causal_source` say which pixels are a violator or a body
-        # it affected, and whose; `objects` is the per-violator table every
-        # other annotation is painted or reduced from. v1 shipped eleven files
-        # here and eight were functions of these three arrays -- the
-        # derivations now live in `physloc/loader.py` and nowhere else.
-        if label == "invalid":
-            np.savez_compressed(os.path.join(cdir, layout.MASKS),
-                                violation=vids.astype(np.uint16),
-                                causal=cmask.astype(np.uint8),
-                                causal_source=cids.astype(np.uint16))
-            np.savez_compressed(
-                os.path.join(cdir, layout.OBJECTS),
-                ids=arrays["violator_ids"],
-                severity=arrays["violator_severity_t"],
-                residual=violator_residuals["violator_r"],
-                score=violator_residuals["violator_s"],
-                **{k: arrays["violator_" + k] for k in layout.CLOCKS})
-
-        if write_video:
-            _write_mp4(p["rgba"], os.path.join(cdir, layout.VIDEO), tier.fps)
-
         meta = _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
                            scenario, seed, primary_id, sev_bin, prefix_diff,
@@ -647,7 +624,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # five from fields `_build_meta` has only now assembled.
         #
         # The two array-derived values are stored beside the label so that a
-        # consumer re-deriving a difficulty from `metadata.json` alone gets the
+        # consumer re-deriving a difficulty from `sample.json` alone gets the
         # numbers the clip was labelled with, rather than a `None` and a
         # silently different answer. `assess` returns None on a valid twin,
         # which has no violation to detect.
@@ -657,14 +634,92 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         meta["difficulty"] = diff_mod.assess(
             meta, vmask if label == "invalid" else None,
             seg_i if label == "invalid" else None)
-        # Last, so it describes every file actually beside it.
-        meta["files"] = _files_block(cdir)
-        with open(os.path.join(cdir, layout.METADATA), "w") as fh:
-            json.dump(meta, fh, indent=2, sort_keys=True)
+        document, _rows, remap = v3.document_from_generation(meta)
+        public_ids = [int(obj["id"]) for obj in document["annotations"]["objects"]]
+        row = {object_id: index for index, object_id in enumerate(public_ids)}
+
+        observations = {"segmentation": seg_here.astype(np.uint16)}
+        for source, target in PASS_FILES.items():
+            if source in p.files:
+                observations[target] = np.asarray(p[source])
+
+        violation_ids = np.zeros(seg_here.shape, np.uint16)
+        causal_level = np.zeros(seg_here.shape, np.uint8)
+        causal_ids = np.zeros(seg_here.shape, np.uint16)
+        component = np.zeros(seg_here.shape, np.uint8)
+        severity_pixels = np.zeros(seg_here.shape, np.float16)
+        if label == "invalid":
+            violation_ids = vids.astype(np.uint16)
+            causal_level = cmask.astype(np.uint8)
+            causal_ids = cids.astype(np.uint16)
+            for old_id, new_id in remap.items():
+                violation_ids = np.where(violation_ids == old_id, new_id,
+                                         violation_ids).astype(np.uint16)
+                causal_ids = np.where(causal_ids == old_id, new_id,
+                                      causal_ids).astype(np.uint16)
+            code = v3.COMPONENTS["shadow" if shadow_component else "body"]
+            component = np.where(violation_ids > 0, code, 0).astype(np.uint8)
+            severity_pixels = smap.astype(np.float16)
+        violation_maps = {
+            "violation_object_id": violation_ids,
+            "violation_component": component,
+            "causal_level": causal_level,
+            "causal_source_id": causal_ids,
+            "severity": severity_pixels,
+        }
+
+        N = len(public_ids)
+        violation_objects = {
+            "ids": np.asarray(public_ids, np.int32),
+            "is_violator": np.zeros(N, bool),
+            "severity": np.zeros((N, T), np.float32),
+            "residual": np.zeros((N, T), np.float32),
+            "score": np.zeros((N, T), np.float32),
+            "affected": np.zeros((N, T), bool),
+        }
+        violation_objects.update({key: np.zeros((N, T), bool)
+                                  for key in layout.CLOCKS})
+        if label == "invalid":
+            for source_row, raw_id in enumerate(arrays["violator_ids"]):
+                object_id = remap.get(int(raw_id), int(raw_id))
+                if object_id not in row:
+                    continue
+                target_row = row[object_id]
+                violation_objects["is_violator"][target_row] = True
+                violation_objects["severity"][target_row] = arrays[
+                    "violator_severity_t"][source_row]
+                violation_objects["residual"][target_row] = violator_residuals[
+                    "violator_r"][source_row]
+                violation_objects["score"][target_row] = violator_residuals[
+                    "violator_s"][source_row]
+                for key in layout.CLOCKS:
+                    violation_objects[key][target_row] = arrays[
+                        "violator_" + key][source_row]
+                record = violator_meta[source_row]
+                for affected_id in record.get("affected_instance_ids") or []:
+                    if int(affected_id) not in row:
+                        continue
+                    for start, end in record.get("consequence_windows") or []:
+                        violation_objects["affected"][row[int(affected_id)],
+                                                       int(start):int(end) + 1] = True
+
+        instance_arrays = movi_mod.instance_arrays(spec, traj, seg_here, cam_track, K)
+        energy = etrace.to_npz()
+        state = energy_mod.body_state(traj, spec)
+        for key in ("mass", "inertia", "kinetic", "potential", "height",
+                    "momentum", "momentum_magnitude", "angular_momentum"):
+            if key in state:
+                energy[key] = state[key]
+        cdir = v3.write_sample(
+            outroot, document, observations, instance_arrays, energy,
+            energy_mod.energy_map(etrace, seg_here), violation_maps,
+            violation_objects)
+        if write_video:
+            _write_mp4(p["rgba"], os.path.join(cdir, layout.RGB), tier.fps)
         written[label] = cdir
 
     return {"pair_uid": pair_uid, "family": family, "severity": sev_bin,
-            "clips": written,
+            "samples": written,
             "t_event": tinfo["t_event_frame"],
             "t_observable": tinfo["t_observable_frame"],
             "observability_lag": tinfo["observability_lag_frames"],
@@ -809,12 +864,12 @@ def _instance_table(spec_d, plan_d, seg, spec=None) -> List[Dict[str, object]]:
     """One record per body, in `spec.bodies` order -- MOVi's `instances`.
 
     Standard practice for a tracking dataset and the thing a segmentation map is
-    useless without. `id` is the pixel value in `segmentations.npz`; it is
+    useless without. `id` is the pixel value in `/observations/segmentation`; it is
     stable for the whole clip, so it doubles as the track id and there is no
     separate association step. Unlike MOVi the list is not re-sorted by
     visibility: the valid and invalid twins must agree on who is who, and a
     visibility sort orders them differently. Row `i` here is row `i` of every
-    array in `instances.npz`.
+    array in the `/objects` HDF5 group.
 
     Visibility is measured from the rendered map rather than assumed, so a body
     parked out of frame reports zero rather than looking present. Every body
@@ -847,6 +902,7 @@ def _instance_table(spec_d, plan_d, seg, spec=None) -> List[Dict[str, object]]:
             "scale": (list(body.draw_scale) if body is not None
                       else b.get("render_scale")),
             "static": bool(b.get("static", False)),
+            "energy_eligible": bool(energy_mod.is_energy_object(body)),
             "dormant": bool(b.get("dormant", False)),
             "collides": bool(getattr(body, "collides", True)),
             "is_violator": bid in causal,
@@ -860,37 +916,6 @@ def _instance_table(spec_d, plan_d, seg, spec=None) -> List[Dict[str, object]]:
             "frames_visible": int(len(frames)),
             "pixels_peak": int(seen.sum(axis=(1, 2)).max()) if seen.size else 0,
         })
-    return out
-
-
-def _files_block(cdir: str) -> Dict[str, object]:
-    """Every file beside the metadata: each array's key, dtype and shape.
-
-    Read from the `.npy` headers inside each archive rather than by loading the
-    arrays, so describing a release-tier depth pass costs nothing.
-    """
-    import zipfile
-
-    fmt = np.lib.format
-    out: Dict[str, object] = {}
-    for name in sorted(os.listdir(cdir)):
-        path = os.path.join(cdir, name)
-        if name == layout.METADATA or not os.path.isfile(path):
-            continue
-        if not name.endswith(".npz"):
-            out[name] = {"bytes": os.path.getsize(path)}
-            continue
-        arrays = {}
-        with zipfile.ZipFile(path) as zf:
-            for member in zf.namelist():
-                with zf.open(member) as fh:
-                    version = fmt.read_magic(fh)
-                    reader = (fmt.read_array_header_1_0 if version == (1, 0)
-                              else fmt.read_array_header_2_0)
-                    shape, _fortran, dtype = reader(fh)
-                arrays[member[:-4] if member.endswith(".npy") else member] = {
-                    "dtype": str(dtype), "shape": list(shape)}
-        out[name] = {"arrays": arrays}
     return out
 
 
@@ -936,7 +961,7 @@ def _camera_block(spec, spec_d: Dict, num_frames: int, track=None,
 
 
 def _params_block():
-    """The generation knobs in force, for `metadata.json`."""
+    """The generation knobs recorded in each schema-v3 sample."""
     from .. import params
 
     return params.CURRENT
@@ -968,7 +993,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 spec=None, camera: Optional[Dict[str, object]] = None,
                 collisions: Optional[List[Dict[str, object]]] = None
                 ) -> Dict[str, object]:
-    """The clip's `metadata.json`, in MOVi's layout plus PhysLoc's blocks.
+    """Build the generator record consumed by the schema-v3 writer.
 
     MOVi's four: `metadata` (who the clip is and its geometry), `camera`,
     `instances` and `events`. PhysLoc's beside them: `segmentation`,
@@ -990,18 +1015,19 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
     # thirteen, so filtering the index on a family returned a valid clip that
     # was not specially its own, and any per-family count was off by one.
     #
-    # `pair_uid` is the join key, and it always was. `twin_uid` on an INVALID
+    # `pair_uid` is the join key. `valid_sample_uid` on an invalid
     # clip still points at its valid partner, which is a real one-to-one edge;
     # only the reverse direction was a fiction.
     is_valid = label == "valid"
-    twin = None if is_valid else "%s/valid" % pair_uid
+    valid_sample_uid = uid if is_valid else "%s/valid" % pair_uid
     meta = {
         # ---- MOVi's `metadata`: identity, taxonomy, and clip geometry -------
         "metadata": {
             "schema_version": SCHEMA_VERSION,
-            "clip_uid": uid, "pair_uid": pair_uid, "twin_uid": twin,
+            "sample_uid": uid, "pair_uid": pair_uid,
+            "valid_sample_uid": valid_sample_uid,
             "label": label, "tier": tier.name, "release": release,
-            # The token grid `loader.Clip.latent_grid` reduces to by default.
+            # The token grid `loader.Sample.latent_grid` reduces to by default.
             # Not derivable from the resolution alone: 128 bins to 8, 512 to 16.
             "latent_frames": tier.latent_frames, "latent_hw": tier.latent_hw,
             "domain": None if is_valid else domain_of(family),
@@ -1116,7 +1142,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             # clip drew one moment for all on purpose, `shared` for every plan
             # whose violators act together. The clip-level fields above are the
             # union; these are per body, in `causal_body_ids` order, and the
-            # per-pixel attribution is `masks.npz` `violation` / `causal_source`.
+            # per-pixel attribution is in `/violations/maps`.
             "violator_timing": tinfo.get("violator_timing"),
             "violators": tinfo.get("violators", []),
             "peak_residual": sev_mod.peak(r_inv, s_inv, floor, law_name),

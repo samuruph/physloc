@@ -13,7 +13,7 @@ tuned threshold. Measured floor on valid clips: 0.005% of E0.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -23,6 +23,10 @@ from ..injectors import _geom
 #: A step's energy change is attributable to a contact at either of its ends, and
 #: PyBullet reports the frame it *noticed* a contact, which can lag the touch.
 CONTACT_SLACK = 1
+ENERGY_EXCLUDED_ROLES = frozenset({
+    "floor", "backdrop", "occluder", "barrier", "wall", "support",
+    "shadow_caster",
+})
 
 
 @dataclass
@@ -151,24 +155,15 @@ def _quat_matrix(q: np.ndarray) -> np.ndarray:
     ], axis=1)
 
 
-def _is_shadow(body) -> bool:
-    """A cast shadow is a picture, not a body, and carries no energy.
+def is_energy_object(body) -> bool:
+    """Whether a body belongs to the scene's physical energy accounting.
 
-    `shadow_track` hands the cast shadow to a scripted stand-in body so it can
-    have a segmentation id and therefore a mask -- see that scenario's
-    docstring. The consequence nobody chased down is that the stand-in is
-    declared with a mass like anything else, so it contributed a constant 0.33 J
-    to every clip in the scenario, and MOVING it moved the scene's energy:
-    `shadow x strong` slid the shadow a body-width over two frames and the
-    total jumped from 4.12 J to 54.63 J. A shadow is where light is not. It has
-    no mass, no momentum and no energy, and the energy channel must say so --
-    otherwise the three optical families read as the most violent energy
-    violations in the dataset while the object they are about never moves.
-
-    A violation OF the shadow is still fully annotated: it has a mask, a
-    severity and its own residual law. It just does not have joules.
+    Dynamic subjects, affected props, peers, and distractors are included.
+    Floors, backdrops, barriers, occluders, walls, and renderer-only helpers
+    are infrastructure even if one is accidentally declared dynamic.
     """
-    return str(getattr(body, "role", "")) == "shadow"
+    return (body is not None and not bool(getattr(body, "static", False))
+            and str(getattr(body, "role", "")) not in ENERGY_EXCLUDED_ROLES)
 
 
 def contact_frames(traj, slack: int = CONTACT_SLACK) -> np.ndarray:
@@ -222,7 +217,7 @@ def compute(traj, spec, floor_level: Optional[float] = None,
 
     for j, name in enumerate(traj.body_names):
         body = bodies.get(name)
-        if body is None or body.static or _is_shadow(body):
+        if not is_energy_object(body):
             continue
         m0 = float(getattr(body, "mass", 1.0))
         # Mass follows volume -- see docs/energy.md. Volume-preserving squash
@@ -388,7 +383,7 @@ def per_body_free_anomaly(traj, spec) -> np.ndarray:
 
     Narrower than the scene-level trace by design. `permanence` and `dissolve`
     take a resting body's potential energy with it, which is a scene-level
-    excess loss and not a free-energy event; `energy.npz` carries those and this
+    excess loss and not a free-energy event; `/energy/scene` carries those and this
     law does not claim them.
     """
     trace = compute(traj, spec)
@@ -464,8 +459,8 @@ def body_state(traj, spec) -> Dict[str, np.ndarray]:
         # shadow is a picture of an absence and has no mechanics. Leaving it
         # dynamic here would let a consumer recompute an energy the shipped
         # trace does not contain.
-        is_static[j] = bool(body.static or _is_shadow(body))
-        if _is_shadow(body):
+        is_static[j] = not is_energy_object(body)
+        if str(getattr(body, "role", "")) == "shadow_caster":
             continue
         lin = np.asarray(traj.scale_mul[:, j, :], np.float64)
         m = float(getattr(body, "mass", 1.0)) * np.clip(

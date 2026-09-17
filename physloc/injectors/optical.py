@@ -1,9 +1,4 @@
-"""Optical-domain injectors: shadows that lie about their caster.
-
-The only family whose violator is not the object but its *shadow*. It relies on
-`shadow_track` handing the cast shadow to a body of its own -- see that
-scenario's docstring for why a real Blender shadow cannot carry a mask.
-"""
+"""Optical-domain injectors for a renderer-only Cycles shadow caster."""
 from __future__ import annotations
 
 from typing import Optional
@@ -11,7 +6,6 @@ from typing import Optional
 import numpy as np
 
 from ..sim.trajectory import Trajectory
-from . import _geom
 from .base import Injector, InterventionPlan, register
 
 
@@ -41,7 +35,7 @@ class Shadow(Injector):
         return float(self.OFFSET_RADII["strong"])
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        shade = next((b for b in spec.bodies if b.role == "shadow"), None)
+        shade = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
         caster = self._primary(spec)
         if shade is None or caster is None:
             return None
@@ -76,7 +70,7 @@ class Shadow(Injector):
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
-        shade = next(b for b in spec.bodies if b.role == "shadow")
+        shade = next(b for b in spec.bodies if b.role == "shadow_caster")
         bi = traj.index_of(int(shade.segmentation_id))
         t0, t1 = plan.windows[0]
         off = np.asarray(plan.params["offset_m"], np.float32)
@@ -101,7 +95,7 @@ register(Shadow())
 
 def _projection(spec, traj, plan_notes=None):
     """(caster index, shadow index, unit light dir, surface top) for a scene."""
-    shade = next(b for b in spec.bodies if b.role == "shadow")
+    shade = next(b for b in spec.bodies if b.role == "shadow_caster")
     L = np.asarray(spec.notes["light_dir"], np.float64)
     L = L / max(float(np.linalg.norm(L)), 1e-9)
     return (traj.index_of(int(spec.notes["caster_id"])),
@@ -158,7 +152,7 @@ class ShadowInverted(Injector):
         return abs(1.0 - self.FRACTION_BY_BIN["strong"]) * _lead(spec) / r
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        shade = next((b for b in spec.bodies if b.role == "shadow"), None)
+        shade = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
         caster = self._primary(spec)
         if shade is None or caster is None or "caster_id" not in spec.notes:
             return None
@@ -191,8 +185,12 @@ class ShadowInverted(Injector):
         # still tracks the body exactly -- it is the bearing that is wrong, not
         # the tracking. Anything that made the offset drift would be a second,
         # unlabelled violation for a viewer to notice first.
-        out.pos[:, si, :2] = (p[:, :2]
-                              + k * (expected - p[:, :2])).astype(np.float32)
+        desired_shadow = p[:, :2] + k * (expected - p[:, :2])
+        # The trajectory holds the hidden caster, not the projected patch.
+        # Choose the caster position whose Cycles projection lands at the
+        # desired (possibly inverted) footprint.
+        out.pos[:, si, :2] = (desired_shadow
+                              - t[:, None] * L[None, :2]).astype(np.float32)
         self._sync_velocity(traj, out, si, 0)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

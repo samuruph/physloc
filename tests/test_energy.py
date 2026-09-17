@@ -23,6 +23,23 @@ def _scene(name, seed=SEED):
     return sc, spec, mockroll.roll(spec, sc)
 
 
+def test_energy_accounting_excludes_infrastructure_even_if_dynamic():
+    class Body:
+        static = False
+
+        def __init__(self, role):
+            self.role = role
+
+    for role in ("floor", "backdrop", "support", "barrier", "wall",
+                 "occluder", "shadow_caster"):
+        assert not E.is_energy_object(Body(role)), role
+    for role in ("actor", "peer", "prop", "distractor"):
+        assert E.is_energy_object(Body(role)), role
+    body = Body("actor")
+    body.static = True
+    assert not E.is_energy_object(body)
+
+
 def test_free_fall_trades_potential_for_kinetic():
     """No contact and no friction, so kinetic and potential trade one for one --
     to the integrator's order, which is the honest claim.

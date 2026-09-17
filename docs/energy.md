@@ -33,6 +33,21 @@ place.
 Total **mechanical** energy of the dynamic bodies:
 
 ```
+
+The accounting set is semantic as well as dynamic. It includes experiment
+subjects, dynamic context/distractors, affected objects, and dynamic peers. It
+excludes infrastructure: floors, backdrops, supports, barriers, walls,
+occluders, and renderer-only shadow casters. Every exported object records
+`energy_eligible`, and the same policy is published once in
+`dataset.json:dataset_metadata.energy_accounting`.
+
+This gives two deliberately different scene curves. `total` is the energy of
+the complete eligible physical scene and is used for conservation checks even
+when a body is occluded or leaves the camera. `energy_in_frame` is the sum over
+eligible objects currently visible in instance segmentation and is the primary
+curve in the video overlay. Per-object arrays retain every eligible object's
+contribution, including distractors, so experiments can include or exclude
+them without recomputing mechanics.
 E(t) = Σ_b  ½·m_b(t)·|v_b(t)|²  +  ½·ω_b(t)ᵀ·I_b(t)·ω_b(t)  +  m_b(t)·g·h_b(t)
 ```
 
@@ -50,16 +65,12 @@ E(t) = Σ_b  ½·m_b(t)·|v_b(t)|²  +  ½·ω_b(t)ᵀ·I_b(t)·ω_b(t)  +  m_b(
   frames. Weighted by `present` alone, an eleven-frame fade and a four-frame fade produced
   the identical one-frame cliff at different moments, so the three severity bins were
   indistinguishable in this channel. Only `dissolve` writes `opacity`; everything else sits
-  at 1.0 and is unaffected. `bodies.npz` ships the column, so the trace is still
-  recomputable from that file alone (`tests/test_energy.py`).
-- **A cast shadow carries no energy at all.** `shadow_track` gives its shadow to a scripted
-  stand-in body so that it can have a segmentation id and therefore a mask (see that
-  scenario's docstring); the stand-in was declared with a mass like anything else, so it
-  contributed a constant 0.33 J to every clip in the scenario and *moving* it moved the
-  scene's energy -- the `shadow` family at its strong bin slid the shadow a body-width over
-  two frames and the total jumped from 4.12 J to 54.63 J. A shadow is where light is not.
-  Bodies with `role == "shadow"` are skipped, and `body_state` reports them as static so the
-  two files cannot disagree. The violation is still fully annotated; it just has no joules.
+  at 1.0 and is unaffected. `data.h5:/objects/opacity` ships the column, so the trace is
+  recomputable from the dense store (`tests/test_energy.py`).
+- **A cast shadow carries no energy at all.** `shadow_track` uses an internal Cycles caster
+  hidden from camera rays. The caster is excluded from exported object tables,
+  segmentation ids, and all energy calculations. A shadow violation still has spatial and
+  temporal annotations mapped to the real actor; its component is `shadow`, not matter.
 
 **Mass follows volume**: `m_b(t) = m_b(0) · Π scale_mul[t,b]`. This is a deliberate choice
 and it is the one that keeps the annotation consistent with the taxonomy. A body that
@@ -112,12 +123,11 @@ scored against its own twin rather than against a global constant.
 
 ## What ships
 
-| file | contents |
+| schema-v3 location | contents |
 |---|---|
-| `energy.npz` | `total[T]`, `kinetic_translational[T]`, `kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`, `free_anomaly[T]`, `contact_anomaly[T]`, `excess_loss[T]` |
-| `energy_map.npz` | `energy[T,H,W]` -- each body's energy painted onto its pixels through the segmentation pass, the same mechanism `severity_map` already uses |
-| `bodies.npz` | the physical quantities the energy was computed from — `mass[T,B]`, `velocity[T,B,3]`, `speed`, `momentum`, `angular_momentum`, `inertia`, `height`, `kinetic`, `potential`, plus `gravity` and `dt`. See [schema.md](schema.md) |
-| `metadata.json` | an `energy` block: `E0`, `E_end`, `peak_free_anomaly`, `peak_contact_anomaly`, `total_dissipated`, all normalised by `E₀` as well as in joules |
+| `data.h5:/energy` | scene and per-object total, translational kinetic, rotational kinetic, potential, residual, and anomaly arrays |
+| `data.h5:/objects` | mass, pose, velocity, opacity, inertia, height, momentum, and other physical state needed to recompute energy |
+| `sample.json:annotations.scene_energy` | units and HDF5 references for the dense energy arrays |
 
 `energy_map` is per-body constant within a body's silhouette. For a rigid body that is the
 honest spatial resolution -- energy is not a field inside a rigid body, and pretending
@@ -218,9 +228,9 @@ nothing was touching it. That is the only one of the three channels honestly att
 a single body — a body's energy may legitimately jump at a contact because a partner supplied
 it, and untangling that needs pairwise bookkeeping the seam does not carry.
 
-So the law claims less than `energy.npz` shows, on purpose. `permanence` and `dissolve` are a
-scene-level excess loss and the law does not claim them; `energy.npz` and the `metadata.json`
-block do.
+So the law claims less than `data.h5:/energy` shows, on purpose. `permanence` and `dissolve`
+are a scene-level excess loss and the law does not claim them; the complete dense energy
+group still does.
 
 
 ## Visualisation

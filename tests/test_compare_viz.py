@@ -1,55 +1,30 @@
 """Dataset-structure videos: levels, variants and conditions side by side.
 
-Built on tiny synthetic clips laid out the way a release is, so these run
+Built on tiny schema-v3 samples, so these run
 without a generated review on disk.
 """
 from __future__ import annotations
 
-import json
 import os
 
 import numpy as np
 import pytest
 
-from physloc.annotate import layout
 from physloc.viz import compare
-from physloc.viz import video as vid
+from v3_fixture import make_sample
 
 T, SIZE = 9, 32
 
 
 def _clip(root, level, scenario, family, seed, variant=0,
           condition="standard", severity="strong", release="rel"):
-    d = os.path.join(root, "clips", release, level, scenario,
-                     "%04d_%s" % (seed, condition.replace("+", "-")),
-                     "invalid_%s_%s" % (family, severity))
-    os.makedirs(d)
-    meta = {"metadata": {"label": "invalid", "scenario": scenario,
-                         "family": family, "complexity": {"name": level},
-                         "condition": condition, "seed": seed,
-                         "variant": variant, "num_frames": T,
-                         "frame_rate": 12, "release": release},
-            "violation": {"intervention": {"severity_bin": severity},
-                          "t_event_frame": 3,
-                          "violation_windows": [[3, 6]],
-                          "observable_windows": [[4, 8]]}}
-    with open(os.path.join(d, layout.METADATA), "w") as fh:
-        json.dump(meta, fh)
-    vid.write(np.full((T, SIZE, SIZE, 3), 30 + 20 * variant, np.uint8),
-              os.path.join(d, layout.VIDEO), fps=12)
-    # Schema v2: the violation as an id map, and one violator's clocks.
-    violation = np.zeros((T, SIZE, SIZE), np.uint16)
-    violation[3:7, 8:16, 8:16] = 2
-    np.savez_compressed(os.path.join(d, layout.MASKS), violation=violation,
-                        causal=np.zeros((T, SIZE, SIZE), np.uint8),
-                        causal_source=np.zeros((T, SIZE, SIZE), np.uint16))
-    clocks = {k: np.zeros((1, T), bool) for k in layout.CLOCKS}
-    clocks["active"][0, 3:] = True
-    np.savez_compressed(os.path.join(d, layout.OBJECTS), ids=np.array([2], np.int32),
-                        severity=np.zeros((1, T), np.float32),
-                        residual=np.zeros((1, T), np.float32),
-                        score=np.zeros((1, T), np.float32), **clocks)
-    return d
+    pair = "%s/%s/%s/%04d_%s" % (
+        release, level, scenario, seed, condition.replace("+", "-"))
+    uid = pair + "/invalid_%s_%s" % (family, severity)
+    return make_sample(root, uid, "invalid", family=family, pair_uid=pair,
+                       valid_uid=pair + "/valid", frames=T, side=SIZE,
+                       level=level, scenario=scenario, condition=condition,
+                       seed=seed, variant=variant, severity=severity)
 
 
 def _frames(path):

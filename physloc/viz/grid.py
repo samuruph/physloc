@@ -30,9 +30,6 @@ mp4 only -- no image files are written.
 """
 from __future__ import annotations
 
-import glob
-import math
-import json
 import os
 from typing import Dict, List, Optional
 
@@ -373,17 +370,25 @@ def _wrap(s: str, width: int) -> List[str]:
 
 def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
     cols = []
-    for mp in sorted(glob.glob(os.path.join(pair_dir, "*", layout.METADATA))):
-        cdir = os.path.dirname(mp)
-        with open(mp) as fh:
-            meta = json.load(fh)
-        md = layout.identity(meta)
+    samples = []
+    for mp in layout.find(pair_dir):
+        sample = loader.Sample.from_dir(os.path.dirname(mp))
+        samples.append(sample)
+    valid_by_uid = {sample.uid: sample for sample in samples if sample.is_valid}
+    valid_by_pair = {sample.pair_uid: sample for sample in samples if sample.is_valid}
+    for sample in samples:
+        if not sample.is_valid:
+            sample._twin = (valid_by_uid.get(sample.valid_sample_uid)
+                            or valid_by_pair.get(sample.pair_uid))
+    for clip in samples:
+        cdir = clip.path
+        document = clip._document
+        md = clip.display_metadata["metadata"]
         is_valid = md.get("label") == "valid"
         if not is_valid and family and md.get("family") != family:
             continue
-        v = meta.get("violation") or {}
+        v = (document.get("annotations") or {}).get("violation_summary") or {}
         sev = (v.get("intervention") or {}).get("severity_bin", "valid")
-        clip = loader.Clip.from_dir(cdir)
         tl = dict(clip.timeline, severity_t=clip.timeline["severity"])
         cols.append({
             # The identity block: every reader below wants scenario, family,
@@ -397,15 +402,15 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "ref": clip.reference_mask,
             "sev": clip.severity_map,
             "causal": clip.causal,
-            "energy": clip.energy_map if clip.has(loader.ENERGY_MAP) else None,
+            "energy": clip.energy_map if clip.has("energy_map") else None,
             "etrace": ov._energy_trace(cdir),
             "twin_etrace": ov._energy_trace(
-                os.path.join(os.path.dirname(cdir), "valid")),
+                clip.twin.path if clip.twin is not None else None),
             "seg": clip.segmentations,
-            "depth": clip.pass_("depth") if clip.has("depth.npz") else None,
-            "flow": (clip.pass_("forward_flow") if clip.has("forward_flow.npz")
+            "depth": clip.pass_("depth") if clip.has("depth") else None,
+            "flow": (clip.pass_("forward_flow") if clip.has("forward_flow")
                      else None),
-            "normals": clip.pass_("normal") if clip.has("normal.npz") else None,
+            "normals": clip.pass_("normal") if clip.has("normal") else None,
             "div": clip.divergence,
             "tl": tl,
             "vwin": [tuple(w) for w in v.get("violation_windows", [])],
@@ -440,21 +445,18 @@ def coverage(release_root: str, out_path: Optional[str] = None,
     import cv2
 
     clips: Dict[str, Dict[str, Dict]] = {}
-    for mp in layout.find(release_root):
-        cdir = os.path.dirname(mp)
-        with open(mp) as fh:
-            meta = json.load(fh)
-        md = layout.identity(meta)
-        if md.get("label") != "invalid":
+    dataset = loader.PhysLocDataset(release_root)
+    for clip in dataset.samples:
+        if clip.is_valid:
             continue
-        v = meta.get("violation") or {}
+        scene = clip.scene_info
+        v = (clip._document.get("annotations") or {}).get("violation_summary") or {}
         bin_ = (v.get("intervention") or {}).get("severity_bin", "strong")
         if bin_ != severity:
             continue
-        clip = loader.Clip.from_dir(cdir)
-        clips.setdefault(md.get("scenario", "?"), {})[
-            md.get("family", "?")] = {
-                "meta": md,
+        clips.setdefault(scene.get("type", "?"), {})[
+            scene.get("family", "?")] = {
+                "meta": clip.display_metadata["metadata"],
                 "rgb": clip.video,
                 "mask": clip.violation_mask,
                 "ref": clip.reference_mask,

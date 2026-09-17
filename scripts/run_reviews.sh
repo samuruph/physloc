@@ -58,13 +58,13 @@ done
 # ACROSS the sweep. Each run.sh compared a run with itself; the level ladder only
 # exists across review_L0..L3, and the conditions are richest in
 # review_conditions, so draw the structure videos once more over every root
-# this sweep produced. Renders nothing new -- it reads finished clips.
+# this sweep produced. Renders nothing new -- it reads finished samples.
 ROOTS=()
 for C in "${CONFIGS[@]}"; do
   BASE=$(conda run --no-capture-output -n physloc python -m physloc.cli \
          config-path --config "$C" 2>/dev/null || echo "out/$C")
   R="out/$(basename "$BASE")$SUFFIX"
-  [ -d "$R/clips" ] && ROOTS+=("$R")
+  [ -d "$R/samples" ] && ROOTS+=("$R")
 done
 if [ ${#ROOTS[@]} -gt 1 ]; then
   OUT="out/compare$SUFFIX"

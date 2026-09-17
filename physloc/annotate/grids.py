@@ -21,8 +21,9 @@ from .. import loader as _loader
 
 
 #: The implementation lives in `physloc/loader.py`, which a consumer imports
-#: without the generator. Schema v2 no longer writes `grids.npz`: the loader
-#: reduces on demand, and these names stay so the generator side reads the same.
+#: without the generator. Schema v3 derives token grids on demand instead of
+#: publishing another dense file; these aliases keep generator and loader math
+#: identical.
 temporal_bins = _loader.temporal_bins
 _spatial_reduce = _loader._block
 

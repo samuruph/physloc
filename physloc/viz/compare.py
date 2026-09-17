@@ -63,10 +63,10 @@ Tile = Tuple[str, str, Optional[Dict[str, object]]]
 
 # ------------------------------------------------------------------ index
 def index(roots: Sequence[str]) -> List[Dict[str, object]]:
-    """Every INVALID clip under `roots`, with the fields selection needs.
+    """Every invalid sample under `roots`, with the fields selection needs.
 
-    Reads `metadata.json` and nothing else; arrays are loaded per tile, only
-    for the clips a video actually draws.
+    Reads `sample.json` and nothing else; arrays are loaded per tile only for
+    the samples a video actually draws.
     """
     out = []
     for root in roots:
@@ -79,20 +79,23 @@ def index(roots: Sequence[str]) -> List[Dict[str, object]]:
             md = layout.identity(meta)
             if md.get("label") != "invalid":
                 continue
-            v = meta.get("violation") or {}
+            scene = meta["metadata"]["scene"]["info"]
+            v = (meta.get("annotations") or {}).get("violation_summary") or {}
             iv = v.get("intervention") or {}
             out.append({
                 "dir": os.path.dirname(mp), "root": root,
-                "release": md.get("release"),
-                "scenario": str(md.get("scenario")),
-                "family": str(md.get("family")),
-                "level": str((md.get("complexity") or {}).get("name") or "?"),
-                "condition": str(md.get("condition") or "standard"),
+                "uid": md.get("sample_uid"),
+                "valid_uid": md.get("valid_sample_uid"),
+                "release": md.get("dataset_version"),
+                "scenario": str(scene.get("type")),
+                "family": str(scene.get("family")),
+                "level": str(scene.get("complexity") or "?"),
+                "condition": str(scene.get("condition") or "standard"),
                 "seed": int(md.get("seed") or 0),
                 "variant": int(md.get("variant") or 0),
                 "severity": str(iv.get("severity_bin") or "strong"),
                 "num_frames": int(md.get("num_frames") or 0),
-                "fps": int(md.get("frame_rate") or 12),
+                "fps": int(md.get("fps") or 12),
                 "t_event": v.get("t_event_frame"),
                 "vwin": [tuple(w) for w in v.get("violation_windows") or []],
                 "owin": [tuple(w) for w in v.get("observable_windows") or []],
@@ -178,13 +181,17 @@ def _fit(s: str, width: int, scale: float) -> str:
 def _load(rec) -> Dict[str, object]:
     """A tile's arrays, through the loader: the reference outline needs the
     clip's valid twin, and is left out when that twin is not on disk."""
-    clip = loader.Clip.from_dir(rec["dir"])
+    sample = loader.Sample.from_dir(rec["dir"])
+    valid_uid = rec.get("valid_uid")
+    if valid_uid and valid_uid != sample.uid:
+        valid_dir = os.path.join(rec["root"], "samples", *str(valid_uid).split("/"))
+        if os.path.exists(os.path.join(valid_dir, loader.SAMPLE_METADATA)):
+            sample._twin = loader.Sample.from_dir(valid_dir)
     T = int(rec["num_frames"])
-    return {"rgb": clip.video[:T],
-            "mask": clip.violation_mask if clip.has(loader.MASKS) else None,
-            "ref": clip.reference_mask if clip.twin is not None else None,
-            "active": (clip.timeline["active"] if clip.has(loader.OBJECTS)
-                       else None)}
+    return {"rgb": sample.video[:T],
+            "mask": sample.violation_mask,
+            "ref": sample.reference_mask if sample.twin is not None else None,
+            "active": sample.timeline["active"]}
 
 
 def _bar(f, rec, t: int, T: int, x: int, y: int, width: int) -> None:

@@ -149,8 +149,16 @@ class _App:
 
     # ---- JSON --------------------------------------------------------------
     def index(self) -> Dict[str, object]:
-        samples = [dict(self.ds.info(i), i=i, uid=s.uid)
-                   for i, s in enumerate(self.ds.samples)]
+        samples = []
+        for i, s in enumerate(self.ds.samples):
+            info = dict(self.ds.info(i), i=i, uid=s.uid)
+            # Keep the browser index on the same normalized vocabulary as the
+            # sample endpoint: `scenario` is the scene type, `family` the
+            # violation taxonomy.
+            info.update(scenario=s.scenario, family=s.family,
+                        condition=s.condition, level=s.level,
+                        severity_bin=s.severity_bin)
+            samples.append(info)
         return {"samples": samples, "layers": overlay.LAYERS, "panels": overlay.PANELS,
                 "token": self.token,
                 "root": os.path.basename(os.path.normpath(self.root))}
@@ -493,8 +501,8 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&
 const pretty = s => String(s ?? "").replace(/_/g, " ");
 const fmt = (x, d = 2) => x == null || Number.isNaN(+x) ? "-" : (+x).toFixed(d);
 
-const FILTERS = [["level", "level"], ["scenario", "scenario"], ["family", "family"],
-                 ["label", "label"], ["condition", "condition"], ["severity_bin", "severity"]];
+const FILTERS = [["scenario", "Scenario"], ["family", "Violation family"], ["level", "Level"],
+                 ["label", "Result"], ["condition", "Condition"], ["severity_bin", "Severity"]];
 const LAYER_GROUPS = [
   ["Annotation", ["violation", "visible", "severity", "causal", "reference"]],
   ["Geometry", ["bbox2d", "bbox3d", "centers", "velocity", "labels", "events"]]];
@@ -661,8 +669,8 @@ function list() {
     li.dataset.i = i;
     if (i === S.cur) li.className = "on";
     const what = c.label === "valid" ? "valid twin" : pretty(c.family);
-    li.innerHTML = `<span class="dot ${c.label}"></span><span class="t">${esc(pretty(c.scenario))} &middot; ${esc(what)}</span>` +
-      `<span class="s">${esc(c.level)} &middot; seed ${esc(c.seed)} &middot; ${esc(c.condition)}${c.severity_bin ? " &middot; " + esc(c.severity_bin) : ""}</span>`;
+    li.innerHTML = `<span class="dot ${c.label}"></span><span class="t">Scenario: ${esc(pretty(c.scenario))}</span>` +
+      `<span class="s">Violation family: ${esc(what)} &middot; ${esc(c.level)} &middot; seed ${esc(c.seed)} &middot; ${esc(c.condition)}${c.severity_bin ? " &middot; " + esc(c.severity_bin) : ""}</span>`;
     // A clip selected from the list starts at its first frame.
     li.onclick = () => openClip(i);
     ul.append(li);
@@ -709,7 +717,7 @@ function header() {
   const c = S.clip, d = c.difficulty;
   const label = c.label === "valid" ? `<span class="badge valid">valid twin</span>`
                                     : `<span class="badge invalid">${esc(pretty(c.family))}</span>`;
-  $("#title").innerHTML = `${esc(pretty(c.scenario))} ${label}` +
+  $("#title").innerHTML = `Scenario: ${esc(pretty(c.scenario))} ${label}` +
     `<span class="badge">${esc(c.level)}</span><span class="badge">${esc(c.condition)}</span>` +
     (c.severity_bin ? `<span class="badge">${esc(c.severity_bin)}</span>` : "") +
     (d ? `<span class="badge ${d.level}" title="detection difficulty; set by ${esc((d.binding_factors || []).join(", "))}">${d.level}</span>` : "");
@@ -1069,8 +1077,8 @@ function setLayers(ls) {
 function clipPane() {
   const c = S.clip, v = c.violation, d = c.difficulty, fps = c.fps, P = $("#pane-clip");
   const at = f => f == null || f < 0 ? "-" : `${f}  (${(f / fps).toFixed(2)} s)`;
-  let h = `<div class="card"><h4>${esc(pretty(c.scenario))} <span class="badge ${c.label}">${c.label}</span></h4><div class="kv">` +
-    [["level", c.level], ["condition", c.condition], ["medium", c.medium], ["family", pretty(c.family)], ["domain", c.domain],
+  let h = `<div class="card"><h4>Sample <span class="badge ${c.label}">${c.label}</span></h4><div class="kv">` +
+    [["scenario", pretty(c.scenario)], ["violation family", pretty(c.family)], ["level", c.level], ["condition", c.condition], ["medium", c.medium], ["domain", c.domain],
      ["severity bin", c.severity_bin], ["magnitude", c.magnitude != null ? fmt(c.magnitude, 3) : null],
      ["frames", `${c.frames} at ${fps} fps`], ["resolution", (c.resolution || []).join(" x ")]]
       .filter(([, x]) => x != null && x !== "").map(([k, x]) => `<span>${k}</span><span>${esc(x)}</span>`).join("") +

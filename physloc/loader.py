@@ -250,7 +250,10 @@ class Sample:
         return self.metadata["sample_info"]
 
     info = property(lambda self: self.sample_info)
-    scene_info = property(lambda self: self.metadata["scene"]["info"])
+    # Newer samples keep taxonomy fields in scene.info; exported clip metadata
+    # may keep the same fields at the metadata root.
+    scene_info = property(lambda self: ((self.metadata.get("scene") or {}).get("info")
+                                        or self.metadata))
     uid = property(lambda self: str(self.sample_info["sample_uid"]))
     pair_uid = property(lambda self: str(self.sample_info["pair_uid"]))
     valid_sample_uid = property(lambda self: str(
@@ -261,7 +264,9 @@ class Sample:
     fps = property(lambda self: float(self.sample_info["fps"]))
     prompt = property(lambda self: self.scene_info.get("prompt"))
     family = property(lambda self: self.scene_info.get("family"))
-    scenario = property(lambda self: self.scene_info.get("type"))
+    # Schema-v3 metadata uses `scenario`; `type` is retained for older files.
+    scenario = property(lambda self: self.scene_info.get("scenario")
+                        or self.scene_info.get("type"))
     condition = property(lambda self: self.scene_info.get("condition"))
     level = property(lambda self: self.scene_info.get("level"))
     severity_bin = property(lambda self: self.scene_info.get("severity"))
@@ -603,7 +608,7 @@ def _as_set(value: Any) -> set:
 class PhysLocDataset:
     """All schema-v3 samples under ``root``."""
 
-    FILTERS = ("label", "family", "scenario", "level", "condition",
+    FILTERS = ("label", "scenario", "family", "level", "condition",
                "severity", "seed", "split")
     UNITS = ("sample", "pair")
 

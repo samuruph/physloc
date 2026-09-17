@@ -18,7 +18,7 @@ defaults:
   fps: 12
   frames: 25
   spp: 16
-  complexity: L0
+  complexity: all
   variants: 1
   severity: all
   scenario: shadow_track

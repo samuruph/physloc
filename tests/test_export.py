@@ -80,6 +80,8 @@ def test_dataset_metadata_is_complete(release, tmp_path):
         metadata = json.load(handle)["dataset_metadata"]
     assert metadata["number_of_samples"] == 24
     assert metadata["number_of_pairs"] == 12
+    assert metadata["split_ratios"] == {"main": 0.75, "held_out": 0.20, "debug": 0.05}
+    assert sum(metadata["splits"].values()) == metadata["number_of_samples"]
     assert metadata["taxonomy"]["scenarios"] == ["drop"]
     assert metadata["generation_config_ids"] == ["test:debug"]
     assert metadata["coordinate_convention"].startswith("right-handed")

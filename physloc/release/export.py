@@ -176,11 +176,7 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
             "number_of_samples": len(rows),
             "number_of_pairs": len({row["pair_uid"] for row in rows}),
             "splits": dict(sorted(splits.items())),
-            "split_definitions": {
-                name: {"fraction": fraction, "unit": "pair",
-                       "assignment": "deterministic scenario-stratified SHA-256"}
-                for name, fraction in SPLIT_FRACTIONS
-            },
+            "split_ratios": dict(SPLIT_FRACTIONS),
             "complexity_splits": {str(key): value for key, value in sorted(complexity.items())},
             "taxonomy": {
                 "scenarios": sorted({str(row["scenario"]) for row in rows

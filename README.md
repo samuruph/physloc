@@ -607,10 +607,12 @@ The draw is weighted so the mean density stays where the scenarios' contact para
 ### Splits
 
 `main` **75%** · `held_out` **20%** · `debug` **5%**, grouped by `pair_uid` so a valid twin and its
-invalid siblings never land in different splits. Pairs are cut by a hash of their uid within each
-scenario, so every split sees every scenario in the same proportions and a re-generated release
-reproduces its splits. Every split ships every annotation — for a blind leaderboard set, strip
-annotations at that point.
+invalid siblings never land in different splits. The exporter groups pairs by scenario, orders the
+pairs inside each scenario by a SHA-256 hash of the `pair_uid`, then cuts that ordered list by the
+split fractions. That keeps every scenario in roughly the same proportions in each split, and a
+re-generated release reproduces the same assignment. The `held_out` split is the dataset evaluation
+split; it is unrelated to any asset-level `held_out` flag on scanned objects. Every split ships every
+annotation — for a blind leaderboard set, strip annotations at that point.
 
 ### The index
 

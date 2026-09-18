@@ -828,7 +828,10 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
         if actor_id > 0:
             actor_pixels = np.asarray(stack["segmentation"]) == actor_id
             rgba = np.asarray(stack["rgba"]).copy()
-            rgba[actor_pixels, :3] = np.asarray(clear["rgba"])[actor_pixels, :3]
+            rgb = rgba[..., :3]
+            clear_rgb = np.asarray(clear["rgba"])[..., :3]
+            rgb[actor_pixels] = clear_rgb[actor_pixels]
+            rgba[..., :3] = rgb
             stack["rgba"] = rgba
 
     declared = sorted({int(b.segmentation_id) for b in spec.bodies})

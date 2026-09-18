@@ -894,6 +894,14 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     # and its `stage` stands a dynamic proxy in its place, so the guard
     # was disqualifying the one family built to pass it.
     staged = is_staged(plan)
+    balanced_support_released = bool(
+        spec.notes.get("balanced_spherical_base") and (staged or subs))
+    if balanced_support_released:
+        # The spherical tabletop is held only while producing the lawful
+        # baseline. Release that initialization constraint for every staged
+        # intervention, not only permanence, so mass/shape/contact changes can
+        # causally tip the support in the simulator.
+        spec.notes["_release_balanced_support"] = True
     if subs:
         # EACH VIOLATOR AT ITS OWN FRAME, in one simulation: the world is reset
         # to the valid state at the earliest moment, and every later violator's
@@ -911,6 +919,8 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
             for s in reversed(ordered):
                 inj.unstage(spec, simulator, objs, s)
             stepper.reset_to(spec, objs, traj_valid, T - 1)
+            if balanced_support_released:
+                spec.notes.pop("_release_balanced_support", None)
         for s in ordered:
             traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, s)
     elif staged:
@@ -931,6 +941,8 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
             inj.unstage(spec, simulator, objs, plan)
             stepper.reset_to(spec, objs, traj_valid,
                              spec.tier.num_frames - 1)
+            if balanced_support_released:
+                spec.notes.pop("_release_balanced_support", None)
         traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, plan)
     else:
         traj_invalid = inj.apply(spec, traj_valid, plan)

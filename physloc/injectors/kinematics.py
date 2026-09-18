@@ -33,7 +33,16 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     `drop` mid-bounce, and a parabola fitted across a bounce is not a
     parabola.
     """
-    anchored = _geom.anchored_event_frame(spec, num_frames)
+    # Free-fall families should be allowed to intervene from the start of the
+    # flight.  A landing anchor is appropriate for appearance/identity changes,
+    # but making antigravity or a non-parabolic arc wait for that anchor removes
+    # the very early-flight variants the scenario is meant to provide.
+    family, _, _ = _geom._EVENT_KEY.get()
+    motion_anchor = bool(spec.notes.get("event_anchor")) and family in {
+        "antigravity", "global_gravity", "non_parabolic", "continuity",
+    }
+    anchored = (None if motion_anchor
+                else _geom.anchored_event_frame(spec, num_frames))
     if anchored is not None:
         return anchored
     # On the first attempt only -- a retry must be able to fire elsewhere; see
@@ -51,8 +60,9 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
         # every seed, so the family fired on frame `num_frames // 4` in every
         # clip it ever produced. `continuity` and `phantom_impulse` were pinned
         # that way across twelve scenarios each.
+        flight_lo = max(run[0] + 1, 1) if motion_anchor else max(run[0] + 1, lo)
         t = _geom.frame_in_band(spec, *_geom.visible_band(
-            spec, traj, [body], max(run[0] + 1, lo), run[1]))
+            spec, traj, [body], flight_lo, run[1]))
         if 1 <= t < num_frames - 1:
             return int(t)
     # No airborne run at all -- a ball rolling the whole clip, a body at rest

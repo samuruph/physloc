@@ -167,6 +167,28 @@ def test_physical_anchor_mixes_near_and_broad_timing():
     assert broad >= 6
 
 
+def test_collision_anchor_allows_late_broad_branch():
+    """The collision cue is modal, not a hard upper bound on timing."""
+    late = 0
+    for seed in range(40):
+        sc, spec = _spec(seed, "collision")
+        traj = mockroll.roll(spec, sc)
+        cfg = spec.notes["event_anchor"]
+        bodies, partners = set(cfg["body_ids"]), set(cfg["partner_ids"])
+        contacts = [int(traj.contacts.frame[k]) for k in range(len(traj.contacts))
+                    if ((int(traj.contacts.body_a[k]) in bodies
+                         and int(traj.contacts.body_b[k]) in partners)
+                        or (int(traj.contacts.body_b[k]) in bodies
+                            and int(traj.contacts.body_a[k]) in partners))]
+        if not contacts:
+            continue
+        plan = injectors.get("deformation").plan(
+            spec, traj, np.random.RandomState(1), "strong")
+        if plan is not None and plan.t_event > min(contacts):
+            late += 1
+    assert late >= 4
+
+
 def test_permanence_scores_only_disappearance_and_return_transitions():
     sc, spec = _spec(4, "barrier_pass")
     traj = mockroll.roll(spec, sc)

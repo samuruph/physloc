@@ -140,7 +140,9 @@ class Collision(Scenario):
                                     # Keep causal interventions before the
                                     # meeting, but distribute a minority over
                                     # the striker's approach.
-                                    "broad_offsets": [-10, -3],
+                                    "broad_offsets": [-10, 8],
+                                    "broad_seconds": [-0.42, 0.28],
+                                    "jitter_seconds": 0.10,
                                     "near_probability": 0.6}})
 
 

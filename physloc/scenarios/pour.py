@@ -208,6 +208,8 @@ class Pour(Scenario):
                        # some violations can begin during the descent or while
                        # the remaining grains are still arriving.
                        "broad_offsets": [-6, 2],
+                       "broad_seconds": [-0.32, 0.25],
+                       "jitter_seconds": 0.10,
                        "near_probability": 0.6},
                    # Every family that can act on a set acts on ALL of the
                    # grains here. A pour is not a scene with one protagonist:

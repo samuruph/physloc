@@ -76,6 +76,8 @@ class Drop(Scenario):
                                     # substantial minority may occur during
                                     # the approach or the visible rebound.
                                     "broad_offsets": [-7, 6],
+                                    "broad_seconds": [-0.30, 0.28],
+                                    "jitter_seconds": 0.10,
                                     "near_probability": 0.6}},
         )
 

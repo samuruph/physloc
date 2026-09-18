@@ -387,11 +387,13 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
     ``notes["event_anchor"]`` is deliberately data, not a scenario-name
     switch.  It accepts ``body_ids``, optional ``partner_ids``, an ``offset``
     (negative means before contact), and ``jitter`` in frames.  With
-    ``broad_offsets=[lo, hi]`` the near-contact draw is used with the declared
-    ``near_probability`` (60% by default); the remainder is drawn uniformly
-    from the wider, still causal offset interval.  Contacts are measured from
-    the lawful rollout in the current event context, so this composes with
-    every injector that uses the normal event helper.
+    ``broad_offsets=[lo, hi]`` (or the frame-rate-independent
+    ``broad_seconds=[lo, hi]``) the near-contact draw is used with the
+    declared ``near_probability`` (60% by default); the remainder is drawn
+    uniformly from the wider, still causal offset interval.  ``jitter_seconds``
+    can similarly widen the near branch at high frame rates. Contacts are
+    measured from the lawful rollout in the current event context, so this
+    composes with every injector that uses the normal event helper.
     """
     cfg = spec.notes.get("event_anchor") or {}
     _, _, traj = _EVENT_KEY.get()
@@ -405,7 +407,10 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
     if contact is None:
         return None
     centre = contact + int(cfg.get("offset", 0))
+    fps = _fps(spec)
     jitter = max(0, int(cfg.get("jitter", 0)))
+    if "jitter_seconds" in cfg:
+        jitter = max(jitter, int(round(abs(float(cfg["jitter_seconds"])) * fps)))
     # One stable draw per family/attempt, shared by the severity bins.  The
     # second salt keeps the branch choice independent from the selected frame.
     near_probability = float(np.clip(cfg.get("near_probability", 0.6), 0.0, 1.0))
@@ -417,6 +422,11 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
             centre += int(round((2.0 * u - 1.0) * jitter))
         else:
             lo, hi = sorted((int(broad[0]), int(broad[1])))
+            if cfg.get("broad_seconds") is not None:
+                seconds = cfg["broad_seconds"]
+                if len(seconds) == 2:
+                    lo, hi = sorted(int(round(float(x) * fps))
+                                    for x in seconds)
             u = event_fraction(spec, salt=1703)
             centre = contact + lo + int(round(u * (hi - lo)))
     elif jitter:

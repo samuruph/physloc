@@ -87,8 +87,14 @@ class PhantomImpulse(Injector):
                 contact = _geom.anchor_contact_frame(spec, T)
                 if contact is not None:
                     centre = contact + int(anchor.get("offset", 0))
-                    lo = centre - max(1, int(anchor.get("jitter", 1)))
-                    hi = centre + max(1, int(anchor.get("jitter", 1)))
+                    jitter = max(1, int(anchor.get("jitter", 1)))
+                    if "jitter_seconds" in anchor:
+                        jitter = max(jitter, int(round(
+                            abs(float(anchor["jitter_seconds"])) *
+                            float(getattr(getattr(spec, "tier", None),
+                                          "fps", 12) or 12))))
+                    lo = centre - jitter
+                    hi = centre + jitter
                     near = valid[(valid >= lo) & (valid <= hi)]
                 else:
                     near = np.asarray([], dtype=int)

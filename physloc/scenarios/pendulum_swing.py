@@ -210,13 +210,14 @@ class PendulumSwing(Scenario):
         return (constrain,)
 
     def rescript(self, spec, traj, plan) -> None:
-        """Let an empty pendulum hang vertically when its bob is removed.
+        """Continue the rod's swing after its bob is removed.
 
         The live constraint follows the bob's simulator proxy; ``Vanish`` parks
-        that proxy below the world, so without this render-side correction the
-        rod points after a body that no longer exists.  A massless rod/string
-        with no load has no pendular motion of its own: it returns to vertical
-        immediately and stays there until a temporarily absent bob returns.
+        that proxy below the world.  Replacing the rod with a vertical pose
+        therefore hid the proxy problem but introduced a visible teleport.
+        Continue from the last lawful angle and angular rate instead: the rod
+        keeps its trajectory while the absent/fading bob no longer determines
+        its pose.
         """
         jb = traj.index_of(self.SEG_BOB)
         jr = traj.index_of(self.SEG_ROD)
@@ -228,13 +229,32 @@ class PendulumSwing(Scenario):
             detached[max(0, int(plan.t_event)):] = True
         if not detached.any():
             return
+        start = int(np.flatnonzero(detached)[0])
+        if start <= 0:
+            return
         pivot = np.asarray(spec.notes["pivot"], np.float64)
         arm = float(spec.notes["arm"])
-        centre = pivot + np.array([0.0, 0.0, -0.5 * arm])
-        traj.pos[detached, jr, :] = centre.astype(np.float32)
-        traj.quat[detached, jr, :] = np.array([1.0, 0.0, 0.0, 0.0], np.float32)
-        traj.lin_vel[detached, jr, :] = 0.0
-        traj.ang_vel[detached, jr, :] = 0.0
+
+        def angle(frame):
+            d = np.asarray(traj.pos[frame, jr], np.float64) - pivot
+            return float(np.arctan2(d[0], max(1e-9, -d[2])))
+
+        theta = angle(start - 1)
+        omega = ((theta - angle(start - 2)) / max(float(traj.dt), 1e-9)
+                 if start > 1 else 0.0)
+        for frame in range(start, traj.num_frames):
+            theta += omega * float(traj.dt)
+            direction = np.array([np.sin(theta), 0.0, -np.cos(theta)])
+            traj.pos[frame, jr, :] = (pivot + direction * (arm / 2.0)).astype(
+                np.float32)
+            phi = np.pi - theta
+            traj.quat[frame, jr, :] = np.array(
+                [0.0, np.sin(phi / 2.0), 0.0, np.cos(phi / 2.0)], np.float32)
+            traj.lin_vel[frame, jr, :] = (omega * arm / 2.0 *
+                                          np.array([np.cos(theta), 0.0,
+                                                    np.sin(theta)])).astype(
+                                                        np.float32)
+            traj.ang_vel[frame, jr, :] = np.array([0.0, omega, 0.0], np.float32)
 
     @staticmethod
     def _carry_rod(pb, rod, pivot, direction, arm) -> None:

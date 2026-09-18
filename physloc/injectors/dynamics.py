@@ -68,20 +68,23 @@ class PhantomImpulse(Injector):
         # remain contact-free while appearance/identity events may continue
         # through contact.
         anchor = spec.notes.get("event_anchor") or {}
-        if anchor.get("broad_offsets") and len(targets) == 1:
-            bi = traj.index_of(int(actor.segmentation_id))
-            speed = np.linalg.norm(np.asarray(traj.lin_vel[:, bi, :],
-                                              np.float64), axis=1)
+        if anchor.get("broad_offsets"):
+            indices = [traj.index_of(int(body.segmentation_id))
+                       for body in targets]
+            speeds = np.linalg.norm(np.asarray(traj.lin_vel[:, indices, :],
+                                               np.float64), axis=2)
+            speed = speeds[:, 0] if len(targets) == 1 else np.median(speeds, axis=1)
             threshold = max(_geom.REST_SPEED,
                             _geom.MOTION_SHARE * float(speed.max()))
             free = np.ones((T,), dtype=bool)
             contacts = traj.contacts
-            for k in range(len(contacts)):
-                if int(actor.segmentation_id) in (
-                        int(contacts.body_a[k]), int(contacts.body_b[k])):
-                    f = int(contacts.frame[k])
-                    if 0 <= f < T:
-                        free[max(0, f - 1):min(T, f + 2)] = False
+            if len(targets) == 1:
+                for k in range(len(contacts)):
+                    if int(actor.segmentation_id) in (
+                            int(contacts.body_a[k]), int(contacts.body_b[k])):
+                        f = int(contacts.frame[k])
+                        if 0 <= f < T:
+                            free[max(0, f - 1):min(T, f + 2)] = False
             valid = np.flatnonzero(free & (speed > threshold))
             if valid.size:
                 contact = _geom.anchor_contact_frame(spec, T)
@@ -100,7 +103,21 @@ class PhantomImpulse(Injector):
                     near = np.asarray([], dtype=int)
                 use_near = (_geom.event_fraction(spec, salt=3101) <
                              float(anchor.get("near_probability", 0.6)))
-                choices = near if use_near and near.size else valid
+                if use_near and near.size:
+                    choices = near
+                else:
+                    choices = valid
+                    seconds = anchor.get("broad_seconds")
+                    if contact is not None and seconds is not None and len(seconds) == 2:
+                        fps = float(getattr(getattr(spec, "tier", None),
+                                            "fps", 12) or 12)
+                        lo_s, hi_s = sorted(float(x) for x in seconds)
+                        wide_lo = contact + int(round(lo_s * fps))
+                        wide_hi = contact + int(round(hi_s * fps))
+                        choices = choices[(choices >= wide_lo) &
+                                          (choices <= wide_hi)]
+                        if not choices.size:
+                            choices = valid
                 u = _geom.event_fraction(spec, salt=3102)
                 index = min(len(choices) - 1,
                             int(round(u * (len(choices) - 1))))

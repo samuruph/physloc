@@ -29,6 +29,37 @@ class RestingTable(Scenario):
     SEG_FLOOR, SEG_ACTOR, SEG_TABLE, SEG_POST, SEG_SPLIT, SEG_BASE = 1, 2, 3, 8, 9, 10
     SEG_PROPS = (4, 5)
 
+    def sim_hooks(self, spec, simulator, objs):
+        """Hold the spherical balance exactly until an intervention releases it.
+
+        A point-supported tabletop is physically metastable: tiny solver
+        impulses otherwise make the valid rollout wobble before any violation.
+        The hold is only an initialization/stability constraint.  A staged
+        injector sets ``_release_balanced_support`` at ``t_event``; from then
+        on PyBullet owns the tabletop and any shifted load can tip it.
+        """
+        if not spec.notes.get("balanced_spherical_base"):
+            return ()
+        import pybullet as pb
+        from ..render import stepper
+
+        table = next(b for b in spec.bodies
+                     if int(b.segmentation_id) == int(self.SEG_TABLE))
+        pos = tuple(float(x) for x in table.position)
+        quat = (0.0, 0.0, 0.0, 1.0)
+
+        def hold(_client, _step, _frame):
+            if spec.notes.get("_release_balanced_support"):
+                return
+            idx = stepper.pybullet_index(simulator, objs, spec,
+                                         self.SEG_TABLE)
+            if idx is None:
+                return
+            pb.resetBasePositionAndOrientation(idx, pos, quat)
+            pb.resetBaseVelocity(idx, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+        return (hold,)
+
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)

@@ -110,6 +110,12 @@ class Permanence(Injector):
     def stage(self, spec, simulator, objs, plan):
         from ..render import stepper
 
+        if spec.notes.get("balanced_spherical_base"):
+            # The valid rollout is held in exact balance.  Releasing that
+            # stabilizing initialization at the same frame as the removal
+            # lets the remaining load tip the tabletop in real simulation.
+            spec.notes["_release_balanced_support"] = True
+
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
         gone = [stepper.Vanish(simulator, objs, spec, by_id[int(i)])
                 for i in plan.causal_body_ids if int(i) in by_id]
@@ -138,6 +144,7 @@ class Permanence(Injector):
         for g in getattr(self, "_gone", ()) or ():
             g.show()
         self._gone = []
+        spec.notes.pop("_release_balanced_support", None)
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The render side: absent means no pixels, which PyBullet cannot say."""

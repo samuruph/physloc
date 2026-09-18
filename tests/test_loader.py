@@ -92,6 +92,9 @@ def test_shadow_is_an_actor_component_not_an_object(tmp_path):
     make_sample(tmp_path, pair + "/invalid_shadow_strong", "invalid",
                 family="shadow", pair_uid=pair, valid_uid=pair + "/valid", component=2)
     sample = L.PhysLocDataset(str(tmp_path), label="invalid")[0]
+    # A label-filtered dataset intentionally contains no valid twin; attach it
+    # here because the reference-mask assertion exercises the pair API.
+    sample._twin = L.Sample.from_dir(str(tmp_path / "samples" / pair / "valid"))
     assert all(obj["role"] not in {"shadow", "shadow_caster"}
                for obj in sample.object_definitions)
     assert set(np.unique(sample.violation_component)) == {0, 2}

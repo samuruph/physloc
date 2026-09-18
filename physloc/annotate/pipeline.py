@@ -144,8 +144,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # footprint.  A shadow violation is localized on the receiver, not on
         # the caster, so keep only receiver pixels in both twins.
         if source_id > 0:
-            shadow_v &= seg_v != source_id
-            shadow_i &= seg_i != source_id
+            # Keep a small receiver-only moat as well as the caster footprint.
+            # Anti-aliasing and contact shadows otherwise leave a one- or
+            # two-pixel halo attached to the object, which reads as labelling
+            # the object rather than its projected shadow at review scale.
+            guard_px = 2
+            shadow_v &= ~masks_mod.dilate(
+                masks_mod.footprint(seg_v, [source_id]), guard_px)
+            shadow_i &= ~masks_mod.dilate(
+                masks_mod.footprint(seg_i, [source_id]), guard_px)
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the

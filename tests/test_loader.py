@@ -112,9 +112,18 @@ def test_shadow_reference_mask_is_receiver_only():
     strength = np.array([[[0.5, 0.5], [0.5, 0.0]]], np.float32)
     source = np.array([[[2, 2], [0, 0]]], np.uint16)
     receiver_seg = np.array([[[2, 1], [1, 1]]], np.uint16)
-    lawful = L.shadow_reference_mask(strength, source, [2])
-    lawful &= receiver_seg != 2
+    lawful = L.shadow_receiver_mask(strength, source, receiver_seg, [2], guard_px=0)
     assert lawful.tolist() == [[[False, True], [False, False]]]
+
+
+def test_shadow_receiver_mask_removes_the_two_pixel_caster_halo():
+    strength = np.ones((1, 9, 9), np.float32)
+    source = np.full((1, 9, 9), 2, np.uint16)
+    seg = np.zeros((1, 9, 9), np.uint16)
+    seg[:, 4, 4] = 2
+    mask = L.shadow_receiver_mask(strength, source, seg, [2])
+    assert not mask[:, 2:7, 2:7].any()
+    assert mask[:, 1, 1].all()
 
 
 def test_hdf5_handle_is_not_pickled(dataset_root):

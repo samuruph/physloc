@@ -97,7 +97,7 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
             # A surface only counts where the violator is passing through it:
             # otherwise "the floor" becomes the whole plane.
             sec |= (footprint(seg_invalid, static_near)
-                    & _dilate(prim, neighbourhood) & gate)
+                    & dilate(prim, neighbourhood) & gate)
         # **EACH BODY ON ITS OWN CLOCK.** One shared gate turned every affected
         # body blue over the same frames, so a body knocked at the end of the
         # clip was painted from the start of the window -- before anything had
@@ -151,7 +151,7 @@ def divergence_map(rgb_valid: np.ndarray, rgb_invalid: np.ndarray) -> np.ndarray
     return (np.abs(a - b).max(axis=-1) / 255.0).astype(np.float16)
 
 
-def _dilate(mask: np.ndarray, k: int) -> np.ndarray:
+def dilate(mask: np.ndarray, k: int) -> np.ndarray:
     """Square dilation by `k` px, per frame, without a SciPy dependency."""
     out = mask.copy()
     for dy in range(-k, k + 1):

@@ -433,8 +433,8 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
                 strength = c["clip"].observations.get("shadow_strength")
                 source = c["clip"].observations.get("shadow_source_id")
                 if strength is not None and source is not None:
-                    c["ref"] = (loader.shadow_reference_mask(strength, source, ids)
-                                 & ~np.isin(c["seg"], ids))
+                    c["ref"] = loader.shadow_receiver_mask(
+                        strength, source, c["seg"], ids)
                 else:
                     c["ref"] = np.zeros(c["seg"].shape, bool)
             else:

@@ -27,6 +27,7 @@ PASSES = ("depth", "forward_flow", "backward_flow", "normal",
           "object_coordinates", "shadow_strength", "shadow_source_id")
 CLOCKS = ("active", "intervening", "consequence", "observable", "occluded")
 DEPTH_BACKGROUND = 1e6
+SHADOW_CASTER_GUARD_PX = 2
 
 METADATA_FIELDS = ("metadata",)
 LOCALIZATION_FIELDS = (
@@ -104,6 +105,32 @@ def shadow_reference_mask(shadow_strength: np.ndarray,
     source = np.asarray(shadow_source_id)
     return (strength > float(threshold)) & np.isin(
         source, np.asarray(list(ids), dtype=source.dtype))
+
+
+def shadow_receiver_mask(shadow_strength: np.ndarray,
+                         shadow_source_id: np.ndarray,
+                         segmentation: np.ndarray,
+                         ids: Sequence[int],
+                         guard_px: int = SHADOW_CASTER_GUARD_PX) -> np.ndarray:
+    """Projected shadow pixels, excluding the caster and its local halo."""
+    projected = shadow_reference_mask(shadow_strength, shadow_source_id, ids)
+    caster = np.isin(np.asarray(segmentation),
+                     np.asarray(list(ids), dtype=np.asarray(segmentation).dtype))
+    return projected & ~_dilate_mask(caster, int(guard_px))
+
+
+def _dilate_mask(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Square per-frame dilation without an optional image-processing dependency."""
+    out = np.asarray(mask, bool).copy()
+    if radius <= 0:
+        return out
+    source = out.copy()
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            if dy == 0 and dx == 0:
+                continue
+            out |= np.roll(np.roll(source, dy, axis=1), dx, axis=2)
+    return out
 
 
 def sample_timeline(objects: Dict[str, np.ndarray], num_frames: int) -> Dict[str, np.ndarray]:
@@ -422,12 +449,8 @@ class Sample:
             strength = self.twin.observations.get("shadow_strength")
             source = self.twin.observations.get("shadow_source_id")
             if strength is not None and source is not None:
-                lawful = shadow_reference_mask(strength, source, ids)
-                # The projected shadow belongs on the receiver.  Never turn
-                # the caster's own visible segmentation into a green shadow
-                # outline when the light footprint overlaps the object.
-                lawful &= ~np.isin(self.twin.segmentations, ids)
-                return lawful
+                return shadow_receiver_mask(strength, source,
+                                            self.twin.segmentations, ids)
             return np.zeros(self.segmentations.shape, bool)
         return reference_mask(self.twin.segmentations, ids)
 

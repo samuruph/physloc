@@ -10,6 +10,11 @@ Two static surfaces on purpose -- the floor and the table -- because that is the
 case where "what is holding this up?" has a wrong answer available. An injector
 that picks the first static body in the list annotates a mug as hovering a
 table's height above the ground; `_geom.support_under` picks by height instead.
+Some instances use a balanced spherical pedestal.  The tabletop and its load
+start centred over the sphere, but the tabletop is dynamic: removing or
+changing one of the placed bodies moves the centre of mass and lets the
+simulator tip the support.  The ordinary flat-table variant remains the
+majority so the baseline equilibrium cell is preserved.
 """
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class RestingTable(Scenario):
     name = "resting_table"
-    SEG_FLOOR, SEG_ACTOR, SEG_TABLE, SEG_POST, SEG_SPLIT = 1, 2, 3, 8, 9
+    SEG_FLOOR, SEG_ACTOR, SEG_TABLE, SEG_POST, SEG_SPLIT, SEG_BASE = 1, 2, 3, 8, 9, 10
     SEG_PROPS = (4, 5)
 
     def _sample(self, seed: int, tier: Tier,
@@ -33,14 +38,28 @@ class RestingTable(Scenario):
             raise NotImplementedError("complexity %s not built" % complexity)
 
         top_z = 0.76
-        table = BodySpec(name="table", kind="cube", position=(0.0, 0.0, top_z - 0.06),
-                         scale=(1.5, 0.95, 0.06), mass=0.0, static=True,
+        balanced_base = bool(rng.rand() < 0.35)
+        sphere_radius = 0.42
+        table_z = (2.0 * sphere_radius + 0.06 if balanced_base
+                   else top_z - 0.06)
+        table = BodySpec(name="table", kind="cube", position=(0.0, 0.0, table_z),
+                         scale=(1.5, 0.95, 0.06),
+                         mass=(2.8 if balanced_base else 0.0),
+                         static=not balanced_base,
                          friction=0.7, restitution=0.05, color=(0.42, 0.33, 0.26),
                          segmentation_id=self.SEG_TABLE, role="prop")
-        post = BodySpec(name="post", kind="cube", position=(0.0, 0.0, 0.35),
-                        scale=(0.16, 0.16, 0.35), mass=0.0, static=True,
-                        friction=0.7, restitution=0.05, color=(0.35, 0.28, 0.22),
-                        segmentation_id=self.SEG_POST, role="prop")
+        if balanced_base:
+            post = BodySpec(name="post", kind="sphere",
+                            position=(0.0, 0.0, sphere_radius),
+                            scale=(sphere_radius,) * 3, mass=0.0, static=True,
+                            friction=0.8, restitution=0.05,
+                            color=(0.35, 0.28, 0.22),
+                            segmentation_id=self.SEG_BASE, role="support")
+        else:
+            post = BodySpec(name="post", kind="cube", position=(0.0, 0.0, 0.35),
+                            scale=(0.16, 0.16, 0.35), mass=0.0, static=True,
+                            friction=0.7, restitution=0.05, color=(0.35, 0.28, 0.22),
+                            segmentation_id=self.SEG_POST, role="prop")
 
         hue = float(rng.uniform(0, 1))
         size = C.size_scale(seed, self.name)
@@ -52,7 +71,8 @@ class RestingTable(Scenario):
         r0 = float(rng.uniform(0.20, 0.26)) * size
         actor_kind = "sphere" if rng.rand() < 0.6 else "cube"
         actor = BodySpec(name=C.shape_name(actor_kind), kind=actor_kind,
-                         position=(xs[0], float(rng.uniform(-0.2, 0.2)), top_z + r0),
+                         position=(xs[0], 0.0 if balanced_base else float(rng.uniform(-0.2, 0.2)),
+                                   table_z + 0.06 + r0),
                          scale=(r0,) * 3, mass=0.9, friction=0.7, restitution=0.05,
                          color=C.hue_rgb(hue), segmentation_id=self.SEG_ACTOR,
                          role="actor")
@@ -62,7 +82,8 @@ class RestingTable(Scenario):
             kind = "cube" if i == 0 else "sphere"
             props.append(BodySpec(
                 name="prop_%d" % i, kind=kind,
-                position=(xs[i + 1], float(rng.uniform(-0.2, 0.2)), top_z + h),
+                position=(xs[i + 1], 0.0 if balanced_base else float(rng.uniform(-0.2, 0.2)),
+                          table_z + 0.06 + h),
                 scale=(h,) * 3, mass=0.9, friction=0.7, restitution=0.05,
                 color=C.hue_rgb((hue + 0.2 + 0.25 * i) % 1.0),
                 segmentation_id=self.SEG_PROPS[i], role="prop"))
@@ -82,8 +103,11 @@ class RestingTable(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.9)),
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,
-            notes={"table_top": top_z, "actor_radius": r0,
+            notes={"table_top": table_z + 0.06, "actor_radius": r0,
                    "actor_kind": actor_kind,
+                   "balanced_spherical_base": balanced_base,
+                   "table_id": self.SEG_TABLE,
+                   "support_base_id": self.SEG_BASE if balanced_base else self.SEG_POST,
                    "violation_target_ids": [self.SEG_ACTOR] + list(self.SEG_PROPS),
                    "randomize_violation_target": True})
 

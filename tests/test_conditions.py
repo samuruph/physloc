@@ -298,3 +298,21 @@ def test_peers_are_actors_and_distractors_are_not(name):
         assert SEG_DISTRACTOR_BASE <= int(b.segmentation_id) < SEG_PEER_BASE
         assert int(b.segmentation_id) not in eligible, (
             "%s: %s is scenery an injector can pick" % (name, b.name))
+
+
+def test_resting_table_spherical_base_is_dynamic_table_on_static_support():
+    sc = scenarios.get("resting_table")
+    seen = 0
+    for seed in range(30):
+        spec = sc.sample(seed, TIERS["debug"], LEVEL)
+        if not spec.notes.get("balanced_spherical_base"):
+            continue
+        seen += 1
+        table = next(b for b in spec.bodies
+                     if int(b.segmentation_id) == int(spec.notes["table_id"]))
+        base = next(b for b in spec.bodies
+                    if int(b.segmentation_id) == int(spec.notes["support_base_id"]))
+        assert not table.static and table.mass > 0.0
+        assert base.kind == "sphere" and base.static
+        assert int(base.segmentation_id) not in spec.notes["violation_target_ids"]
+    assert seen >= 5

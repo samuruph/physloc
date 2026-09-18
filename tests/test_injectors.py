@@ -301,10 +301,17 @@ def test_a_violation_of_the_shadow_survives_rescripting(family):
     before = np.array(out.pos[:, spec.index_of("shadow_caster"), :], copy=True)
     scale_before = np.array(out.scale_mul[:, spec.index_of("shadow_caster"), :],
                             copy=True)
+    actor_scale = np.array(out.scale_mul[:, spec.index_of("body"), :],
+                           copy=True)
     sc.rescript(spec, out, plan)
     assert np.array_equal(out.pos[:, spec.index_of("shadow_caster"), :], before)
     assert np.array_equal(out.scale_mul[:, spec.index_of("shadow_caster"), :],
                           scale_before)
+    # Optical shadow families may reshape the hidden Cycles caster, but never
+    # the visible actor whose projected shadow is being explained.
+    if family == "shadow_shape":
+        assert np.array_equal(out.scale_mul[:, spec.index_of("body"), :],
+                              actor_scale)
 
 
 def test_pendulum_rod_relaxes_at_dissolve_onset():

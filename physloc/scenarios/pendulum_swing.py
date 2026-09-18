@@ -215,9 +215,9 @@ class PendulumSwing(Scenario):
         The live constraint follows the bob's simulator proxy; ``Vanish`` parks
         that proxy below the world.  Replacing the rod with a vertical pose
         therefore hid the proxy problem but introduced a visible teleport.
-        Continue from the last lawful angle and angular rate instead: the rod
-        keeps its trajectory while the absent/fading bob no longer determines
-        its pose.
+        Continue from the last lawful angle and angular rate instead: the rope
+        keeps its trajectory initially, then evolves as an unloaded, damped
+        line under gravity rather than carrying the bob's inertia forever.
         """
         jb = traj.index_of(self.SEG_BOB)
         jr = traj.index_of(self.SEG_ROD)
@@ -242,8 +242,17 @@ class PendulumSwing(Scenario):
         theta = angle(start - 1)
         omega = ((theta - angle(start - 2)) / max(float(traj.dt), 1e-9)
                  if start > 1 else 0.0)
+        dt = max(float(traj.dt), 1e-9)
+        gravity = abs(float(np.asarray(spec.gravity, np.float64)[2]))
+        # A rope with no bob has no sustained pendulum load.  Retain the
+        # incoming angular rate for continuity, then let gravity and modest
+        # damping relax the line toward vertical instead of making it rotate
+        # forever at the pre-detachment rate.
+        damping = 1.8
         for frame in range(start, traj.num_frames):
-            theta += omega * float(traj.dt)
+            omega += (-gravity / max(arm, 1e-6) * np.sin(theta)
+                      - damping * omega) * dt
+            theta += omega * dt
             direction = np.array([np.sin(theta), 0.0, -np.cos(theta)])
             traj.pos[frame, jr, :] = (pivot + direction * (arm / 2.0)).astype(
                 np.float32)

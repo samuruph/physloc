@@ -784,6 +784,7 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     # This is equivalent to a shadow-catcher pass while preserving the exact
     # materials, receiver geometry and denoiser used by the RGB render.
     caster = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
+    clear = None
     if caster is not None and caster.name in objs:
         obj = objs[caster.name]
         bobj = obj.linked_objects.get(renderer)
@@ -815,6 +816,20 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     ordered = [objs[b.name] for b in spec.bodies if b.name in objs]
     stack["segmentation"] = kb.adjust_segmentation_idxs(
         stack["segmentation"], scene.assets, ordered)
+
+    # The hidden caster is an optical proxy for the *projected receiver
+    # shadow*, not a second object allowed to shade the visible actor.  A
+    # changed caster shape can otherwise alter the caster/actor overlap and
+    # leave a dark patch on the actor itself in ``shadow_shape`` clips.  Keep
+    # actor pixels from the matched no-caster render; the normal render (and
+    # therefore the projected shadow on the floor/receivers) remains intact.
+    if caster is not None and clear is not None and "rgba" in clear:
+        actor_id = int(spec.notes.get("caster_id", 0))
+        if actor_id > 0:
+            actor_pixels = np.asarray(stack["segmentation"]) == actor_id
+            rgba = np.asarray(stack["rgba"]).copy()
+            rgba[actor_pixels, :3] = np.asarray(clear["rgba"])[actor_pixels, :3]
+            stack["rgba"] = rgba
 
     declared = sorted({int(b.segmentation_id) for b in spec.bodies})
     got = sorted(int(x) for x in np.unique(np.asarray(stack["segmentation"])) if x != 0)

@@ -826,13 +826,19 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     if caster is not None and clear is not None and "rgba" in clear:
         actor_id = int(spec.notes.get("caster_id", 0))
         if actor_id > 0:
-            actor_pixels = np.asarray(stack["segmentation"]) == actor_id
             rgba = np.asarray(stack["rgba"]).copy()
             rgb = rgba[..., :3]
             clear_rgb = np.asarray(clear["rgba"])[..., :3]
-            rgb[actor_pixels] = clear_rgb[actor_pixels]
-            rgba[..., :3] = rgb
-            stack["rgba"] = rgba
+            actor_pixels = np.asarray(stack["segmentation"]) == actor_id
+            # Kubric versions differ on whether segmentation keeps a trailing
+            # singleton channel.  Normalize it to the RGB frame's T,H,W
+            # shape before boolean indexing.
+            while actor_pixels.ndim > rgb.ndim - 1 and actor_pixels.shape[-1] == 1:
+                actor_pixels = actor_pixels[..., 0]
+            if actor_pixels.shape == rgb.shape[:3]:
+                rgb[actor_pixels] = clear_rgb[actor_pixels]
+                rgba[..., :3] = rgb
+                stack["rgba"] = rgba
 
     declared = sorted({int(b.segmentation_id) for b in spec.bodies})
     got = sorted(int(x) for x in np.unique(np.asarray(stack["segmentation"])) if x != 0)

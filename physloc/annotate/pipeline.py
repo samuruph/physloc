@@ -121,8 +121,24 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             raise ValueError(
                 "%s requires the true-Cycles shadow isolation pass; regenerate "
                 "this sample with shadow_strength and shadow_source_id" % family)
-        shadow_v = np.asarray(pv["shadow_strength"], np.float32) > (1.0 / 255.0)
-        shadow_i = np.asarray(pi["shadow_strength"], np.float32) > (1.0 / 255.0)
+        # ``shadow_source_id`` names the public actor that casts the shadow
+        # (the renderer-only caster is removed from the released object table).
+        # Restrict the footprint to that source instead of treating every
+        # dark patch in the image as the violation.  This also makes the
+        # annotation safe if a scene later gains a second shadow caster.
+        source_id = int(spec_d.get("notes", {}).get("caster_id", 0))
+        source_v = np.asarray(pv["shadow_source_id"], np.uint16)
+        source_i = np.asarray(pi["shadow_source_id"], np.uint16)
+        if source_id > 0:
+            source_v = source_v == source_id
+            source_i = source_i == source_id
+        else:
+            source_v = source_v > 0
+            source_i = source_i > 0
+        shadow_v = ((np.asarray(pv["shadow_strength"], np.float32)
+                     > (1.0 / 255.0)) & source_v)
+        shadow_i = ((np.asarray(pi["shadow_strength"], np.float32)
+                     > (1.0 / 255.0)) & source_i)
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the

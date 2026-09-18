@@ -424,9 +424,19 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
     # The valid column's "should-be" outline: where every violator shown beside
     # it lawfully is. A valid clip has no violators of its own to take it from.
     ids = sorted({i for c in cols if not c["is_valid"] for i in c["clip"].violator_ids})
+    shadow_reference = any(
+        (not c["is_valid"]) and np.any(c["clip"].violation_component == 2)
+        for c in cols)
     for c in cols:
         if c["is_valid"]:
-            c["ref"] = loader.reference_mask(c["seg"], ids)
+            if shadow_reference:
+                strength = c["clip"].observations.get("shadow_strength")
+                source = c["clip"].observations.get("shadow_source_id")
+                c["ref"] = (loader.shadow_reference_mask(strength, source, ids)
+                             if strength is not None and source is not None
+                             else np.zeros(c["seg"].shape, bool))
+            else:
+                c["ref"] = loader.reference_mask(c["seg"], ids)
     return sorted(cols, key=lambda c: c["sort"])
 
 

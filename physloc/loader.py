@@ -88,6 +88,24 @@ def reference_mask(valid_segmentation: np.ndarray, ids: Sequence[int]) -> np.nda
                    np.asarray(list(ids), dtype=valid_segmentation.dtype))
 
 
+def shadow_reference_mask(shadow_strength: np.ndarray,
+                          shadow_source_id: np.ndarray,
+                          ids: Sequence[int],
+                          threshold: float = 1.0 / 255.0) -> np.ndarray:
+    """Return the lawful cast-shadow footprint for public caster IDs.
+
+    A Cycles shadow has no segmentation pixels of its own.  The source pass
+    therefore carries the public actor ID while ``shadow_strength`` carries
+    the receiver footprint.  Keeping this separate from ``reference_mask`` is
+    important: falling back to segmentation would outline the caster itself,
+    exactly the object the shadow component is meant to exclude.
+    """
+    strength = np.asarray(shadow_strength, np.float32)
+    source = np.asarray(shadow_source_id)
+    return (strength > float(threshold)) & np.isin(
+        source, np.asarray(list(ids), dtype=source.dtype))
+
+
 def sample_timeline(objects: Dict[str, np.ndarray], num_frames: int) -> Dict[str, np.ndarray]:
     n = len(objects.get("ids", ()))
     is_violator = np.asarray(objects.get("is_violator", np.ones(n, bool)), bool)
@@ -395,8 +413,18 @@ class Sample:
         if self.is_valid or self.twin is None:
             return np.zeros(self.segmentations.shape, bool)
         table = self.object_table
-        return reference_mask(self.twin.segmentations,
-                              table["ids"][np.asarray(table["is_violator"], bool)])
+        ids = table["ids"][np.asarray(table["is_violator"], bool)]
+        # Shadow components are annotated from the matched Cycles isolation
+        # pass.  The valid segmentation contains the visible caster, not its
+        # projected shadow, so using the generic body footprint here paints
+        # the object instead of the lawful shadow in the MASK panel.
+        if np.any(self.violation_component == 2):
+            strength = self.twin.observations.get("shadow_strength")
+            source = self.twin.observations.get("shadow_source_id")
+            if strength is not None and source is not None:
+                return shadow_reference_mask(strength, source, ids)
+            return np.zeros(self.segmentations.shape, bool)
+        return reference_mask(self.twin.segmentations, ids)
 
     timeline = property(lambda self: sample_timeline(self.object_table, self.num_frames))
     energy = property(lambda self: self.scene_energy.as_dict())

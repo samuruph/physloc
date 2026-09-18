@@ -98,6 +98,12 @@ def test_shadow_is_an_actor_component_not_an_object(tmp_path):
     assert sample.visible_violation.any()
     assert sample.objects("violators")[0]["id"] == 2
 
+    # The lawful (green) reference is the cast-shadow footprint from the
+    # isolation pass, never the visible actor segmentation.
+    ref = sample.reference_mask
+    assert ref[:, 0, 0].all()  # fixture's lawful shadow is the floor region
+    assert not ref[:, 4:12, 4:12].any()  # actor pixels must stay unlabeled
+
 
 def test_hdf5_handle_is_not_pickled(dataset_root):
     sample = L.PhysLocDataset(dataset_root)[0]

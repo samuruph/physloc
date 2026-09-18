@@ -1,0 +1,26 @@
+# One complete pipeline run for inspecting the balanced spherical resting table.
+#
+#   bash scripts/run.sh review_resting_sphere
+#
+# Seed 5 is a spherical-base instance under the resting_table sampler.  The
+# normal run.sh path is intentional: it generates, validates, annotates,
+# overlays, and builds the layout/coverage videos in one reusable run.
+
+defaults:
+  seed: 5
+  complexity: L0
+  tier: debug
+  resolution: 128
+  fps: 12
+  frames: 25
+  spp: 16
+  variants: 1
+  severity: strong
+
+generate:
+  scenario: resting_table
+  family: permanence
+  workers: 1
+  keep_going: true
+  workdir: out/work_review_resting_sphere
+  outdir: out/review_resting_sphere

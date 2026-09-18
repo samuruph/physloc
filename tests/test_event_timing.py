@@ -138,6 +138,35 @@ def test_declared_physical_anchor_keeps_appearance_events_near_contact(name):
     assert abs(plan.t_event - centre) <= int(cfg["jitter"])
 
 
+def test_physical_anchor_mixes_near_and_broad_timing():
+    """Anchored scenes keep a modal contact cue without freezing on it."""
+    near = broad = 0
+    for seed in range(40):
+        sc, spec = _spec(seed, "drop")
+        traj = mockroll.roll(spec, sc)
+        cfg = spec.notes["event_anchor"]
+        bodies = set(cfg["body_ids"])
+        partners = set(cfg["partner_ids"])
+        contacts = [int(traj.contacts.frame[k]) for k in range(len(traj.contacts))
+                    if ((int(traj.contacts.body_a[k]) in bodies
+                         and int(traj.contacts.body_b[k]) in partners)
+                        or (int(traj.contacts.body_b[k]) in bodies
+                            and int(traj.contacts.body_a[k]) in partners))]
+        if not contacts:
+            continue
+        plan = injectors.get("deformation").plan(
+            spec, traj, np.random.RandomState(1), "strong")
+        if plan is None:
+            continue
+        centre = min(contacts) + int(cfg["offset"])
+        if abs(plan.t_event - centre) <= int(cfg["jitter"]):
+            near += 1
+        else:
+            broad += 1
+    assert near >= 12
+    assert broad >= 6
+
+
 def test_permanence_scores_only_disappearance_and_return_transitions():
     sc, spec = _spec(4, "barrier_pass")
     traj = mockroll.roll(spec, sc)

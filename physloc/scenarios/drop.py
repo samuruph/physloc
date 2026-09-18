@@ -71,7 +71,12 @@ class Drop(Scenario):
                    # with one frame of family-keyed variation around it.
                    "event_anchor": {"body_ids": [self.SEG_BALL],
                                     "partner_ids": [self.SEG_FLOOR],
-                                    "offset": 0, "jitter": 1}},
+                                    "offset": 0, "jitter": 1,
+                                    # Most events belong at landing, while a
+                                    # substantial minority may occur during
+                                    # the approach or the visible rebound.
+                                    "broad_offsets": [-7, 6],
+                                    "near_probability": 0.6}},
         )
 
 

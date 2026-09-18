@@ -203,7 +203,12 @@ class Pour(Scenario):
                    "event_anchor": {
                        "body_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],
                        "partner_ids": [self.SEG_FLOOR] + list(self.SEG_WALLS),
-                       "offset": 0, "jitter": 1},
+                       "offset": 0, "jitter": 1,
+                       # The first arrival remains the most likely cue, but
+                       # some violations can begin during the descent or while
+                       # the remaining grains are still arriving.
+                       "broad_offsets": [-6, 2],
+                       "near_probability": 0.6},
                    # Every family that can act on a set acts on ALL of the
                    # grains here. A pour is not a scene with one protagonist:
                    # a single grain floating, vanishing or dropping through the

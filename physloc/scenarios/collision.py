@@ -136,7 +136,12 @@ class Collision(Scenario):
                    # leaving time for their causal effect on the second ball.
                    "event_anchor": {"body_ids": [self.SEG_A],
                                     "partner_ids": [self.SEG_B],
-                                    "offset": -2, "jitter": 1}})
+                                    "offset": -2, "jitter": 1,
+                                    # Keep causal interventions before the
+                                    # meeting, but distribute a minority over
+                                    # the striker's approach.
+                                    "broad_offsets": [-10, -3],
+                                    "near_probability": 0.6}})
 
 
 register(Collision())

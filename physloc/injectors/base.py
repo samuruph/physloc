@@ -727,6 +727,22 @@ class Injector:
         t = _geom.before_medium_lands(spec, traj, bodies)
         if t is None or not (1 <= t < traj.num_frames - 2):
             return fallback
+        # Keep the first arrival as the modal timing, but do not make every
+        # granular family fire on exactly the same frame.  The broad branch
+        # remains in the arrival phase: it may begin during descent or while
+        # the last grains are still coming in, never on a settled pile.
+        near_probability = 0.6
+        if _geom.event_fraction(spec, salt=2801) < near_probability:
+            u = _geom.event_fraction(spec, salt=2802)
+            return int(np.clip(t + int(round(2.0 * u - 1.0)),
+                              1, traj.num_frames - 2))
+        lo = max(1, int(t) - 6)
+        hi = min(traj.num_frames - 2, int(t) + 2)
+        candidates = list(range(lo, hi + 1))
+        if len(candidates) > 1:
+            u = _geom.event_fraction(spec, salt=2803)
+            return int(candidates[min(len(candidates) - 1,
+                                      int(round(u * (len(candidates) - 1))))])
         return int(t)
 
     @staticmethod

@@ -111,7 +111,12 @@ class PyramidImpact(Scenario):
                    # first impact, while retaining a narrow random window.
                    "event_anchor": {"body_ids": [self.SEG_CUBE],
                                     "partner_ids": list(self.SEG_BALLS),
-                                    "offset": -1, "jitter": 1},
+                                    "offset": -1, "jitter": 1,
+                                    # The cube is still approaching for the
+                                    # wider branch; no post-impact violations
+                                    # are introduced by this anchor.
+                                    "broad_offsets": [-7, -2],
+                                    "near_probability": 0.6},
                    # The falling cube is the actor, but it is not the
                    # interesting body to break. What a video generator gets
                    # wrong here is the *scatter*: a struck sphere driven

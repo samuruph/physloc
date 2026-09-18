@@ -272,7 +272,7 @@ def motion_limit(spec) -> Optional[int]:
     return int(moving[-1]) - room
 
 
-def event_fraction(spec, body_id: Optional[int] = None) -> float:
+def event_fraction(spec, body_id: Optional[int] = None, salt: int = 0) -> float:
     """A number in [0, 1) keyed on (scene, family, violator, attempt).
 
     NOT on the severity bin: the three severities of one cell must fire
@@ -289,7 +289,7 @@ def event_fraction(spec, body_id: Optional[int] = None) -> float:
     family, attempt, _ = _EVENT_KEY.get()
     if body_id is None:
         body_id = _VIOLATOR.get()
-    key = (int(spec.seed) * 2654435761 + 0x51ED
+    key = (int(spec.seed) * 2654435761 + 0x51ED + 104729 * int(salt)
            + zlib.crc32(family.encode()) + 7919 * int(attempt)
            + (0 if body_id is None else 104729 * (int(body_id) + 1)))
     return float(np.random.RandomState(key % (2 ** 31 - 1)).uniform())
@@ -386,10 +386,46 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
 
     ``notes["event_anchor"]`` is deliberately data, not a scenario-name
     switch.  It accepts ``body_ids``, optional ``partner_ids``, an ``offset``
-    (negative means before contact), and ``jitter`` in frames.  Contacts are
-    measured from the lawful rollout in the current event context, so this
-    composes with every injector that uses the normal event helper.
+    (negative means before contact), and ``jitter`` in frames.  With
+    ``broad_offsets=[lo, hi]`` the near-contact draw is used with the declared
+    ``near_probability`` (60% by default); the remainder is drawn uniformly
+    from the wider, still causal offset interval.  Contacts are measured from
+    the lawful rollout in the current event context, so this composes with
+    every injector that uses the normal event helper.
     """
+    cfg = spec.notes.get("event_anchor") or {}
+    _, _, traj = _EVENT_KEY.get()
+    if not cfg or traj is None or not len(getattr(traj, "contacts", ())):
+        return None
+    bodies = {int(i) for i in cfg.get("body_ids", ())}
+    partners = {int(i) for i in cfg.get("partner_ids", ())}
+    if not bodies:
+        return None
+    contact = anchor_contact_frame(spec, num_frames)
+    if contact is None:
+        return None
+    centre = contact + int(cfg.get("offset", 0))
+    jitter = max(0, int(cfg.get("jitter", 0)))
+    # One stable draw per family/attempt, shared by the severity bins.  The
+    # second salt keeps the branch choice independent from the selected frame.
+    near_probability = float(np.clip(cfg.get("near_probability", 0.6), 0.0, 1.0))
+    broad = cfg.get("broad_offsets")
+    if broad is not None and len(broad) == 2:
+        use_near = event_fraction(spec, salt=1701) < near_probability
+        if use_near:
+            u = event_fraction(spec, salt=1702)
+            centre += int(round((2.0 * u - 1.0) * jitter))
+        else:
+            lo, hi = sorted((int(broad[0]), int(broad[1])))
+            u = event_fraction(spec, salt=1703)
+            centre = contact + lo + int(round(u * (hi - lo)))
+    elif jitter:
+        centre += int(round((2.0 * scene_fraction(spec) - 1.0) * jitter))
+    return int(np.clip(centre, 1, int(num_frames) - 2))
+
+
+def anchor_contact_frame(spec, num_frames: int) -> Optional[int]:
+    """Return the first contact matching the current scenario anchor."""
     cfg = spec.notes.get("event_anchor") or {}
     _, _, traj = _EVENT_KEY.get()
     if not cfg or traj is None or not len(getattr(traj, "contacts", ())):
@@ -406,14 +442,7 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
                or (b in bodies and (not partners or a in partners)))
         if hit and 1 <= int(c.frame[k]) < int(num_frames) - 1:
             found.append(int(c.frame[k]))
-    if not found:
-        return None
-    centre = min(found) + int(cfg.get("offset", 0))
-    jitter = max(0, int(cfg.get("jitter", 0)))
-    if jitter:
-        # One stable draw per family/attempt, shared by the severity bins.
-        centre += int(round((2.0 * scene_fraction(spec) - 1.0) * jitter))
-    return int(np.clip(centre, 1, int(num_frames) - 2))
+    return min(found) if found else None
 
 
 def contact_run(traj, body_id: int, partner_id: int) -> Optional[Tuple[int, int]]:

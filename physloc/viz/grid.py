@@ -432,9 +432,11 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             if shadow_reference:
                 strength = c["clip"].observations.get("shadow_strength")
                 source = c["clip"].observations.get("shadow_source_id")
-                c["ref"] = (loader.shadow_reference_mask(strength, source, ids)
-                             if strength is not None and source is not None
-                             else np.zeros(c["seg"].shape, bool))
+                if strength is not None and source is not None:
+                    c["ref"] = (loader.shadow_reference_mask(strength, source, ids)
+                                 & ~np.isin(c["seg"], ids))
+                else:
+                    c["ref"] = np.zeros(c["seg"].shape, bool)
             else:
                 c["ref"] = loader.reference_mask(c["seg"], ids)
     return sorted(cols, key=lambda c: c["sort"])

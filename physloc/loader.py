@@ -422,7 +422,12 @@ class Sample:
             strength = self.twin.observations.get("shadow_strength")
             source = self.twin.observations.get("shadow_source_id")
             if strength is not None and source is not None:
-                return shadow_reference_mask(strength, source, ids)
+                lawful = shadow_reference_mask(strength, source, ids)
+                # The projected shadow belongs on the receiver.  Never turn
+                # the caster's own visible segmentation into a green shadow
+                # outline when the light footprint overlaps the object.
+                lawful &= ~np.isin(self.twin.segmentations, ids)
+                return lawful
             return np.zeros(self.segmentations.shape, bool)
         return reference_mask(self.twin.segmentations, ids)
 

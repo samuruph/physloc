@@ -108,6 +108,15 @@ def test_shadow_is_an_actor_component_not_an_object(tmp_path):
     assert not ref[:, 4:12, 4:12].any()  # actor pixels must stay unlabeled
 
 
+def test_shadow_reference_mask_is_receiver_only():
+    strength = np.array([[[0.5, 0.5], [0.5, 0.0]]], np.float32)
+    source = np.array([[[2, 2], [0, 0]]], np.uint16)
+    receiver_seg = np.array([[[2, 1], [1, 1]]], np.uint16)
+    lawful = L.shadow_reference_mask(strength, source, [2])
+    lawful &= receiver_seg != 2
+    assert lawful.tolist() == [[[False, True], [False, False]]]
+
+
 def test_hdf5_handle_is_not_pickled(dataset_root):
     sample = L.PhysLocDataset(dataset_root)[0]
     _ = sample.segmentations

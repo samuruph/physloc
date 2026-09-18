@@ -139,6 +139,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                      > (1.0 / 255.0)) & source_v)
         shadow_i = ((np.asarray(pi["shadow_strength"], np.float32)
                      > (1.0 / 255.0)) & source_i)
+        # The source object can contribute a dark contact/occlusion region to
+        # the isolation difference when its projected shadow reaches its own
+        # footprint.  A shadow violation is localized on the receiver, not on
+        # the caster, so keep only receiver pixels in both twins.
+        if source_id > 0:
+            shadow_v &= seg_v != source_id
+            shadow_i &= seg_i != source_id
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the

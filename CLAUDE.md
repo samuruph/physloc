@@ -171,20 +171,24 @@ publication. Nothing has been published yet.
   simulation (`stepper.run_segments`), and `annotate_pair` scores, gates and masks each on its
   own timeline. `params.objects.multi_sync_share` (25%) of such clips keep one moment on
   purpose. Scene-wide families, granular media and edited families stay `shared`.
-- **The clip layout is MOVi's.** `metadata.json` has MOVi's `metadata`, `camera`,
-  `instances` and `events` plus PhysLoc's own blocks; dense passes use MOVi's names
-  (`segmentations`, `forward_flow`, `normal`, ...); per-frame instance tensors live in
-  `instances.npz`. File names are in `annotate/layout.py` and nowhere else. Instances keep
-  declaration order (not MOVi's visibility sort) so both twins agree on who is who.
-- **Schema v2 stores only what cannot be derived.** An invalid clip ships `masks.npz`
-  (`violation` id map, `causal`, `causal_source`) and `objects.npz` (per violator `[K,T]`:
-  `severity`, the five clocks, `residual`, `score`); a valid clip ships no annotation files.
-  `violation_mask`, `visible_violation`, `severity_map`, `reference_mask`, the clip timeline,
-  latent grids and divergence are computed by `physloc/loader.py`, the one implementation of
-  each -- validate, export, audit and viz all read through it. Every derivation matched the v1
-  files exactly on 372 clips. It imports nothing from `physloc`, so another environment can
-  import it by path; keep it that way. A new annotation becomes a stored array only if it
-  cannot be computed from these; otherwise it is a loader function.
+- **One sample is `samples/<uid>/{sample.json, rgb.mp4, data.h5}` (schema v4).**
+  `sample.json` has one block per question -- `sample`, `video`, `scene`, `objects`,
+  `violation` (invalid only), `provenance`; every per-frame or dense array (passes,
+  `/camera`, `/objects`, `/energy`, `/events`, `/violation`) is in `data.h5`. Object list
+  order is the HDF5 row order, and keeps declaration order (not MOVi's visibility sort) so
+  both twins agree on who is who. File names are in `loader.py` and `annotate/layout.py`.
+  A sample directory is self-contained: twins each carry their own camera and statics.
+- **Schema v4 stores every fact once, and nothing the loader can derive.** Clip-level
+  windows and times, the `[N,T]` clocks, `affected`, causal relations, object counts and a
+  body's severity map are `physloc/loader.py` functions, the one implementation of each --
+  validate, export, stats, audit and viz all read through its nested `Sample`
+  (`s.info/.video/.scene/.observations/.objects/.violation/.energy/.events`). Each drop
+  was checked against all 2,135 v3 samples first; what did not match everywhere
+  (`by_body`, per-frame `mass`, `causal_ids`, a shadow's severity map, ...) stays stored --
+  docs/schema.md has the table. `schema/write.py` refuses a sample whose windows disagree
+  with the dense clocks they came from. The loader imports nothing from `physloc`, so
+  another environment can import it by path; keep it that way. A new annotation becomes a
+  stored field only if it cannot be computed from these; otherwise it is a loader function.
 - **Object size varies per scene** (`params.objects.size_scale`, `pour` exempt), and an L3
   scan is sized by bounding VOLUME, not its longest axis (`base.gso_scale_ladder`), stepping
   back towards the longest-axis rule only where a larger scan would start inside a neighbour.

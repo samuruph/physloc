@@ -99,7 +99,7 @@ One valid twin is shared by every family and severity staged on that scene.
 
 ### Layout on disk
 
-PhysLoc has one public representation: schema v3.
+PhysLoc has one public representation: schema v4.
 
 ```text
 <root>/
@@ -113,17 +113,23 @@ PhysLoc has one public representation: schema v3.
     └── data.h5
 ```
 
-RGB stays as a standalone H.264 MP4. `sample.json` is the readable manifest:
-identity, taxonomy, scene/world settings, object definitions, events, causal
-relations, provenance, and violation descriptions. Dense numeric tensors live
-in one chunked, gzip-compressed, Fletcher32-protected HDF5 file per sample.
+RGB stays as a standalone H.264 MP4. `sample.json` is the readable manifest, one
+block per question -- `sample` (who), `video` (geometry), `scene` (what was
+simulated and how it was shot), `objects` (one record per body), `violation`
+(invalid samples only: what is wrong, per violator, with its five clocks as
+frame intervals) and `provenance`. **Every fact is stored once**: clip-level
+windows and times, `[N,T]` clocks, causal relations, counts and the body
+severity map are derived by the loader rather than stored. Every dense or
+per-frame array -- render passes, camera track, object trajectories, energy,
+collisions, violation maps -- lives in one chunked, gzip-compressed,
+Fletcher32-protected HDF5 file per sample, under `/observations`, `/camera`,
+`/objects`, `/energy`, `/events` and `/violation`.
 
-The main HDF5 groups are `/observations`, `/objects`, `/energy`, and
-`/violations`. Stable positive object IDs join segmentation, trajectories,
-energy, events, causal relations, and violation maps; ID 0 is background.
-Every object is classified as `subject`, `context`, `support`, or
-`background`. Floors and scenery are therefore excluded from the default
-analysis view, while all violators are subjects.
+Stable positive object IDs join segmentation, trajectories, energy, events,
+causal relations, and violation maps; ID 0 is background. Every object is
+classified as `subject`, `context`, `support`, or `background`. Floors and
+scenery are therefore excluded from the default analysis view, while all
+violators are subjects.
 
 Energy has an explicit release-wide accounting policy. The physics total
 includes every eligible dynamic subject, distractor/context object, affected
@@ -138,152 +144,81 @@ from an internal camera-hidden caster; only the real actor is exported.
 `shadow_strength` and `shadow_source_id` support soft shadow localisation,
 and shadow violations map to the actor with component `shadow`.
 
-The complete field, dtype, axis, unit, violation, energy, shadow, and validation
-reference is [docs/schema.md](docs/schema.md).
+The complete field, dtype, axis and unit reference -- and a table of every v3
+field v4 stopped storing, with the loader derivation that replaced it -- is
+[docs/schema.md](docs/schema.md).
 
 ### Loading the dataset
 
 The generator, exporter, loader, visualiser, and GUI all consume the same
-schema-v3 sample tree:
+schema-v4 sample tree. A `Sample` is organised the way the files are, one
+namespace per block, every array read lazily and cached:
 
 ```python
-from physloc.loader import (
-    PhysLocDataset, LOCALIZATION_FIELDS, ENERGY_FIELDS, collate
-)
+from physloc.loader import PhysLocDataset, collate
 
-dataset = PhysLocDataset("data/physloc", fields=LOCALIZATION_FIELDS)
-sample = dataset.samples[0]             # one lazy Sample
-same = dataset.get(sample.uid)
+ds = PhysLocDataset("data/physloc", split="main")
+s = ds[0]                                   # one lazy Sample
 
-sample.video_path                       # RGB is not decoded
-rgb = sample.decode_rgb()               # explicit uint8 [T,H,W,3]
-sample.objects("subjects")              # default analysis actors
-sample.objects("violators")
-sample.objects("affected")
-sample.object(2)                         # static + temporal + energy + violation
-sample.spatial_mask("violators")        # bool [T,H,W]
-
-pairs = PhysLocDataset("data/physloc", unit="pair")
-pair = pairs[0]                          # valid Sample + invalid Samples
-
-batch = collate(dataset.samples[:8])     # pads N and returns object_valid
+s.info            # uid, pair_uid, valid_uid, label, split, release, tier, seed, variant
+s.video           # num_frames, fps, resolution, duration, latent_*, path, rgb
+s.scene           # scenario, family, domain, level, condition, prompt, camera, physics
+s.observations    # segmentation, depth, forward_flow, normal, ... [T,H,W,...]
+s.objects         # ids, names, roles, groups, records, positions, bboxes ... [N,T,...]
+s.violation       # what is wrong; empty (present=False) on a valid sample
+s.energy          # scene [T], objects [N,T], map [T,H,W]
+s.events          # collisions, one array per field
+s.twin            # the valid Sample of this pair
 ```
 
-Loader samples have the same logical shape as the files, with small metadata in
-`sample.json` and dense arrays read lazily from `data.h5`:
+Below, `T` is frames, `H,W` image size, `N` exported objects and `V` violators.
 
 ```text
-sample
-├── metadata
-│   ├── sample_info
-│   └── scene
-│       ├── info
-│       └── world
-├── observations
-└── annotations
-    ├── objects
-    ├── scene_energy
-    ├── maps
-    ├── events
-    ├── causal_relations
-    └── violation_summary
+s.violation
+├── severity_bin, kind, component, timing, intervention, difficulty, peak_residual
+├── violators[V]: id, affected_ids, windows{active, intervening, consequence,
+│                 observable, occluded}, t_event, t_observable, observability_lag,
+│                 peak_residual, peak_severity, difficulty, magnitude
+├── ids [V]; windows (union); t_event, t_observable, t_end, observability_lag
+├── causal_relations: violator -> affected body, over its consequence windows
+├── active, intervening, consequence, observable, occluded, affected: bool [N,T]
+├── severity, residual, score: float32 [N,T]
+├── object_id uint16, component_map uint8, causal uint8, causal_source uint16: [T,H,W]
+├── mask, visible, reference_mask: bool [T,H,W]; severity_map: float32 [T,H,W]
+├── timeline: per-frame clocks unioned over violators, plus max severity
+└── latent_grid(): mask and severity reduced to the video-token grid
 ```
-
-Below, `T` is frames, `H,W` are image size, and `N` is the number of exported
-objects. A review sample such as `out_old1/review_conditions_f37` uses
-`T=37`, `H=W=128`; release tiers may be larger.
-
-```text
-sample
-├── metadata
-│   ├── sample_info
-│   │   ├── sample_uid, pair_uid, valid_sample_uid, label
-│   │   ├── schema_version, dataset_version, split
-│   │   ├── seed, render_seed, variant, generation_config_id
-│   │   ├── num_frames=T, fps, duration_seconds, resolution=[H,W]
-│   │   ├── latent_frames, latent_hw, size_scale, framing_attempt
-│   │   └── provenance
-│   └── scene
-│       ├── info
-│       │   ├── level, complexity, condition, difficulty
-│       │   ├── type/scenario, family, domain, physics_medium
-│       │   ├── severity, label, variant, prompt
-│       │   └── difficulty_analysis
-│       └── world
-│           ├── camera: intrinsics, extrinsics/projection, trajectory
-│           ├── environment: background, HDRI, lights, floor/support datum
-│           ├── physics: gravity, timestep, substeps, solver settings, units
-│           └── objects_summary: counts by role, group, violator, affected
-├── observations
-│   ├── rgb_path: path to rgb.mp4; decode explicitly with sample.decode_rgb()
-│   ├── rgb: uint8 [T,H,W,3], only when decoded
-│   ├── segmentation: uint16 [T,H,W], object IDs, 0 = background
-│   ├── depth: float32 [T,H,W,1], metres
-│   ├── forward_flow, backward_flow: float32 [T,H,W,2], row/col pixels
-│   ├── normal: [T,H,W,3]
-│   ├── object_coordinates: [T,H,W,3]
-│   ├── shadow_strength: float16 [T,H,W], optional true-shadow strength
-│   └── shadow_source_id: uint16 [T,H,W], optional real actor casting shadow
-└── annotations
-    ├── objects
-    │   ├── definitions: N dicts with id, name, category, role, asset,
-    │   │   analysis_group, static_fields, temporal refs, energy refs
-    │   ├── static_fields: mass, dimensions, inertia/material/friction,
-    │   │   restitution, scales, static/scripted/collidable/visibility flags
-    │   ├── ids: int32 [N], stable object axis shared by all arrays
-    │   ├── analysis_group: list[N] of subject/context/support/background
-    │   ├── positions: float32 [N,T,3], metres
-    │   ├── quaternions: float32 [N,T,4], w,x,y,z
-    │   ├── velocities, angular_velocities: float32 [N,T,3]
-    │   ├── bboxes: float32 [N,T,4]
-    │   ├── bboxes_3d: float32 [N,T,8,3]
-    │   ├── image_positions: float32 [N,T,2]
-    │   ├── visibility: int32 [N,T]
-    │   ├── is_violator: bool [N]
-    │   ├── active/intervening/consequence/observable/occluded/affected:
-    │   │   bool [N,T]
-    │   └── severity/residual/score: float32 [N,T]
-    ├── scene_energy
-    │   ├── total: float32 [T], eligible physical objects, visible or not
-    │   ├── energy_in_frame: float32 [T], visible eligible objects
-    │   ├── kinetic_translational, kinetic_rotational: float32 [T]
-    │   └── residual/anomaly curves, such as excess_loss and contact_anomaly
-    ├── object_energy
-    │   ├── by_body: float32 [N,T], per-object total energy
-    │   ├── kinetic, potential: float [N,T]
-    │   └── momentum, angular_momentum: float [N,T,3]
-    ├── maps
-    │   ├── violation_object_id: uint16 [T,H,W], responsible object ID
-    │   ├── violation_component: uint8 [T,H,W], body/shadow/trajectory/etc.
-    │   ├── causal_level: uint8 [T,H,W], causal/affected level
-    │   ├── causal_source_id: uint16 [T,H,W], source violator object ID
-    │   └── severity: float16 [T,H,W], optional stored severity map
-    ├── events: collisions, occlusions, energy spikes, custom events
-    ├── causal_relations: sparse source/target object edges with intervals
-    └── violation_summary: invalid-only type, intervals, intervention,
-        responsible objects, affected objects, difficulty inputs
-```
-
-The convenience methods keep common analysis paths short:
 
 | call | returns |
 |---|---|
-| `sample.object(object_id)` | one object's static fields plus `temporal`, `energy`, and `violation` arrays |
-| `sample.objects("subjects")` | experiment-relevant actors; floor/background/support objects are excluded |
-| `sample.objects("violators")` | responsible violator objects only |
-| `sample.objects("affected")` | objects affected by a violation, including non-violators |
-| `sample.spatial_mask("subjects")` | `bool [T,H,W]` mask for selected analysis group |
-| `sample.visible_violation` | visible component-aware violation mask |
-| `sample.reference_mask` | valid-twin footprint of the violators, when a twin is available |
-| `sample.timeline` | unioned per-frame clocks over violators, plus max severity |
-| `sample.latent_grid()` | violation mask and severity reduced to the video-token grid |
-| `sample.divergence` | RGB difference from the valid twin, for inspection only |
+| `s.objects.select("violators")` | ids of a selection: `subjects` (default), `violators`, `affected`, `context`, `support`, `background`, `all` |
+| `s.objects.spatial_mask("subjects")` | `bool [T,H,W]` segmentation mask of a selection |
+| `s.objects.record(2)` | one object's `sample.json` record plus its row of every array |
+| `s.violation.visible` | the violation where a viewer can see it (invalid side, component-aware) |
+| `s.violation.reference_mask` | valid-twin footprint of the violators, when a twin is available |
+| `s.divergence` | RGB difference from the valid twin, for inspection only -- never a target |
 
-HDF5 handles open lazily per process, so multi-worker loading is safe. Field
-presets cover metadata, localisation, object localisation, energy, and
-visualisation. Derived masks, timelines, severity maps, latent grids, and
-valid/invalid divergence are computed lazily rather than stored as redundant
-videos.
+Every namespace also answers `ns["key"]`, `keys()` and `get()`. For training,
+name the fields and let `to_dict`/`collate` build the same nesting as plain
+dicts, padding every per-object field to the batch's largest N:
+
+```python
+ds = PhysLocDataset("data/physloc", fields=["video.rgb", "violation.mask",
+                                            "violation.severity_map", "violation.severity"])
+batch = collate([ds[i] for i in range(8)])
+batch["video"]["rgb"]               # uint8 [B,T,H,W,3]
+batch["violation"]["mask"]          # bool  [B,T,H,W]
+batch["violation"]["severity"]      # float [B,N,T], NaN-padded
+batch["objects"]["valid"]           # bool  [B,N], which rows are real
+batch["info"]["uid"]                # list of B
+
+pairs = PhysLocDataset("data/physloc", unit="pair")
+pairs[0]                            # {"pair_uid", "prompt", "valid", "invalid": [...]}
+```
+
+`loader.FIELDS` lists every selector with its axes. HDF5 handles open lazily per
+process, so multi-worker loading is safe (`loader.torch_dataset(ds)` wraps it for
+a `DataLoader` with `collate_fn=collate`).
 
 To inspect the same API visually:
 
@@ -451,8 +386,9 @@ a layout, and the two conditions are never combined.
 
 **Camera motion** is `track` (40%, slides with the aim held), `orbit` (40%, fixed radius) or
 `dolly` (20%) — never a pan, which would make *did the object move or did the camera?*
-unanswerable. Under a moving camera `flow` and `depth` include camera motion; per-frame
-camera poses and intrinsics ship in `sample.json`.
+unanswerable. Under a moving camera `flow` and `depth` include camera motion; the per-frame
+camera poses ship in `data.h5` (`/camera`) and the intrinsics in `sample.json`
+(`s.scene.camera` reads both).
 
 ---
 
@@ -464,14 +400,16 @@ out. A clip with eight distractors whose violator fills a quarter of the frame i
 `condition` what `peak_severity` is to `magnitude`.
 
 Every **invalid** sample carries one label (a valid twin has nothing to detect)
-under `metadata.scene.info.difficulty_analysis`:
+under `violation.difficulty` in `sample.json` (`s.violation.difficulty`), beside the two
+array-measured inputs it was computed from:
 
 ```json
-"difficulty_analysis": {
+"difficulty": {
   "level": "hard", "rank": 2,
   "binding_factors": ["violation_area"],
   "factors": {"violation_area": {"value": 0.0041, "level": "hard"},
-              "severity":  {"value": 0.98,   "level": "easy"}, "...": {}}
+              "severity":  {"value": 0.98,   "level": "easy"}, "...": {}},
+  "inputs": {"violation_area": 0.0041, "occlusion": 0.0}
 }
 ```
 
@@ -523,7 +461,7 @@ between two balls, `fission`) name both bodies of a single event and are 15% of 
 
 A `multi` clip whose violators are one large obvious body, one small one and one behind a screen
 is not described by any single word, so every violator carries its own label under
-`annotations.violation_summary.violators[k].difficulty`, measured on **its** mask, **its** occlusion, **its**
+`violation.violators[k].difficulty`, measured on **its** mask, **its** occlusion, **its**
 observable window and **its** residual — which is what an object detector is scored against.
 `object_count` and `violators` are left out of it: they count what is in the scene, which is a
 property of the clip and not of any one body in it.
@@ -625,18 +563,18 @@ df = pd.read_parquet("index.parquet")
 
 df.groupby(["domain", "severity"]).size()
 df.groupby("condition").size()                       # standard / camera / multi / ...
-df[df.complexity == "L3"].groupby("family").size()
+df[df.level == "L3"].groupby("family").size()
 df[df.n_violators > 1]                                # multi-object samples
-df.groupby(["complexity", "difficulty"]).size()      # the grid worth reporting
+df.groupby(["level", "difficulty"]).size()           # the grid worth reporting
 ```
 
 | group | columns |
 |---|---|
-| identity | `sample_uid`, `pair_uid`, `valid_sample_uid`, `label`, `split` |
+| identity | `sample_uid`, `pair_uid`, `valid_uid`, `label`, `split`, `release`, `tier` |
 | taxonomy | `scenario`, `family`, `domain`, `physics_medium` |
-| violation | `severity`, `n_violators` |
-| difficulty | `difficulty`, `complexity` |
-| scene | `condition`, `n_distractors`, `n_actors`, `n_violators`, `prompt` |
+| violation | `severity`, `n_violators` (the violators the annotation marks) |
+| difficulty | `difficulty`, `level` |
+| scene | `condition`, `n_objects`, `n_actors`, `n_distractors`, `prompt` |
 | geometry | `num_frames`, `fps`, `resolution`, `seed`, `variant` |
 | storage | `sample_path`, `rgb_path`, `data_path` (relative paths) |
 
@@ -649,7 +587,7 @@ zone counts, thresholds, and the factors that set each label, read
 - **Report per family, aggregate to domain,** and cross with severity, complexity and condition.
   Do not pool families into one number: cell counts per domain are very uneven (see
   [Taxonomy](#taxonomy)), so a pooled score mostly measures the largest domain.
-- **Use `timeline["active"]` for temporal metrics and `violation_mask` for spatial ones.** They
+- **Use `violation.timeline["active"]` for temporal metrics and `violation.mask` for spatial ones.** They
   disagree on purpose.
 - **Some families are separable by residual, some only by situation.**
   `taxonomy.EXCLUSIVE_LAWS` names the ones with a clean tripwire (`tests/test_orthogonality.py`
@@ -1042,7 +980,7 @@ per job, the render-setting experiments, and how prices are computed — is in
 
 ## Publishing to Hugging Face
 
-Generation already writes the canonical schema-v3 tree. Publishing is a
+Generation already writes the canonical schema-v4 tree. Publishing is a
 validation, packaging, inspection, and upload sequence.
 
 ### 1. Validate the generated dataset
@@ -1114,7 +1052,7 @@ Or upload an already-packaged directory directly:
 hf upload YOUR_USERNAME/physloc-review-conditions \
   out/review_conditions_f37_hf . \
   --type dataset \
-  --commit-message "Publish PhysLoc schema v3"
+  --commit-message "Publish PhysLoc schema v4"
 ```
 
 ### 6. Download and verify
@@ -1176,7 +1114,7 @@ physloc/injectors/    the violation families, one file per domain
 physloc/render/       the container worker, and probes for render cost
 physloc/sim/          trajectories and the simulation seam
 physloc/residuals/    the physical residuals severity is measured from
-physloc/annotate/     residuals -> masks, severity, clocks, and schema-v3 samples
+physloc/annotate/     residuals -> masks, severity, clocks, and schema-v4 samples
 physloc/loader.py     reads a release and derives every annotation (numpy only)
 physloc/release/      export, splits, dataset card
 physloc/viz/          the overlay renderer, browser viewer, grids, sheets; every mp4

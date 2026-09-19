@@ -6,7 +6,7 @@ mechanism at two settings of the same dial and share their collision-finding.)
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -20,9 +20,9 @@ class PhantomImpulse(Injector):
 
     The cleanest violation in the taxonomy and the one with the least ambiguity
     about *where*: the violator is one body, the moment is one frame, and there
-    is no second object anywhere near it. It fires only on frames with no
-    recorded contact, because a shove during a collision is indistinguishable
-    from the collision.
+    is no second object anywhere near it. It never fires beside an impact -- a
+    contact's onset -- because a shove during a collision is indistinguishable
+    from the collision; sliding or resting on a surface does not count.
     """
 
     family = "phantom_impulse"
@@ -50,10 +50,10 @@ class PhantomImpulse(Injector):
         T = traj.num_frames
         # A phantom impulse has no physical anchor.  Sample it from the whole
         # clip, not from the contact-free run immediately before the next
-        # collision.  The only restrictions are semantic: the actor must be
-        # moving, the impulse must not coincide with a recorded contact, and
-        # there must be at least one frame on either side for the instant
-        # change to be visible.  This allows impulses both before and after a
+        # collision.  The only restrictions are semantic: the impulse must not
+        # coincide with an impact, there must be at least one frame on either
+        # side for the instant change to be visible, and a moving actor is
+        # preferred.  This allows impulses both before and after a
         # barrier/collision impact.
         indices = [traj.index_of(int(body.segmentation_id)) for body in targets]
         speeds = np.linalg.norm(np.asarray(traj.lin_vel[:, indices, :],
@@ -61,30 +61,42 @@ class PhantomImpulse(Injector):
         speed = speeds[:, 0] if len(targets) == 1 else np.median(speeds, axis=1)
         threshold = max(_geom.REST_SPEED,
                         _geom.MOTION_SHARE * float(speed.max()))
-        valid = np.zeros(T, dtype=bool)
-        valid[1:T - 1] = speed[1:T - 1] > threshold
 
-        # Keep the impulse away from contact frames themselves, but do not
-        # exclude the rest of the post-contact trajectory.
-        target_ids = {int(body.segmentation_id) for body in targets}
+        # Away from IMPACTS -- the frames around a contact's onset, where a
+        # partner starts touching the actor -- but not from sustained contact.
+        # A body sliding or rolling on the floor touches it on every frame, and
+        # excluding every contact frame left no frame at all on barrier_pass,
+        # collision, occluder_pass, pour and stack_topple. A granular group is
+        # read on its primary grain: grain-on-grain contacts begin everywhere,
+        # all the time.
+        actor_id = int(actor.segmentation_id)
+        touching: Dict[int, set] = {}
         for k in range(len(traj.contacts)):
             a = int(traj.contacts.body_a[k])
             b = int(traj.contacts.body_b[k])
-            if target_ids.intersection((a, b)):
-                f = int(traj.contacts.frame[k])
-                if 0 <= f < T:
-                    valid[max(0, f - 1):min(T, f + 2)] = False
+            if actor_id in (a, b):
+                touching.setdefault(int(traj.contacts.frame[k]), set()).add(
+                    b if a == actor_id else a)
+        usable = np.zeros(T, dtype=bool)
+        usable[1:T - 1] = True
+        for f in sorted(touching):
+            if 0 <= f < T and touching[f] - touching.get(f - 1, set()):
+                usable[max(0, f - 1):min(T, f + 2)] = False
 
-        choices = np.flatnonzero(valid)
+        # Moving frames if the clip has any. A BODY AT REST IS STILL SHOVEABLE,
+        # and on `resting_table` that is the whole cell: nothing there ever
+        # moves, so a speed gate on its own declines the family outright.
+        choices = np.flatnonzero(usable & (speed > threshold))
+        if not choices.size:
+            choices = np.flatnonzero(usable)
         if not choices.size:
             return None
         u = _geom.event_fraction(spec, salt=3102)
         t0 = int(choices[min(len(choices) - 1,
                              int(round(u * (len(choices) - 1))))])
-        # A granular medium is kicked during descent. Waiting for the pile to
-        # settle turns the event into a heap twitch and misses the causal phase
-        # of a pour. `acting_frame` keeps the event inside the primary grain's
-        # contact-free run; the whole group then receives the same clear shove.
+        # A granular medium moves only while it pours, so the moving-frame gate
+        # above already kicks it during descent rather than as a heap twitch;
+        # the whole group then receives the same clear shove.
         if t0 is None or not (1 <= t0 < T - 1):
             return None
         # ON A CONSTRAINT, kick it where it is already moving. The intervention

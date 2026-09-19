@@ -19,9 +19,7 @@ env/
 # --- Generated dataset output: never enters git ---
 data/
 renders/
-out/
-out_old/
-out_old1/
+out*/
 out_review_old/
 clips/
 physviol_v0/

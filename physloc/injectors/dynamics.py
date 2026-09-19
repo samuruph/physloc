@@ -83,12 +83,24 @@ class PhantomImpulse(Injector):
             if 0 <= f < T and touching[f] - touching.get(f - 1, set()):
                 usable[max(0, f - 1):min(T, f + 2)] = False
 
-        # Moving frames if the clip has any. A BODY AT REST IS STILL SHOVEABLE,
-        # and on `resting_table` that is the whole cell: nothing there ever
-        # moves, so a speed gate on its own declines the family outright.
-        choices = np.flatnonzero(usable & (speed > threshold))
-        if not choices.size:
-            choices = np.flatnonzero(usable)
+        # INSIDE THE EVENT BAND, like every other family: a shove at frame 22
+        # of 25 leaves a quarter of a second of consequence, and sampling the
+        # whole clip put it there. The preferences degrade one at a time --
+        # band and moving, then band, then moving -- so a cell whose only
+        # motion falls outside the band still builds, as the fallbacks below
+        # are what keep a body at rest (`resting_table`) shoveable at all.
+        moving = speed > threshold
+        band = np.zeros(T, dtype=bool)
+        lo = max(1, int(round(_geom.EVENT_BAND[0] * T)))
+        hi = min(int(round(_geom.EVENT_BAND[1] * T)),
+                 T - 1 - _geom.min_visible_frames(spec, T))
+        if hi >= lo:
+            band[lo:hi + 1] = True
+        for wanted in (usable & band & moving, usable & band,
+                       usable & moving, usable):
+            choices = np.flatnonzero(wanted)
+            if choices.size:
+                break
         if not choices.size:
             return None
         u = _geom.event_fraction(spec, salt=3102)

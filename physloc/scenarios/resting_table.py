@@ -37,26 +37,31 @@ class RestingTable(Scenario):
         The hold is only an initialization/stability constraint.  A staged
         injector sets ``_release_balanced_support`` at ``t_event``; from then
         on PyBullet owns the tabletop and any shifted load can tip it.
+
+        WHICH bodies are held is `notes["held_body_ids"]` and nothing else:
+        the host reads the same note, so a held body is fixed geometry to the
+        geometry searches and to the mock rollout too.
         """
-        if not spec.notes.get("balanced_spherical_base"):
+        held = [int(i) for i in (spec.notes.get("held_body_ids") or ())]
+        if not held:
             return ()
         import pybullet as pb
         from ..render import stepper
 
-        table = next(b for b in spec.bodies
-                     if int(b.segmentation_id) == int(self.SEG_TABLE))
-        pos = tuple(float(x) for x in table.position)
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        poses = {i: tuple(float(x) for x in by_id[i].position)
+                 for i in held if i in by_id}
         quat = (0.0, 0.0, 0.0, 1.0)
 
         def hold(_client, _step, _frame):
             if spec.notes.get("_release_balanced_support"):
                 return
-            idx = stepper.pybullet_index(simulator, objs, spec,
-                                         self.SEG_TABLE)
-            if idx is None:
-                return
-            pb.resetBasePositionAndOrientation(idx, pos, quat)
-            pb.resetBaseVelocity(idx, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+            for object_id, pos in poses.items():
+                idx = stepper.pybullet_index(simulator, objs, spec, object_id)
+                if idx is None:
+                    continue
+                pb.resetBasePositionAndOrientation(idx, pos, quat)
+                pb.resetBaseVelocity(idx, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 
         return (hold,)
 
@@ -138,6 +143,14 @@ class RestingTable(Scenario):
                    "actor_kind": actor_kind,
                    "balanced_spherical_base": balanced_base,
                    "table_id": self.SEG_TABLE,
+                   # HELD STILL until an intervention releases it. `sim_hooks`
+                   # does that in the container; the host-side mock rollout
+                   # honours the same note, exactly as it honours a pivot --
+                   # without it the tabletop falls in every host test and takes
+                   # the load with it, so `deformation` re-seated its actor on
+                   # a table that is no longer there and `fission` saw a
+                   # tabletop accelerating with nothing touching it.
+                   "held_body_ids": [self.SEG_TABLE] if balanced_base else [],
                    "support_base_id": self.SEG_BASE if balanced_base else self.SEG_POST,
                    "violation_target_ids": [self.SEG_ACTOR] + list(self.SEG_PROPS),
                    "randomize_violation_target": True})

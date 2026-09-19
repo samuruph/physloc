@@ -21,11 +21,25 @@ from physloc.sim.trajectory import Contacts, Trajectory
 SUBSTEPS = 8
 
 
+def _held(spec):
+    """Ids a scenario holds still, as `sim_hooks` does in the container.
+
+    The mock has no hooks, so a held body would fall here and take whatever
+    rests on it down too -- the same reason the pivot below is mirrored.
+    """
+    return {int(i) for i in (spec.notes.get("held_body_ids") or ())}
+
+
+def _fixed(body, held) -> bool:
+    return bool(body.static) or int(body.segmentation_id) in held
+
+
 def _tops(spec):
     """Static surfaces as (top_z, cx, cy, hx, hy, seg_id, mu), highest first."""
     out = []
+    held = _held(spec)
     for b in spec.bodies:
-        if not b.static or not b.collides:
+        if not _fixed(b, held) or not b.collides:
             continue
         if b.kind == "cube":
             out.append((b.position[2] + b.scale[2], b.position[0], b.position[1],
@@ -45,8 +59,9 @@ def _boxes(spec):
     is a wall, not a floor.
     """
     out = []
+    held = _held(spec)
     for b in spec.bodies:
-        if not b.static or not b.collides or b.kind != "cube":
+        if not _fixed(b, held) or not b.collides or b.kind != "cube":
             continue
         sx, sy, sz = (float(x) for x in b.scale)
         if sz <= min(sx, sy):
@@ -101,7 +116,9 @@ def roll(spec, scenario=None) -> Trajectory:
     w = np.array([b.angular_velocity for b in bodies], np.float64)
     q = np.array([b.quaternion for b in bodies], np.float64)
     r = np.array([b.bounding_radius for b in bodies], np.float64)
-    free = np.array([not b.sim_static for b in bodies], bool)
+    held_ids = _held(spec)
+    free = np.array([not (b.sim_static or int(b.segmentation_id) in held_ids)
+                     for b in bodies], bool)
     seg = [int(b.segmentation_id) for b in bodies]
 
     # The scenario's own distance constraint, if it declares one. The mock has

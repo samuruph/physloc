@@ -77,6 +77,24 @@ def _over(surface, position, radius: float) -> bool:
             and abs(float(position[1]) - float(cy)) <= float(hy) + radius)
 
 
+def held_ids(spec) -> set:
+    """Ids the scenario holds still for the whole clip (`sim_hooks` in the
+    container, the same note in the host-side mock).
+
+    Such a body is fixed geometry even though the simulator calls it dynamic:
+    `resting_table`'s balanced tabletop is held on its sphere, and reading it
+    as a free body made it a bounding SPHERE of obstacle -- which swallowed
+    everything standing on it -- and hid it from the search for a support.
+    """
+    return {int(i) for i in (getattr(spec, "notes", None) or {}).get(
+        "held_body_ids") or ()}
+
+
+def is_fixed(spec, body) -> bool:
+    """Static, or held still by the scenario: either way it does not move."""
+    return bool(body.static) or int(body.segmentation_id) in held_ids(spec)
+
+
 def support_under(spec, body) -> Tuple[Optional[object], float]:
     """The static surface directly beneath `body`, and its top z.
 
@@ -89,7 +107,7 @@ def support_under(spec, body) -> Tuple[Optional[object], float]:
     lowest = float(body.position[2]) - float(body.bounding_radius) + 1e-3
     best, best_top = None, None
     for other in spec.bodies:
-        if other is body or not other.static or not other.collides:
+        if other is body or not is_fixed(spec, other) or not other.collides:
             continue
         # A DISTRACTOR IS NEVER A SUPPORT SURFACE. It is scenery: the
         # scenario stages the floor, the table, the ramp that a violation is
@@ -1109,7 +1127,7 @@ class Obstacles:
             bid = int(body.segmentation_id)
             if bid in exclude or body.dormant or not body.collides:
                 continue
-            if body.static:
+            if is_fixed(spec, body):
                 if body.kind != "cube":
                     continue
                 q = np.asarray(body.quaternion, np.float64)

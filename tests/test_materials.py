@@ -142,12 +142,18 @@ SEEDS = range(6)
 
 
 def _bodies(name, level):
+    """Every body these tests judge: what the camera actually sees.
+
+    `visible_camera=False` is the renderer's "casts a shadow, is never drawn"
+    -- `shadow_track`'s caster. Giving it a material would change no pixel, and
+    a test called "everything on screen" should not ask for one.
+    """
     from physloc import scenarios as S
 
     for seed in SEEDS:
         spec = S.get(name).sample(seed, S.TIERS["debug"], level)
         for body in spec.bodies:
-            if body.role not in EXEMPT:
+            if body.role not in EXEMPT and body.visible_camera:
                 yield seed, body
 
 

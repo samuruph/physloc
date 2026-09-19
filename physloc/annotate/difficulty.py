@@ -221,12 +221,19 @@ def camera_travel(camera: Optional[Dict[str, object]]) -> float:
 
 def measure(meta: Dict[str, object],
             vmask: Optional[np.ndarray] = None,
-            seg_invalid: Optional[np.ndarray] = None) -> Dict[str, float]:
+            seg_invalid: Optional[np.ndarray] = None,
+            seen: Optional[np.ndarray] = None) -> Dict[str, float]:
     """The seven raw values for one INVALID clip.
 
     `vmask` and `seg_invalid` are optional: pass them from `annotate`, where
     they are already in memory, and omit them when re-deriving from a shipped
     `sample.json`, which carries the two values they produce.
+
+    `seen` ([T] bool) says on which frames the violating thing is in view,
+    when that is not "a causal body has segmentation pixels". A SHADOW has no
+    segmentation of its own and its causal id is the renderer-only caster,
+    which never appears in segmentation -- so without it every shadow clip
+    measured as fully occluded and was labelled hard.
     """
     violation = meta.get("violation") or {}
     md = meta.get("metadata") or {}
@@ -250,12 +257,13 @@ def measure(meta: Dict[str, object],
     # violation window rather than the whole clip: a violator hidden for the
     # first two seconds and then in plain sight while it misbehaves is not an
     # occluded clip.
-    if seg_invalid is not None and seg_invalid.size:
+    if seen is not None or (seg_invalid is not None and seg_invalid.size):
         ids = [int(i) for i in (violation.get("causal_body_ids") or [])]
         active = _windows_frames(violation.get("violation_windows"), T)
-        if active.any() and ids:
-            present = np.isin(seg_invalid.reshape(len(seg_invalid), -1),
-                              ids).any(axis=1)
+        if active.any() and (ids or seen is not None):
+            present = (np.asarray(seen, bool) if seen is not None else
+                       np.isin(seg_invalid.reshape(len(seg_invalid), -1),
+                               ids).any(axis=1))
             n = int(active.sum())
             occlusion = float((~present[:len(active)][active]).sum()) / n
         else:
@@ -352,7 +360,8 @@ def violator_values(area: Optional[float], occlusion: Optional[float],
 
 def assess(meta: Dict[str, object],
            vmask: Optional[np.ndarray] = None,
-           seg_invalid: Optional[np.ndarray] = None
+           seg_invalid: Optional[np.ndarray] = None,
+           seen: Optional[np.ndarray] = None
            ) -> Optional[Dict[str, object]]:
     """The block that ships in `sample.json`, or `None` for a valid sample.
 
@@ -362,7 +371,7 @@ def assess(meta: Dict[str, object],
     """
     if not meta.get("violation"):
         return None
-    values = measure(meta, vmask, seg_invalid)
+    values = measure(meta, vmask, seg_invalid, seen)
     levels = {f.name: f.level(values[f.name]) for f in FACTORS}
     rank = max(levels.values())
     return {
@@ -380,14 +389,15 @@ def assess(meta: Dict[str, object],
 
 def inputs_for_meta(vmask: Optional[np.ndarray],
                     seg_invalid: Optional[np.ndarray],
-                    meta: Dict[str, object]) -> Dict[str, float]:
+                    meta: Dict[str, object],
+                    seen: Optional[np.ndarray] = None) -> Dict[str, float]:
     """The two array-derived values, to be stored so nobody needs the arrays.
 
     Written under `violation.difficulty_inputs` before `assess` runs, so that
     `measure` finds them on a re-derivation and returns the same numbers the
     clip was labelled with.
     """
-    got = measure(dict(meta), vmask, seg_invalid)
+    got = measure(dict(meta), vmask, seg_invalid, seen)
     return {"violation_area": got["violation_area"], "occlusion": got["occlusion"]}
 
 
@@ -453,13 +463,35 @@ def meta_from_sample(sample) -> Dict[str, object]:
             "violation": violation, "difficulty": difficulty}
 
 
+def shadow_seen(sample) -> Optional[np.ndarray]:
+    """[T] bool: frames on which a shadow violation's shadow is in view, rebuilt
+    from the stored isolation passes exactly as generation builds it (receiver
+    pixels of the violators' shadow, caster and its halo excluded); None for a
+    body violation, whose visibility is read from segmentation."""
+    from .. import loader
+
+    v, observations = sample.violation, sample.observations
+    if v.component != "shadow":
+        return None
+    if "shadow_strength" not in observations or "shadow_source_id" not in observations:
+        return None
+    mask = loader.shadow_receiver_mask(observations.shadow_strength,
+                                       observations.shadow_source_id,
+                                       observations.segmentation, v.ids)
+    return mask.reshape(len(mask), -1).any(axis=1)
+
+
 def violator_values_from_sample(sample, object_id: int) -> Dict[str, float]:
     """Return difficulty inputs for one violator of a finished invalid sample."""
     v = sample.violation
     k = sample.objects.row(object_id)
     seg = sample.observations.segmentation
     T = int(seg.shape[0])
-    where = seg == int(object_id)
+    # A shadow violator is measured on its shadow, as generation measures it:
+    # the visible violation pixels it owns. Its body's segmentation is the
+    # caster, which is exactly what a shadow component excludes.
+    where = ((v.visible & (v.object_id == int(object_id))) if v.component == "shadow"
+             else seg == int(object_id))
     have = where.reshape(T, -1).any(axis=1)
     absent = np.zeros((T,), bool)
     if "present" in sample.objects.keys():
@@ -494,8 +526,9 @@ def relabel(sample_dir: str) -> Optional[Dict[str, object]]:
         return None
     meta = meta_from_sample(sample)
     vmask, seg = sample.violation.mask, sample.observations.segmentation
-    inputs = inputs_for_meta(vmask, seg, meta)
-    difficulty = assess(meta, vmask, seg)
+    seen = shadow_seen(sample)
+    inputs = inputs_for_meta(vmask, seg, meta, seen)
+    difficulty = assess(meta, vmask, seg, seen)
     document = sample._document
     document["violation"]["difficulty"] = (dict(difficulty, inputs=inputs)
                                            if difficulty else None)

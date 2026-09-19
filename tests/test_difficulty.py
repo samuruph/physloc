@@ -221,6 +221,35 @@ def test_footprint_and_occlusion_come_from_the_arrays_when_given():
     assert again["occlusion"] == pytest.approx(got["occlusion"])
 
 
+def test_a_shadow_is_occluded_only_when_the_shadow_is_out_of_view():
+    """A shadow's causal id is the renderer-only caster, which has no
+    segmentation, so reading occlusion from segmentation called every shadow
+    clip fully hidden. `seen` -- frames the shadow has pixels -- replaces it."""
+    T, H, W = 20, 8, 8
+    seg = np.full((T, H, W), 1, np.uint16)           # caster id 9 never appears
+    meta = _meta(num_frames=T, resolution=[W, H])
+    meta["violation"]["causal_body_ids"] = [9]
+    meta["violation"]["violation_windows"] = [[5, 14]]
+    assert D.measure(meta, None, seg)["occlusion"] == pytest.approx(1.0)
+    seen = np.ones(T, bool)
+    seen[5:8] = False                                # shadow gone 3 of 10 frames
+    assert D.measure(meta, None, seg, seen)["occlusion"] == pytest.approx(0.3)
+    assert D.inputs_for_meta(None, seg, meta, seen)["occlusion"] == pytest.approx(0.3)
+
+
+def test_relabel_measures_a_shadow_from_its_isolation_pass(tmp_path):
+    from sample_fixture import make_sample
+    from physloc import loader
+
+    pair = "t/L0/shadow_track/0001_standard"
+    make_sample(tmp_path, pair + "/valid", "valid", pair_uid=pair, component=2)
+    d = make_sample(tmp_path, pair + "/invalid_shadow_strong", pair_uid=pair,
+                    component=2)
+    assert D.shadow_seen(loader.Sample(d)).all()
+    document = D.relabel(d)
+    assert document["violation"]["difficulty"]["factors"]["occlusion"]["value"] == 0.0
+
+
 def test_the_cuts_are_reachable_from_a_config():
     """`configs/common.yaml` owns the thresholds, and the whole table moves.
 

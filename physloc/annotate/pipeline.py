@@ -689,12 +689,17 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # numbers the clip was labelled with, rather than a `None` and a
         # silently different answer. `assess` returns None on a valid twin,
         # which has no violation to detect.
+        #
+        # A shadow is in view when the shadow is, not when a causal body has
+        # segmentation: its causal id is the renderer-only caster, which never
+        # has any, so every shadow clip used to measure as fully occluded.
+        seen = seen_all if shadow_component and label == "invalid" else None
         if meta.get("violation"):
             meta["violation"]["difficulty_inputs"] = diff_mod.inputs_for_meta(
-                vmask, seg_i, meta)
+                vmask, seg_i, meta, seen)
         meta["difficulty"] = diff_mod.assess(
             meta, vmask if label == "invalid" else None,
-            seg_i if label == "invalid" else None)
+            seg_i if label == "invalid" else None, seen)
         document, _rows, remap, side_arrays = schema_write.document_from_generation(meta)
         public_ids = [int(obj["id"]) for obj in document["objects"]]
         row = {object_id: index for index, object_id in enumerate(public_ids)}

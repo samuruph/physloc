@@ -1156,13 +1156,28 @@ def collate(samples: Sequence[Any]) -> Dict[str, Any]:
         return {}
     rows = [sample.to_dict() if isinstance(sample, Sample) else sample
             for sample in samples]
+    counts = [_object_count(row) for row in rows]
     out = _collate(rows)
-    if isinstance(samples[0], Sample) and any(_object_axis(f) for f in samples[0].selected_fields):
-        counts = [len(sample.objects) for sample in samples]
+    if all(count is not None for count in counts):
         width = max(counts)
         out.setdefault("objects", {})["valid"] = np.stack(
             [np.arange(width) < count for count in counts])
     return out
+
+
+def _object_count(row: Dict[str, Any], path: str = "") -> Optional[int]:
+    """N of a ``to_dict`` row: the leading axis of its first per-object array,
+    or None when it carries none -- so batches of plain dicts (a DataLoader's
+    worker output) get ``objects.valid`` exactly as batches of Samples do."""
+    for key, value in row.items():
+        here = (path + "." + key) if path else key
+        if isinstance(value, dict):
+            found = _object_count(value, here)
+            if found is not None:
+                return found
+        elif isinstance(value, np.ndarray) and value.ndim and _object_axis(here):
+            return int(value.shape[0])
+    return None
 
 
 def torch_dataset(dataset: PhysLocDataset):

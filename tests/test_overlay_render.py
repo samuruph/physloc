@@ -46,3 +46,17 @@ def test_direct_sample_loading_resolves_reference_twin(samples):
 def test_unknown_layer_is_an_error(samples):
     with pytest.raises(KeyError):
         overlay.Renderer(samples[0], ["nope"])
+
+
+def test_grid_and_sheet_read_a_pair_directory(tmp_path):
+    """`physloc grid`/`sheet` are handed a pair directory, whose samples sit
+    directly inside it; they once searched it for a `samples/` tree and found
+    nothing, then passed `_panel` arguments one slot late (depth as seg)."""
+    from physloc.viz import grid
+
+    valid, _invalid = make_pair(tmp_path)
+    pair_dir = valid.rsplit("/", 1)[0]
+    out = grid.build(pair_dir, out_path=str(tmp_path / "grid.mp4"), cell=48)
+    assert out["frames"] == 5
+    sheet = grid.sheet(pair_dir, out_path=str(tmp_path / "sheet.mp4"), cell=48)
+    assert sheet["columns"] == ["valid", "solidity"]

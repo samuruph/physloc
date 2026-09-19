@@ -224,6 +224,22 @@ def test_collate_pads_per_object_fields(tmp_path):
     assert batch["info"]["uid"] == ["a/pair/valid", "b/pair/valid"]
 
 
+def test_collating_plain_dicts_matches_collating_samples(tmp_path):
+    """A DataLoader's workers hand collate `to_dict()` rows, not Samples; the
+    batch -- `objects.valid` included -- must not depend on which it got."""
+    make_sample(tmp_path, "a/pair/valid", "valid", pair_uid="a/pair", n_objects=2)
+    make_sample(tmp_path, "b/pair/valid", "valid", pair_uid="b/pair", n_objects=3)
+    ds = L.PhysLocDataset(str(tmp_path), fields=("objects.positions", "violation.mask"))
+    from_samples = L.collate(ds.samples)
+    from_dicts = L.collate([pickle.loads(pickle.dumps(s)).to_dict() for s in ds.samples])
+    assert from_dicts["objects"]["valid"].tolist() == [[True, True, False], [True, True, True]]
+    np.testing.assert_array_equal(from_dicts["objects"]["valid"], from_samples["objects"]["valid"])
+    np.testing.assert_array_equal(from_dicts["objects"]["positions"],
+                                  from_samples["objects"]["positions"])
+    assert "valid" not in L.collate([s.to_dict(["violation.mask"]) for s in ds.samples]).get(
+        "objects", {})
+
+
 def test_missing_old_layout_is_not_interpreted(tmp_path):
     old = tmp_path / "clips" / "old" / "valid"
     old.mkdir(parents=True)

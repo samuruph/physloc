@@ -30,6 +30,7 @@ mp4 only -- no image files are written.
 """
 from __future__ import annotations
 
+import glob
 import os
 from typing import Dict, List, Optional
 
@@ -276,11 +277,13 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
         ov._text(f, "n/a", (x + 6, y + cell // 2), ov.C_DIM, 0.36, 1)
         return
 
+    # By keyword: `_panel` gained `mask_colours` mid-signature, and positional
+    # arguments from here on silently arrived one slot late (depth as seg).
     img = ov._panel(kind, t, c["rgb"],
                     None if c["is_valid"] else c["mask"],
-                    c["sev"], c["causal"], c["div"], cell, c["ref"],
-                    c.get("energy"), c.get("seg"), c.get("depth"),
-                    c.get("flow"), c.get("normals"))
+                    c["sev"], c["causal"], c["div"], cell, ref=c["ref"],
+                    energy=c.get("energy"), seg=c.get("seg"), depth=c.get("depth"),
+                    flow=c.get("flow"), normals=c.get("normals"))
     f[y:y + cell, x:x + cell] = img
     cv2.rectangle(f, (x, y), (x + cell - 1, y + cell - 1), (60, 60, 70), 1)
 
@@ -380,7 +383,11 @@ def _meta(clip: "loader.Sample") -> Dict:
 def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
     cols = []
     samples = []
-    for mp in layout.find(pair_dir):
+    # A PAIR directory holds its samples directly (`<pair>/valid`,
+    # `<pair>/invalid_*`); `layout.find` searches a release's `samples/`, which
+    # a pair directory has none of -- so `grid`, `sheet` and `viz` found nothing.
+    for mp in sorted(glob.glob(os.path.join(pair_dir, "**", layout.SAMPLE_METADATA),
+                               recursive=True)):
         sample = loader.Sample.from_dir(os.path.dirname(mp))
         samples.append(sample)
     valid_by_uid = {sample.uid: sample for sample in samples if sample.info.is_valid}

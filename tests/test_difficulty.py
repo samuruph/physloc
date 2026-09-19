@@ -268,9 +268,14 @@ def test_the_cuts_are_reachable_from_a_config():
         params.apply({"difficulty": {"object_count": [4, 12]}})
         assert D.assess(meta)["factors"]["object_count"]["level"] == "easy"
         assert D.BY_NAME["object_count"].easy == 4
-        # Untouched factors keep BOTH of their shipped values.
+        # Untouched factors keep BOTH of their shipped values -- read from
+        # `params.DEFAULTS` rather than written out here, because a hardcoded
+        # pair passes whenever the defaults drift away from the config (which
+        # is how the recalibrated cuts sat in `common.yaml` for weeks while
+        # `DEFAULTS` still held the old ones).
+        shipped = params.DEFAULTS["difficulty"]["severity"]
         assert (D.BY_NAME["severity"].easy,
-                D.BY_NAME["severity"].moderate) == (0.90, 0.40)
+                D.BY_NAME["severity"].moderate) == tuple(shipped)
     finally:
         params.apply()
 

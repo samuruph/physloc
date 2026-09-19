@@ -110,13 +110,16 @@ DEFAULTS: Dict[str, Any] = {
         # recorded per factor in `annotate/difficulty.py`.
         # `scripts/fit_difficulty.py` prints the tertiles of a corpus so a
         # refit starts from data rather than from taste.
-        "violation_area": [0.05, 0.012],
-        "occlusion": [0.05, 0.5],
+        # Recalibrated to a 30/40/30 split; `configs/common.yaml` and
+        # `annotate/difficulty.FACTORS` carry the same numbers, and
+        # `tests/test_params.py` fails when they drift apart.
+        "violation_area": [0.008, 0.003],
+        "occlusion": [0.20, 0.50],
         "duration": [0.35, 0.15],
-        "severity": [0.90, 0.40],
-        "object_count": [2, 6],
-        "violators": [1, 3],
-        "camera_motion": [0.02, 0.12],
+        "severity": [0.10, 0.03],
+        "object_count": [3, 10],
+        "violators": [1, 2],
+        "camera_motion": [0.02, 0.20],
     },
     "materials": {
         # Divides every density. Anchors a median wooden actor near 1 kg, which

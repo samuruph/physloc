@@ -68,7 +68,7 @@ def test_report_writes_the_figures_and_the_json(tmp_path):
 def test_stats_reconstructs_early_v3_factor_blocks(tmp_path):
     """Early v3 JSON retained all measurements but only the label string."""
     from physloc.release import stats
-    from v3_fixture import make_pair
+    from sample_fixture import make_pair
 
     make_pair(tmp_path)
     loaded = stats.load(str(tmp_path))

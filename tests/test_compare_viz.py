@@ -1,6 +1,6 @@
 """Dataset-structure videos: levels, variants and conditions side by side.
 
-Built on tiny schema-v3 samples, so these run
+Built on tiny schema-v4 samples, so these run
 without a generated review on disk.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from physloc.viz import compare
-from v3_fixture import make_sample
+from sample_fixture import make_sample
 
 T, SIZE = 9, 32
 

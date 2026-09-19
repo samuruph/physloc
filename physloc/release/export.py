@@ -1,4 +1,4 @@
-"""Package a generated schema-v3 tree for local or Hugging Face use."""
+"""Package a generated schema-v4 tree for local or Hugging Face use."""
 from __future__ import annotations
 
 import hashlib
@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .. import loader
 from ..annotate import layout
+from ..schema import write
 from ..residuals.energy import ENERGY_EXCLUDED_ROLES
 
 SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
@@ -60,29 +61,26 @@ def assign_splits(pair_uids: Iterable[str]) -> Dict[str, str]:
     return out
 
 
-def _row(document: Dict, sample_path: str) -> Dict:
-    info = document["metadata"]["sample_info"]
-    scene = document["metadata"]["scene"]["info"]
-    world = document["metadata"]["scene"]["world"]
-    counts = world.get("objects_summary") or {}
+def _row(sample: "loader.Sample", sample_path: str) -> Dict:
+    """One index.parquet row: the columns a user filters a release on."""
+    info, scene, v = sample.info, sample.scene, sample.violation
+    roles = sample.objects.roles
     return {
-        "sample_uid": info["sample_uid"], "pair_uid": info["pair_uid"],
-        "valid_sample_uid": info["valid_sample_uid"], "label": info["label"],
-        "split": info["split"], "scenario": scene.get("type"),
-        "family": scene.get("family"), "domain": scene.get("domain"),
-        "physics_medium": scene.get("physics_medium"),
-        "severity": scene.get("severity"), "complexity": scene.get("complexity"),
-        "difficulty": scene.get("difficulty"), "condition": scene.get("condition"),
-        "seed": info.get("seed"), "variant": info.get("variant"),
-        "num_frames": info.get("num_frames"), "fps": info.get("fps"),
-        "n_actors": counts.get("n_actors"), "n_distractors": counts.get("n_distractors"),
-        "n_violators": counts.get("n_violators"), "prompt": scene.get("prompt"),
+        "sample_uid": info.uid, "pair_uid": info.pair_uid,
+        "valid_uid": info.valid_uid, "label": info.label, "split": info.split,
+        "scenario": scene.scenario, "family": scene.family, "domain": scene.domain,
+        "physics_medium": scene.physics_medium, "level": scene.level,
+        "condition": scene.condition, "severity": v.severity_bin,
+        "difficulty": (v.difficulty or {}).get("level"),
+        "seed": info.seed, "variant": info.variant,
+        "num_frames": sample.video.num_frames, "fps": sample.video.fps,
+        "resolution": list(sample.video.resolution),
+        "n_objects": len(roles), "n_actors": roles.count("actor"),
+        "n_distractors": roles.count("distractor"), "n_violators": len(v.violators),
+        "prompt": scene.prompt, "release": info.release, "tier": info.tier,
         "sample_path": sample_path,
         "rgb_path": sample_path + "/" + loader.RGB,
         "data_path": sample_path + "/" + loader.DATA,
-        "dataset_version": info.get("dataset_version"),
-        "generation_config_id": info.get("generation_config_id"),
-        "resolution": info.get("resolution"),
     }
 
 
@@ -107,17 +105,26 @@ def _write_index(rows: List[Dict], root: str) -> str:
 
 
 def _schema() -> Dict:
+    obj = {"type": "object"}
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://physloc/schema/v3/sample.json",
-        "title": "PhysLoc sample schema v3", "type": "object",
-        "required": ["schema_version", "metadata", "observations", "annotations", "storage"],
+        "$id": "https://physloc/schema/v%d/sample.json" % loader.SCHEMA_VERSION,
+        "title": "PhysLoc sample schema v%d" % loader.SCHEMA_VERSION,
+        "type": "object",
+        "required": ["schema_version", "sample", "video", "scene", "objects"],
         "properties": {
             "schema_version": {"const": loader.SCHEMA_VERSION},
-            "metadata": {"type": "object", "required": ["sample_info", "scene"]},
-            "observations": {"type": "object", "required": ["rgb", "dense"]},
-            "annotations": {"type": "object", "required": ["objects", "maps", "events"]},
-            "storage": {"type": "object", "required": ["dense_store", "format"]},
+            "sample": dict(obj, required=["uid", "pair_uid", "valid_uid", "label",
+                                          "split", "release", "tier", "seed"]),
+            "video": dict(obj, required=["num_frames", "fps", "resolution"]),
+            "scene": dict(obj, required=["scenario", "level", "condition", "camera",
+                                         "environment", "physics"]),
+            "objects": {"type": "array", "items": dict(
+                obj, required=["id", "name", "role", "analysis_group", "asset",
+                               "physics", "render"])},
+            "violation": dict(obj, required=["severity_bin", "kind", "component",
+                                             "intervention", "violators"]),
+            "provenance": obj,
         }, "additionalProperties": False,
     }
 
@@ -167,8 +174,8 @@ def _difficulty_analysis(root: str) -> Dict[str, object]:
 
 def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
     splits = Counter(row["split"] for row in rows)
-    complexity = Counter(row.get("complexity") for row in rows)
-    versions = sorted({str(row.get("dataset_version") or "") for row in rows})
+    complexity = Counter(row.get("level") for row in rows)
+    versions = sorted({str(row.get("release") or "") for row in rows})
     dataset = {
         "schema_version": loader.SCHEMA_VERSION,
         "dataset_metadata": {
@@ -186,9 +193,8 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
                 "domains": sorted({str(row["domain"]) for row in rows
                                    if row.get("domain") is not None}),
             },
-            "generation_config_ids": sorted({str(row["generation_config_id"])
-                                             for row in rows
-                                             if row.get("generation_config_id")}),
+            "generation_config_ids": sorted({"%s:%s" % (row["release"], row["tier"])
+                                             for row in rows if row.get("release")}),
             "difficulty_analysis": _difficulty_analysis(root),
             "energy_accounting": {
                 "world_total": {
@@ -214,6 +220,10 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
             "license": license_name,
             "units": {"length": "m", "time": "s", "mass": "kg", "energy": "J"},
             "coordinate_convention": "right-handed; +Z up; quaternions w,x,y,z",
+            "floor_datum": {"z": 0.0, "units": "m"},
+            "storage": {"metadata": loader.SAMPLE_METADATA, "rgb": loader.RGB,
+                        "dense": loader.DATA, "format": "HDF5",
+                        "compression": "gzip-4", "checksum": "fletcher32"},
             "shadow_strength_threshold": 1.0 / 255.0,
             "violation_components": {"0": "none", "1": "body", "2": "shadow",
                                      "3": "trajectory", "4": "interaction", "5": "energy"},
@@ -236,23 +246,28 @@ tags:
 - video
 ---
 
-# PhysLoc schema v3
+# PhysLoc schema v{version}
 
-PhysLoc stores each sample as `sample.json`, a standalone `rgb.mp4`, and one
-chunked `data.h5`. The Parquet index contains relative paths and never embeds
-duplicate video bytes.
+Each sample is `samples/<uid>/` with `sample.json` (metadata and annotations,
+every fact once), a standalone `rgb.mp4`, and one chunked `data.h5` (dense
+passes and per-object arrays). The Parquet index holds relative paths and never
+embeds video bytes.
 
 ```python
-from loader import PhysLocDataset
-dataset = PhysLocDataset(".")
-sample = dataset.samples[0]
-sample.video_path
-sample.objects("violators")
+from loader import PhysLocDataset, collate
+ds = PhysLocDataset(".", split="main", fields=["video.rgb", "violation.mask",
+                                               "violation.severity_map"])
+s = ds[0]
+s.info.uid, s.scene.family, s.violation.severity_bin
+s.violation.mask            # [T,H,W] where the violation is
+s.violation.violators       # per violator: id, windows, affected_ids, ...
+s.objects.select("violators")
+batch = collate([ds[i] for i in range(4)])   # nested like to_dict()
 ```
 
 Download with `hf download <repo> --repo-type dataset --local-dir physloc`.
 Publish with `hf upload <repo> <directory> --type dataset`.
-""".format(license=license_name.lower())
+""".format(license=license_name.lower(), version=loader.SCHEMA_VERSION)
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as handle:
         handle.write(card)
     shutil.copyfile(loader.__file__, os.path.join(root, "loader.py"))
@@ -262,7 +277,7 @@ def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
     """Write the global index, splits, schema, card, and dataset metadata."""
     metadata_paths = layout.find(root)
     if not metadata_paths:
-        raise FileNotFoundError("no schema-v3 samples under %s" % root)
+        raise FileNotFoundError("no schema-v%d samples under %s" % (loader.SCHEMA_VERSION, root))
     documents = [(os.path.dirname(path), layout.read(os.path.dirname(path)))
                  for path in metadata_paths]
     splits = assign_splits(layout.identity(document)["pair_uid"]
@@ -270,11 +285,11 @@ def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
     rows = []
     for sample_dir, document in documents:
         info = layout.identity(document)
-        uid = str(info["sample_uid"])
-        document["metadata"]["sample_info"]["split"] = splits[str(info["pair_uid"])]
-        with open(os.path.join(sample_dir, loader.SAMPLE_METADATA), "w", encoding="utf-8") as handle:
-            json.dump(document, handle, indent=2, sort_keys=True)
-        rows.append(_row(document, "samples/" + uid))
+        info["split"] = splits[str(info["pair_uid"])]
+        write.dump(document, os.path.join(sample_dir, loader.SAMPLE_METADATA))
+        sample = loader.Sample(sample_dir)
+        rows.append(_row(sample, "samples/" + str(info["uid"])))
+        sample.release()
     split_dir = os.path.join(root, "splits")
     if os.path.isdir(split_dir):
         shutil.rmtree(split_dir)
@@ -292,12 +307,12 @@ def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
 
 
 def export(root: str, outdir: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
-    """Copy an already-v3 sample tree and finalize it for publication."""
+    """Copy an already-v4 sample tree and finalize it for publication."""
     if os.path.realpath(root) == os.path.realpath(outdir):
         raise ValueError("export source and destination must be different directories")
     metadata_paths = layout.find(root)
     if not metadata_paths:
-        raise FileNotFoundError("no schema-v3 samples under %s" % root)
+        raise FileNotFoundError("no schema-v%d samples under %s" % (loader.SCHEMA_VERSION, root))
     target_samples = os.path.join(outdir, "samples")
     if os.path.isdir(target_samples):
         shutil.rmtree(target_samples)
@@ -305,8 +320,7 @@ def export(root: str, outdir: str, license_name: str = "CC-BY-4.0") -> Dict[str,
     for path in metadata_paths:
         source = os.path.dirname(path)
         document = layout.read(source)
-        info = layout.identity(document)
-        uid = str(info["sample_uid"])
+        uid = str(layout.identity(document)["uid"])
         destination = os.path.join(outdir, "samples", *uid.split("/"))
         shutil.copytree(source, destination)
     return finalize(outdir, license_name)
@@ -317,7 +331,7 @@ def upload(outdir: str, repo_id: str, private: bool = False,
     """Publish through the current Hugging Face `hf` CLI."""
     import subprocess
     command = ["hf", "upload", repo_id, outdir, ".", "--type", "dataset",
-               "--commit-message", "Publish PhysLoc schema v3"]
+               "--commit-message", "Publish PhysLoc schema v%d" % loader.SCHEMA_VERSION]
     if private:
         command.append("--private")
     environment = os.environ.copy()

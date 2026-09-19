@@ -1,4 +1,9 @@
-"""Small schema-v3 samples for storage, loader, export, and visual tests."""
+"""Small schema-v4 samples for storage, loader, export, and visual tests.
+
+Built from a generator-shaped `meta` through `document_from_generation` and
+`write_sample` -- the path generation takes -- so the fixture cannot drift from
+the writer.
+"""
 from __future__ import annotations
 
 import os
@@ -6,91 +11,90 @@ import os
 import numpy as np
 
 from physloc import loader
-from physloc.schema.write import write_sample
+from physloc.schema.write import document_from_generation, write_sample
 from physloc.viz.video import write as write_video
+
+
+def make_meta(uid, label="invalid", family="solidity", pair_uid=None,
+              valid_uid=None, n_objects=2, frames=5, side=16, component=1,
+              level="L0", scenario="drop", condition="standard", seed=7,
+              variant=0, severity="strong", affected=()):
+    """The generator record `pipeline._build_meta` would hand the writer."""
+    pair_uid = pair_uid or uid.rsplit("/", 1)[0]
+    ids = list(range(1, n_objects + 1))
+    instances = [{"id": object_id,
+                  "name": "floor" if object_id == 1 else "actor_%d" % object_id,
+                  "category": "cube" if object_id == 1 else "sphere",
+                  "role": "floor" if object_id == 1 else "actor",
+                  "asset_id": "primitive", "source": "test", "license": "CC0",
+                  "mass": 0.0 if object_id == 1 else 1.0, "scale": [1.0, 1.0, 1.0],
+                  "static": object_id == 1, "energy_eligible": object_id != 1}
+                 for object_id in ids]
+    violation = None
+    if label == "invalid":
+        violation = {
+            "kind": "instant", "t_event_frame": 1, "t_observable_frame": 1,
+            "t_end_frame": frames - 1, "observability_lag_frames": 0,
+            "violation_windows": [[1, frames - 1]],
+            "observable_windows": [[1, frames - 1]],
+            "intervention_windows": [[1, 1]],
+            "consequence_windows": [[1, frames - 1]],
+            "causal_body_ids": [ids[-1]] + list(affected),
+            "spatial_extent": "local",
+            "intervention": {"severity_bin": severity, "magnitude": 1.0,
+                             "magnitude_unit": "m", "type": "position_set"},
+            "consequences": [], "violator_timing": "shared",
+            "peak_residual": {"score": 0.8, "value": 2.0, "law": "position_continuity"},
+            "violators": [{"instance_id": ids[-1], "t_event_frame": 1,
+                           "t_observable_frame": 1, "observability_lag_frames": 0,
+                           "violation_windows": [[1, frames - 1]],
+                           "intervention_windows": [[1, 1]],
+                           "consequence_windows": [[1, frames - 1]],
+                           "observable_windows": [[1, frames - 1]],
+                           "magnitude": 1.0, "peak_severity": 0.8,
+                           "affected_instance_ids": list(affected)}]}
+    return {
+        "metadata": {
+            "sample_uid": uid, "pair_uid": pair_uid,
+            "valid_sample_uid": valid_uid or (uid if label == "valid"
+                                              else pair_uid + "/valid"),
+            "label": label, "tier": "debug", "release": "test",
+            "latent_frames": 2, "latent_hw": 1,
+            "domain": None if label == "valid" else "dynamics",
+            "frame_rate": 5, "num_frames": frames, "resolution": [side, side],
+            "step_rate": 100, "gravity": [0, 0, -9.81], "prompt": "A test actor falls.",
+            "family": None if label == "valid" else family, "scenario": scenario,
+            "seed": seed, "variant": variant, "condition": condition,
+            "physics_medium": "rigid", "complexity": {"name": level},
+            "params": {"objects": {"extra_min": 3}}, "size_scale": 1.0,
+            "framing_attempt": 0, "background": {"hdri_id": None, "color": [0, 0, 0]},
+        },
+        "camera": {"motion": "static", "K": np.eye(3).tolist(),
+                   "positions": [[0, -5, 3]] * frames,
+                   "quaternions": [[1, 0, 0, 0]] * frames,
+                   "look_at": [0, 0, 0], "position": [0, -5, 3], "end_position": None},
+        "instances": instances,
+        "events": {"collisions": [{"instances": [1, ids[-1]], "frame": 2, "force": 3.0,
+                                   "position": [0, 0, 0], "image_position": [0.5, 0.5],
+                                   "contact_normal": [0, 0, 1]}]},
+        "provenance": {"generator_commit": "test", "render_seed": seed},
+        "violation": violation,
+        "difficulty": None,
+    }
 
 
 def make_sample(root, uid, label="invalid", family="solidity", pair_uid=None,
                 valid_uid=None, n_objects=2, frames=5, side=16, write_rgb=True,
                 component=1, split="unassigned", level="L0", scenario="drop",
-                condition="standard", seed=7, variant=0, severity="strong"):
-    pair_uid = pair_uid or uid.rsplit("/", 1)[0]
-    valid_uid = valid_uid or (uid if label == "valid" else pair_uid + "/valid")
+                condition="standard", seed=7, variant=0, severity="strong",
+                affected=()):
+    meta = make_meta(uid, label, family, pair_uid, valid_uid, n_objects, frames,
+                     side, component, level, scenario, condition, seed, variant,
+                     severity, affected)
+    if component == 2:
+        meta["metadata"]["family"] = "shadow" if label == "invalid" else None
+    document, _rows, _remap, arrays = document_from_generation(meta, split)
     ids = np.arange(1, n_objects + 1, dtype=np.int32)
-    objects = []
-    for row, object_id in enumerate(ids):
-        group = "support" if row == 0 else "subject"
-        objects.append({
-            "id": int(object_id), "name": "floor" if row == 0 else "actor_%d" % object_id,
-            "category": "cube" if row == 0 else "sphere",
-            "role": "floor" if row == 0 else "actor", "analysis_group": group,
-            "asset": {"id": "primitive", "source": "test", "license": "CC0"},
-            "static_fields": {"mass": 0.0 if row == 0 else 1.0,
-                              "dimensions": [1.0, 1.0, 1.0], "static": row == 0,
-                              "collidable": True, "camera_visible": True,
-                              "shadow_visible": True},
-            "temporal_info": {"store": loader.DATA, "group": "/objects", "row": row},
-            "energy": {"store": loader.DATA, "group": "/energy/objects", "row": row},
-            "violation": {"store": loader.DATA, "group": "/violations/objects", "row": row},
-        })
-    scene_info = {"level": level, "type": scenario, "family": None if label == "valid" else family,
-                  "domain": None if label == "valid" else "dynamics",
-                  "physics_medium": "rigid", "condition": condition,
-                  "complexity": level, "difficulty": None if label == "valid" else "easy",
-                  "severity": None if label == "valid" else severity, "label": label,
-                  "variant": variant, "prompt": "A test actor falls."}
-    summary = None
-    if label == "invalid":
-        summary = {"kind": family, "target_component": "shadow" if component == 2 else "body",
-                   "t_event_frame": 1, "t_observable_frame": 1,
-                   "violation_windows": [[1, frames - 1]],
-                   "observable_windows": [[1, frames - 1]],
-                   "intervention": {"severity_bin": severity, "magnitude": 1.0},
-                   "violators": [{"instance_id": int(ids[-1]),
-                                  "target_component": "shadow" if component == 2 else "body",
-                                  "violation_windows": [[1, frames - 1]],
-                                  "intervention_windows": [[1, 1]],
-                                  "consequence_windows": [[1, frames - 1]],
-                                  "observable_windows": [[1, frames - 1]],
-                                  "affected_instance_ids": []}]}
-    annotations = {"objects": objects,
-                   "scene_energy": {"store": loader.DATA, "group": "/energy/scene"},
-                   "maps": {"store": loader.DATA, "group": "/violations/maps"},
-                   "events": {"collisions": []}, "causal_relations": []}
-    if summary is not None:
-        annotations["violation_summary"] = summary
-    document = {
-        "schema_version": 3,
-        "metadata": {
-            "sample_info": {"schema_version": 3, "dataset_version": "test-v3",
-                            "sample_uid": uid, "pair_uid": pair_uid,
-                            "valid_sample_uid": valid_uid, "label": label, "split": split,
-                            "seed": seed, "render_seed": seed, "variant": variant,
-                            "generation_config_id": "test:debug", "num_frames": frames,
-                            "fps": 5.0, "duration_seconds": frames / 5.0,
-                            "resolution": [side, side], "latent_frames": 2,
-                            "latent_hw": 1, "framing_attempt": 0, "size_scale": 1.0,
-                            "provenance": {"generator_commit": "test"}},
-            "scene": {"info": scene_info,
-                      "world": {"camera": {"motion": "static", "K": np.eye(3).tolist(),
-                                             "positions": [[0, -5, 3]] * frames,
-                                             "quaternions": [[1, 0, 0, 0]] * frames},
-                                "environment": {"background": [0, 0, 0], "hdri": None,
-                                                "lighting": [], "floor_datum": {"z": 0, "units": "m"}},
-                                "physics": {"gravity": [0, 0, -9.81], "timestep_seconds": 1/100,
-                                            "substeps_per_frame": 20,
-                                            "units": {"length": "m", "time": "s", "mass": "kg", "energy": "J"}},
-                                "objects_summary": {"n_objects": n_objects,
-                                                    "n_subjects": n_objects - 1,
-                                                    "n_support": 1,
-                                                    "n_violators": int(label == "invalid"),
-                                                    "n_affected": 0}}}},
-        "observations": {"rgb": {"path": loader.RGB, "format": "mp4", "decode": "explicit"},
-                         "dense": {"store": loader.DATA, "group": "/observations"}},
-        "annotations": annotations,
-        "storage": {"dense_store": loader.DATA, "format": "HDF5",
-                    "compression": "gzip-4", "checksum": "fletcher32"},
-    }
     segmentation = np.ones((frames, side, side), np.uint16)
     segmentation[:, 4:12, 4:12] = ids[-1]
     observations = {"segmentation": segmentation,
@@ -113,6 +117,8 @@ def make_sample(root, uid, label="invalid", family="solidity", pair_uid=None,
                 "bboxes": np.zeros((n_objects, frames, 4), np.float32),
                 "visibility": np.ones((n_objects, frames), np.int32)}
     energy = {"body_ids": ids, "by_body": np.zeros((frames, n_objects), np.float32),
+              "momentum": np.zeros((frames, n_objects, 3), np.float32),
+              "momentum_magnitude": np.zeros((frames, n_objects), np.float32),
               "total": np.zeros(frames, np.float32)}
     violation_id = np.zeros_like(segmentation)
     if label == "invalid":
@@ -137,9 +143,11 @@ def make_sample(root, uid, label="invalid", family="solidity", pair_uid=None,
         for key in ("active", "consequence", "observable"):
             per_object[key][-1, 1:] = True
         per_object["intervening"][-1, 1] = True
+        for target in affected:
+            per_object["affected"][int(target) - 1, 1:] = True
     sample_dir = write_sample(str(root), document, observations, instance, energy,
                               np.zeros((frames, side, side), np.float32),
-                              violation_maps, per_object)
+                              violation_maps, per_object, arrays)
     if write_rgb:
         rgb = np.zeros((frames, side, side, 3), np.uint8)
         rgb[..., 1] = np.arange(frames, dtype=np.uint8)[:, None, None] * 20
@@ -149,7 +157,7 @@ def make_sample(root, uid, label="invalid", family="solidity", pair_uid=None,
     return sample_dir
 
 
-def make_pair(root, pair_uid="test-v3/L0/drop/0007_standard", **kwargs):
+def make_pair(root, pair_uid="test/L0/drop/0007_standard", **kwargs):
     valid = make_sample(root, pair_uid + "/valid", "valid", pair_uid=pair_uid,
                         valid_uid=pair_uid + "/valid", **kwargs)
     invalid = make_sample(root, pair_uid + "/invalid_solidity_strong", "invalid",

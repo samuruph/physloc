@@ -1,4 +1,4 @@
-"""Packaging the one schema-v3 representation for local and Hub use."""
+"""Packaging the one schema-v4 representation for local and Hub use."""
 from __future__ import annotations
 
 import importlib.util
@@ -8,14 +8,14 @@ import os
 import pytest
 
 from physloc.release import export as X
-from v3_fixture import make_pair
+from sample_fixture import make_pair
 
 
 @pytest.fixture
 def release(tmp_path):
     root = tmp_path / "generated"
     for index in range(12):
-        make_pair(root, "test-v3/L0/drop/%04d_standard" % index, write_rgb=False)
+        make_pair(root, "test/L0/drop/%04d_standard" % index, write_rgb=False)
     return str(root)
 
 
@@ -27,13 +27,13 @@ def _rows(root):
     return pq.read_table(os.path.join(root, "index.parquet")).to_pylist()
 
 
-def test_export_preserves_the_v3_sample_payload(release, tmp_path):
+def test_export_preserves_the_v4_sample_payload(release, tmp_path):
     out = str(tmp_path / "pack")
     result = X.export(release, out)
     assert result["samples"] == 24 and result["pairs"] == 12
     for name in ("README.md", "LICENSE", "loader.py", "dataset.json", "schema.json"):
         assert os.path.exists(os.path.join(out, name))
-    sample = os.path.join(out, "samples", "test-v3", "L0", "drop",
+    sample = os.path.join(out, "samples", "test", "L0", "drop",
                           "0000_standard", "invalid_solidity_strong")
     assert set(os.listdir(sample)) == {"sample.json", "rgb.mp4", "data.h5"}
     assert not any(name.endswith(".npz") for _, _, files in os.walk(out) for name in files)
@@ -46,7 +46,9 @@ def test_shipped_loader_reads_the_export(release, tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     dataset = module.PhysLocDataset(out)
-    assert len(dataset.samples) == 24 and not hasattr(dataset, "clips")
+    assert len(dataset.samples) == 24
+    splits = {sample.info.split for sample in dataset.samples}
+    assert splits <= {"main", "held_out", "debug"} and "unassigned" not in splits
     assert len(module.PhysLocDataset(out, unit="pair")) == 12
 
 
@@ -65,12 +67,13 @@ def test_index_uses_relative_paths_without_video_bytes(release, tmp_path):
     out = str(tmp_path / "pack")
     X.export(release, out)
     row = next(value for value in _rows(out) if value["label"] == "invalid")
-    for key in ("sample_uid", "pair_uid", "valid_sample_uid", "scenario", "family",
-                "condition", "complexity", "split", "rgb_path", "data_path"):
+    for key in ("sample_uid", "pair_uid", "valid_uid", "scenario", "family",
+                "condition", "level", "severity", "split", "rgb_path", "data_path"):
         assert row.get(key) is not None, key
     assert not os.path.isabs(row["rgb_path"])
     assert row["rgb_path"].endswith("/rgb.mp4")
     assert "bytes" not in row
+    assert row["n_violators"] == 1 and row["n_objects"] == 2
 
 
 def test_dataset_metadata_is_complete(release, tmp_path):
@@ -103,7 +106,7 @@ def test_export_rejects_v2_and_in_place_targets(tmp_path):
     old = tmp_path / "old" / "clips" / "valid"
     old.mkdir(parents=True)
     (old / "metadata.json").write_text("{}")
-    with pytest.raises(FileNotFoundError, match="schema-v3"):
+    with pytest.raises(FileNotFoundError, match="schema-v4"):
         X.export(str(tmp_path / "old"), str(tmp_path / "pack"))
     release = tmp_path / "generated"
     make_pair(release, write_rgb=False)

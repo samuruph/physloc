@@ -111,7 +111,7 @@ def build(pair_dir: str, family: Optional[str] = None,
         f = np.full((H, W, 3), ov.C_BG, np.uint8)
         title = "%s / %s   |   seed %s  %s  %s" % (
             meta0.get("scenario"), fam, meta0.get("seed"), meta0.get("tier"),
-            (meta0.get("complexity") or {}).get("name", ""))
+            meta0.get("level") or "")
         ov._text(f, title, (PAD + 2, 20), ov.C_TEXT, 0.50, 1)
         fs = "f %d/%d" % (t, T - 1)
         ov._text(f, fs, (W - PAD - ov._w(fs, 0.46), 20), ov.C_TEXT, 0.46, 1)
@@ -202,7 +202,7 @@ def sheet(pair_dir: str, out_path: Optional[str] = None,
         f = np.full((H, W, 3), ov.C_BG, np.uint8)
         title = "%s  seed %s  %s  %s  |  severity %s" % (
             meta0.get("scenario"), meta0.get("seed"), meta0.get("tier"),
-            (meta0.get("complexity") or {}).get("name", ""), severity)
+            meta0.get("level") or "", severity)
         ov._text(f, title, (PAD + 2, 20), ov.C_TEXT, 0.50, 1)
         fs = "f %d/%d" % (t, T - 1)
         ov._text(f, fs, (W - PAD - ov._w(fs, 0.46), 20), ov.C_TEXT, 0.46, 1)
@@ -368,64 +368,75 @@ def _wrap(s: str, width: int) -> List[str]:
     return lines[:3]
 
 
+def _meta(clip: "loader.Sample") -> Dict:
+    """The identity a grid title or tile reads: scenario, family, seed, tier,
+    level, label, num_frames and frame_rate."""
+    return {"scenario": clip.scene.scenario, "family": clip.scene.family,
+            "seed": clip.info.seed, "tier": clip.info.tier, "level": clip.scene.level,
+            "label": clip.info.label, "num_frames": clip.video.num_frames,
+            "frame_rate": clip.video.fps}
+
+
 def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
     cols = []
     samples = []
     for mp in layout.find(pair_dir):
         sample = loader.Sample.from_dir(os.path.dirname(mp))
         samples.append(sample)
-    valid_by_uid = {sample.uid: sample for sample in samples if sample.is_valid}
-    valid_by_pair = {sample.pair_uid: sample for sample in samples if sample.is_valid}
+    valid_by_uid = {sample.uid: sample for sample in samples if sample.info.is_valid}
+    valid_by_pair = {sample.pair_uid: sample for sample in samples
+                     if sample.info.is_valid}
     for sample in samples:
-        if not sample.is_valid:
-            sample._twin = (valid_by_uid.get(sample.valid_sample_uid)
+        if not sample.info.is_valid:
+            sample._twin = (valid_by_uid.get(sample.info.valid_uid)
                             or valid_by_pair.get(sample.pair_uid))
     for clip in samples:
         cdir = clip.path
-        document = clip._document
-        md = clip.display_metadata["metadata"]
-        is_valid = md.get("label") == "valid"
+        md = _meta(clip)
+        is_valid = clip.info.is_valid
         if not is_valid and family and md.get("family") != family:
             continue
-        v = (document.get("annotations") or {}).get("violation_summary") or {}
-        sev = (v.get("intervention") or {}).get("severity_bin", "valid")
-        tl = dict(clip.timeline, severity_t=clip.timeline["severity"])
+        v = clip.violation
+        sev = v.severity_bin or "valid"
+        obs = clip.observations
+        windows = v.windows
+        tl = dict(v.timeline, severity_t=v.timeline["severity"])
         cols.append({
             # The identity block: every reader below wants scenario, family,
-            # seed, tier, complexity, num_frames or frame_rate, and the
-            # violation it needs is unpacked into the fields that follow.
+            # seed, tier, level, num_frames or frame_rate, and the violation
+            # it needs is unpacked into the fields that follow.
             "dir": cdir, "meta": md, "is_valid": is_valid, "clip": clip,
             "label": "VALID" if is_valid else sev,
             "sort": ORDER.get("valid" if is_valid else sev, 9),
-            "rgb": clip.video,
-            "mask": clip.violation_mask,
-            "ref": clip.reference_mask,
-            "sev": clip.severity_map,
-            "causal": clip.causal,
-            "energy": clip.energy_map if clip.has("energy_map") else None,
+            "rgb": clip.video.rgb,
+            "mask": v.mask,
+            "ref": v.reference_mask,
+            "sev": v.severity_map,
+            "causal": v.causal,
+            "energy": clip.energy.map,
             "etrace": ov._energy_trace(cdir),
             "twin_etrace": ov._energy_trace(
                 clip.twin.path if clip.twin is not None else None),
-            "seg": clip.segmentations,
-            "depth": clip.pass_("depth") if clip.has("depth") else None,
-            "flow": (clip.pass_("forward_flow") if clip.has("forward_flow")
-                     else None),
-            "normals": clip.pass_("normal") if clip.has("normal") else None,
+            "seg": obs.segmentation,
+            "depth": obs.depth if "depth" in obs else None,
+            "flow": obs.forward_flow if "forward_flow" in obs else None,
+            "normals": obs.normal if "normal" in obs else None,
             "div": clip.divergence,
             "tl": tl,
-            "vwin": [tuple(w) for w in v.get("violation_windows", [])],
-            "owin": [tuple(w) for w in v.get("observable_windows", [])],
-            "iwin": [tuple(w) for w in v.get("intervention_windows", [])],
-            "cwin": [tuple(w) for w in v.get("consequence_windows", [])],
-            "lag": v.get("observability_lag_frames"),
-            "mag": (v.get("intervention") or {}).get("magnitude"),
-            "mag_unit": (v.get("intervention") or {}).get("magnitude_unit", ""),
+            "vwin": [tuple(w) for w in windows["active"]],
+            "owin": [tuple(w) for w in windows["observable"]],
+            "iwin": [tuple(w) for w in windows["intervening"]],
+            "cwin": [tuple(w) for w in windows["consequence"]],
+            "lag": v.observability_lag,
+            "mag": v.intervention.get("magnitude"),
+            "mag_unit": v.intervention.get("unit", ""),
         })
     # The valid column's "should-be" outline: where every violator shown beside
     # it lawfully is. A valid clip has no violators of its own to take it from.
-    ids = sorted({i for c in cols if not c["is_valid"] for i in c["clip"].violator_ids})
+    ids = sorted({int(i) for c in cols if not c["is_valid"]
+                  for i in c["clip"].violation.ids})
     shadow_reference = any(
-        (not c["is_valid"]) and np.any(c["clip"].violation_component == 2)
+        (not c["is_valid"]) and np.any(c["clip"].violation.component_map == 2)
         for c in cols)
     for c in cols:
         if c["is_valid"]:
@@ -459,21 +470,19 @@ def coverage(release_root: str, out_path: Optional[str] = None,
     clips: Dict[str, Dict[str, Dict]] = {}
     dataset = loader.PhysLocDataset(release_root)
     for clip in dataset.samples:
-        if clip.is_valid:
+        if clip.info.is_valid:
             continue
-        scene = clip.scene_info
-        v = (clip._document.get("annotations") or {}).get("violation_summary") or {}
-        bin_ = (v.get("intervention") or {}).get("severity_bin", "strong")
-        if bin_ != severity:
+        v = clip.violation
+        if (v.severity_bin or "strong") != severity:
             continue
-        clips.setdefault(scene.get("type", "?"), {})[
-            scene.get("family", "?")] = {
-                "meta": clip.display_metadata["metadata"],
-                "rgb": clip.video,
-                "mask": clip.violation_mask,
-                "ref": clip.reference_mask,
-                "tl": clip.timeline,
-                "lag": v.get("observability_lag_frames", 0)}
+        clips.setdefault(clip.scene.scenario or "?", {})[
+            clip.scene.family or "?"] = {
+                "meta": _meta(clip),
+                "rgb": clip.video.rgb,
+                "mask": v.mask,
+                "ref": v.reference_mask,
+                "tl": v.timeline,
+                "lag": v.observability_lag or 0}
     if not clips:
         raise ValueError("no invalid %s clips under %s" % (severity, release_root))
 

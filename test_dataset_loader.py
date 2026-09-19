@@ -7,7 +7,7 @@
         --layers violation,reference,bbox3d --panels rgb,valid,segmentation,camera
     python test_dataset_loader.py --gui                            # browser viewer, port 8765
 
-Generated runs and exported releases have the same schema-v3 sample tree, so
+Generated runs and exported releases have the same schema-v4 sample tree, so
 this script uses one code path for both: `physloc.loader.PhysLocDataset(root)`.
 When no root is given it downloads the default Hub dataset into `data/hub`.
 """
@@ -29,15 +29,32 @@ def download(repo: str, cache: str = CACHE) -> str:
     return snapshot_download(repo_id=repo, repo_type="dataset", local_dir=local)
 
 
+def _shape(value) -> str:
+    if hasattr(value, "shape"):
+        return "%s %s" % (value.dtype, list(value.shape))
+    if isinstance(value, dict):
+        return "dict(%d)" % len(value)
+    if isinstance(value, (list, tuple)):
+        return "list(%d)" % len(value)
+    return repr(value) if len(repr(value)) < 70 else repr(value)[:67] + "..."
+
+
+def show(namespace, title: str, keys=None) -> None:
+    """One namespace of a sample, a line per key: its value or its shape."""
+    print("  %s" % title)
+    for key in keys or namespace.keys():
+        print("    %-22s %s" % (key, _shape(namespace[key])))
+
+
 def summarize(ds) -> None:
     print("%d samples in %d pairs under %s" % (len(ds), len(ds.pairs()), ds.root))
     print("loader: %s (schema %s)" % (loader.__file__, loader.SCHEMA_VERSION))
     accessors = {
-        "level": lambda sample: sample.level,
-        "scenario": lambda sample: sample.scenario,
-        "family": lambda sample: sample.family,
-        "condition": lambda sample: sample.condition,
-        "label": lambda sample: sample.label,
+        "level": lambda s: s.scene.level,
+        "scenario": lambda s: s.scene.scenario,
+        "family": lambda s: s.scene.family,
+        "condition": lambda s: s.scene.condition,
+        "label": lambda s: s.info.label,
     }
     for field, get_value in accessors.items():
         counts = Counter(get_value(sample) or "-" for sample in ds.samples)
@@ -53,43 +70,48 @@ def summarize(ds) -> None:
         print("  %3d  %s" % (i, sample.uid))
 
     pair = next(p for p in ds.pairs() if p.invalids)
-    sample = pair.invalids[0]
-    print("\none invalid sample: %s   violators %s   valid twin found: %s"
-          % (sample.uid, sample.violator_ids, sample.twin is not None))
-    arrays = {"segmentations": sample.segmentations,
-              "violation": sample.violation, "causal": sample.causal,
-              "causal_source": sample.causal_source,
-              "violation_mask": sample.violation_mask,
-              "visible_violation": sample.visible_violation,
-              "severity_map": sample.severity_map}
-    if sample.twin is not None:
-        arrays["reference_mask"] = sample.reference_mask
-    arrays.update({"objects." + k: v for k, v in sample.object_table.items()})
-    arrays.update({"timeline." + k: v for k, v in sample.timeline.items()})
-    arrays.update({"latent_grid." + k: v for k, v in sample.latent_grid().items()})
-    arrays.update({"instances." + k: v for k, v in sample.instances.items()})
-    for name, a in arrays.items():
-        if hasattr(a, "shape"):
-            print("  %-28s %-8s %s" % (name, a.dtype, list(a.shape)))
-        else:
-            print("  %-28s %-8s len=%d" % (name, type(a).__name__, len(a)))
+    s = pair.invalids[0]
+    print("\none invalid sample, namespace by namespace: %s  (valid twin found: %s)"
+          % (s.uid, s.twin is not None))
+    show(s.info, "s.info")
+    show(s.video, "s.video", [k for k in s.video.keys() if k != "rgb"])
+    show(s.scene, "s.scene")
+    show(s.scene.camera, "s.scene.camera")
+    show(s.observations, "s.observations")
+    show(s.objects, "s.objects")
+    show(s.violation, "s.violation")
+    show(s.energy, "s.energy")
+    show(s.events, "s.events")
+    print("  s.violation.violators[0]")
+    for key, value in s.violation.violators[0].items():
+        print("    %-22s %s" % (key, _shape(value)))
+    print("  s.violation.latent_grid()")
+    for key, value in s.violation.latent_grid().items():
+        print("    %-22s %s" % (key, _shape(value)))
 
-    batch = loader.collate([ds[i] for i in range(min(4, len(ds)))])
-    print("\na collated batch of %d:" % len(batch["uid"]))
-    for key, value in batch.items():
-        for name, a in (value.items() if isinstance(value, dict) else [(key, value)]):
-            if hasattr(a, "shape"):
-                print("  %-28s %s" % (name if name == key else key + "." + name, list(a.shape)))
+    fields = ("video.rgb", "observations.segmentation", "violation.mask",
+              "violation.severity_map", "violation.severity", "objects.ids")
+    sub = loader.PhysLocDataset(ds.root, fields=fields)
+    batch = loader.collate([sub[i] for i in range(min(4, len(sub)))])
+    print("\na collated batch of %d, fields=%s:" % (len(batch["info"]["uid"]), list(fields)))
 
-    print("\nfields= picks what an item carries; any of:\n  %s"
+    def walk(value, path):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, path + [key])
+        elif hasattr(value, "shape"):
+            print("  %-34s %s" % (".".join(path), _shape(value)))
+    walk(batch, [])
+
+    print("\nfields= picks what to_dict/collate carry; any of:\n  %s"
           % ", ".join(sorted(loader.FIELDS)))
-    scenes = loader.PhysLocDataset(ds.root, unit="pair", fields=("observations.rgb_path",))
+    scenes = loader.PhysLocDataset(ds.root, unit="pair")
     if len(scenes):
         item = scenes[0]
         print("\nunit=\"pair\": %d scenes; the first, %s, has its valid sample and "
               "%d invalid:" % (len(scenes), item["pair_uid"], len(item["invalid"])))
         for c in [item["valid"]] + item["invalid"][:3]:
-            print("  %-8s %s" % (c.label, c.video_path))
+            print("  %-8s %s" % (c.info.label, c.video.path))
 
 
 def render(root: str, which: str, layers, panels, out: str) -> None:
@@ -100,7 +122,7 @@ def render(root: str, which: str, layers, panels, out: str) -> None:
     sample = (ds.samples[int(which)] if which.isdigit()
               else next(value for value in ds.samples if value.uid.endswith(which)))
     frames = overlay.Renderer(sample, layers, panels).render()
-    video.write(frames, out, fps=sample.fps)
+    video.write(frames, out, fps=sample.video.fps)
     print("wrote %s  (%s)" % (out, sample.uid))
 
 

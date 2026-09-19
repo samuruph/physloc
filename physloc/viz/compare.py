@@ -26,7 +26,6 @@ mp4 only -- no image files are written.
 """
 from __future__ import annotations
 
-import json
 import os
 import time
 from collections import defaultdict
@@ -72,33 +71,27 @@ def index(roots: Sequence[str]) -> List[Dict[str, object]]:
     for root in roots:
         for mp in layout.find(root):
             try:
-                with open(mp) as fh:
-                    meta = json.load(fh)
+                sample = loader.Sample(os.path.dirname(mp))
             except (OSError, ValueError):
                 continue
-            md = layout.identity(meta)
-            if md.get("label") != "invalid":
+            info, scene, v = sample.info, sample.scene, sample.violation
+            if info.is_valid:
                 continue
-            scene = meta["metadata"]["scene"]["info"]
-            v = (meta.get("annotations") or {}).get("violation_summary") or {}
-            iv = v.get("intervention") or {}
+            windows = v.windows
             out.append({
-                "dir": os.path.dirname(mp), "root": root,
-                "uid": md.get("sample_uid"),
-                "valid_uid": md.get("valid_sample_uid"),
-                "release": md.get("dataset_version"),
-                "scenario": str(scene.get("type")),
-                "family": str(scene.get("family")),
-                "level": str(scene.get("complexity") or "?"),
-                "condition": str(scene.get("condition") or "standard"),
-                "seed": int(md.get("seed") or 0),
-                "variant": int(md.get("variant") or 0),
-                "severity": str(iv.get("severity_bin") or "strong"),
-                "num_frames": int(md.get("num_frames") or 0),
-                "fps": int(md.get("fps") or 12),
-                "t_event": v.get("t_event_frame"),
-                "vwin": [tuple(w) for w in v.get("violation_windows") or []],
-                "owin": [tuple(w) for w in v.get("observable_windows") or []],
+                "dir": sample.path, "root": root,
+                "uid": info.uid, "valid_uid": info.valid_uid,
+                "release": info.release,
+                "scenario": str(scene.scenario), "family": str(scene.family),
+                "level": str(scene.level or "?"),
+                "condition": str(scene.condition or "standard"),
+                "seed": int(info.seed or 0), "variant": info.variant,
+                "severity": str(v.severity_bin or "strong"),
+                "num_frames": sample.video.num_frames,
+                "fps": int(sample.video.fps or 12),
+                "t_event": v.t_event,
+                "vwin": [tuple(w) for w in windows["active"]],
+                "owin": [tuple(w) for w in windows["observable"]],
             })
     return out
 
@@ -188,10 +181,11 @@ def _load(rec) -> Dict[str, object]:
         if os.path.exists(os.path.join(valid_dir, loader.SAMPLE_METADATA)):
             sample._twin = loader.Sample.from_dir(valid_dir)
     T = int(rec["num_frames"])
-    return {"rgb": sample.video[:T],
-            "mask": sample.violation_mask,
-            "ref": sample.reference_mask if sample.twin is not None else None,
-            "active": sample.timeline["active"]}
+    v = sample.violation
+    return {"rgb": sample.video.rgb[:T],
+            "mask": v.mask,
+            "ref": v.reference_mask if sample.twin is not None else None,
+            "active": v.timeline["active"]}
 
 
 def _bar(f, rec, t: int, T: int, x: int, y: int, width: int) -> None:

@@ -151,14 +151,14 @@ class _App:
     def index(self) -> Dict[str, object]:
         samples = []
         for i, s in enumerate(self.ds.samples):
-            info = dict(self.ds.info(i), i=i, uid=s.uid)
-            # Keep the browser index on the same normalized vocabulary as the
-            # sample endpoint: `scenario` is the scene type, `family` the
-            # violation taxonomy.
-            info.update(scenario=s.scenario, family=s.family,
-                        condition=s.condition, level=s.level,
-                        severity_bin=s.severity_bin)
-            samples.append(info)
+            info, scene = s.info, s.scene
+            samples.append({
+                "i": i, "uid": info.uid, "pair_uid": info.pair_uid, "label": info.label,
+                "split": info.split, "seed": info.seed, "variant": info.variant,
+                "scenario": scene.scenario, "family": scene.family,
+                "condition": scene.condition, "level": scene.level,
+                "domain": scene.domain, "severity_bin": s.violation.severity_bin,
+                "difficulty": (s.violation.difficulty or {}).get("level")})
         return {"samples": samples, "layers": overlay.LAYERS, "panels": overlay.PANELS,
                 "token": self.token,
                 "root": os.path.basename(os.path.normpath(self.root))}
@@ -166,68 +166,65 @@ class _App:
     def sample(self, i: int) -> Dict[str, object]:
         c = self.ds.samples[i]
         r = self._renderer(i, (), 256)
-        meta, md = c.display_metadata, c.info
-        v = meta.get("violation") or {}
-        obj = c.object_table
-        row = {int(iid): k for k, iid in enumerate(obj["ids"])
-               if bool(obj["is_violator"][k])}
+        v, objects = c.violation, c.objects
+        violator_rows = {int(iid): objects.row(iid) for iid in v.ids}
         # A `multi` clip's violators differ -- one obvious, one behind a screen
         # -- so each carries its own easy / moderate / hard beside the clip's.
-        own = {int(o.get("instance_id", -1)): (o.get("difficulty") or {})
-               for o in (v.get("violators") or [])}
-        static = {int(x["id"]): x for x in meta.get("instances", [])}
+        own = {record["id"]: record.get("difficulty") for record in v.violators}
 
         # Per-object energy is stored on the stable [N,T] object axis.
-        energy: Dict[int, list] = {}
-        if c.has("energy"):
-            e = c.object_energy
-            if "by_body" in e:
-                by = np.asarray(e["by_body"], np.float64)
-                energy = {int(object_id): _rounded(by[j], 4)
-                          for j, object_id in enumerate(c.object_ids)
-                          if j < by.shape[0]}
+        by_body = c.energy.objects.get("by_body")
+        energy: Dict[int, list] = ({int(object_id): _rounded(by_body[j], 4)
+                                    for j, object_id in enumerate(objects.ids)
+                                    if j < by_body.shape[0]}
+                                   if by_body is not None else {})
 
-        objects = []
-        if c.object_definitions:
-            inst = c.instances
-            for j, iid in enumerate(int(x) for x in inst["ids"]):
-                m = static.get(iid, {})
-                fields = m.get("static_fields") or {}
-                asset = m.get("asset") or {}
-                entry = {"id": iid, "name": m.get("name", str(iid)), "role": m.get("role"),
-                         "analysis_group": m.get("analysis_group", "context"),
-                         "category": m.get("category"), "material": fields.get("material"),
-                         "mass": fields.get("mass"), "friction": fields.get("friction"),
-                         "restitution": fields.get("restitution"), "static": fields.get("static"),
-                         "asset": asset.get("id"), "colour": _hex(r.colour(iid)),
-                         "violator": iid in row,
-                         "pos": _rounded(inst["positions"][j]),
-                         "vel": _rounded(inst["velocities"][j]),
-                         "vis": np.asarray(inst["visibility"][j]).astype(int).tolist(),
-                         "energy": energy.get(iid)}
-                entry["difficulty"] = own.get(iid) or None
-                if iid in row:
-                    k = row[iid]
-                    entry["severity"] = _rounded(obj["severity"][k])
-                    for clock in ("active", "observable", "occluded"):
-                        entry[clock] = np.asarray(obj[clock][k]).astype(int).tolist()
-                objects.append(entry)
+        entries = []
+        for j, record in enumerate(objects.records):
+            iid = int(record["id"])
+            physics = record.get("physics") or {}
+            entry = {"id": iid, "name": record.get("name", str(iid)),
+                     "role": record.get("role"),
+                     "analysis_group": record.get("analysis_group", "context"),
+                     "category": record.get("category"),
+                     "material": (record.get("render") or {}).get("material"),
+                     "mass": physics.get("mass"), "friction": physics.get("friction"),
+                     "restitution": physics.get("restitution"),
+                     "static": physics.get("static"),
+                     "asset": (record.get("asset") or {}).get("id"),
+                     "colour": _hex(r.colour(iid)),
+                     "violator": iid in violator_rows,
+                     "pos": _rounded(objects["positions"][j]),
+                     "vel": _rounded(objects["velocities"][j]),
+                     "vis": np.asarray(objects["visibility"][j]).astype(int).tolist(),
+                     "energy": energy.get(iid),
+                     "difficulty": own.get(iid) or None}
+            if iid in violator_rows:
+                k = violator_rows[iid]
+                entry["severity"] = _rounded(v.severity[k])
+                for clock in ("active", "observable", "occluded"):
+                    entry[clock] = np.asarray(v[clock][k]).astype(int).tolist()
+            entries.append(entry)
 
-        tl = c.timeline
+        info, scene, video = c.info, c.scene, c.video
         return {
-            "i": i, "uid": c.uid, "frames": c.num_frames, "fps": c.fps, "label": c.label,
-            "prompt": c.prompt, "resolution": md.get("resolution"),
-            "scenario": c.scenario, "family": c.family, "level": c.level,
-            "condition": c.condition, "severity_bin": c.severity_bin,
-            "medium": md.get("physics_medium"), "domain": md.get("domain"),
-            "difficulty": meta.get("difficulty"),
-            "violation": {k: v.get(k) for k in (
-                "t_event_frame", "t_observable_frame", "t_end_frame",
-                "observability_lag_frames", "violation_windows", "observable_windows",
-                "violator_timing", "peak_residual")} if v else None,
-            "magnitude": (v.get("intervention") or {}).get("magnitude") if v else None,
-            "timeline": {k: _rounded(a) for k, a in tl.items()},
-            "objects": objects,
+            "i": i, "uid": info.uid, "frames": video.num_frames, "fps": video.fps,
+            "label": info.label, "prompt": scene.prompt,
+            "resolution": list(video.resolution),
+            "scenario": scene.scenario, "family": scene.family, "level": scene.level,
+            "condition": scene.condition, "severity_bin": v.severity_bin,
+            "medium": scene.physics_medium, "domain": scene.domain,
+            "difficulty": v.difficulty,
+            "violation": {
+                "t_event_frame": v.t_event, "t_observable_frame": v.t_observable,
+                "t_end_frame": v.t_end, "observability_lag_frames": v.observability_lag,
+                "violation_windows": v.windows["active"],
+                "observable_windows": v.windows["observable"],
+                "violator_timing": v.timing, "peak_residual": v.peak_residual,
+            } if v.present else None,
+            "magnitude": v.intervention.get("magnitude") if v.present else None,
+            "timeline": {k: _rounded(a) for k, a in v.timeline.items()},
+            "objects": entries,
         }
 
     # ---- images ------------------------------------------------------------
@@ -266,7 +263,7 @@ class _App:
         return body
 
     def seg(self, i: int, t: int) -> Tuple[bytes, int, int, int]:
-        seg = self.ds.samples[i].segmentations
+        seg = self.ds.samples[i].observations.segmentation
         t = max(0, min(t, len(seg) - 1))
         step = max(1, math.ceil(max(seg.shape[1:]) / SEG_MAX))
         a = np.asarray(seg[t, ::step, ::step])

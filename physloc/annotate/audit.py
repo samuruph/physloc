@@ -22,7 +22,6 @@ from typing import Dict, List
 import numpy as np
 
 from .. import loader
-from . import layout
 
 #: A cell is flagged when it fails ALL of these. Any one of them passing means
 #: there is something there, and the cell stays.
@@ -33,22 +32,19 @@ MIN_EVIDENCE = 0.02          # peak |valid - invalid| inside the mask, 0..1
 
 def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
     """Severity, observability and pixel evidence for one invalid sample."""
-    meta = layout.read(sample_dir)
-    scene = meta["metadata"]["scene"]["info"]
-    v = (meta.get("annotations") or {}).get("violation_summary") or {}
+    sample = loader.Sample(sample_dir, twin=twin)
     out = {
-        "scenario": scene.get("type"), "family": scene.get("family"),
-        "severity_bin": (v.get("intervention") or {}).get("severity_bin"),
+        "scenario": sample.scene.scenario, "family": sample.scene.family,
+        "severity_bin": sample.violation.severity_bin,
         "peak_severity": 0.0, "observable_frames": 0, "evidence": 0.0,
     }
-    sample = loader.Sample(sample_dir, twin=twin)
-    tl = sample.timeline
+    tl = sample.violation.timeline
     out["peak_severity"] = float(np.asarray(tl["severity"]).max())
     out["observable_frames"] = int(np.asarray(tl["observable"]).sum())
 
     # Divergence is no longer shipped; it is computed from the two videos, which
     # is what it always was -- so this needs the valid twin beside the clip.
-    mask = sample.violation_mask
+    mask = sample.violation.mask
     if mask.any() and sample.twin is not None:
         out["evidence"] = float(sample.divergence[mask].max())
     sample.release()
@@ -79,7 +75,7 @@ def audit(release_root: str) -> List[Dict[str, object]]:
     dataset = loader.PhysLocDataset(release_root)
     rows = []
     for sample in dataset.samples:
-        if sample.is_valid:
+        if sample.info.is_valid:
             continue
         rows.append(measure_sample(sample.path, sample.twin))
     return rows

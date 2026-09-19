@@ -12,7 +12,6 @@ and skips without one, like every other test that reads rendered output.
 from __future__ import annotations
 
 import glob
-import json
 import os
 
 import numpy as np
@@ -40,10 +39,9 @@ def release(tmp_path_factory):
 def _invalid_clips(root):
     for mp in sorted(glob.glob(os.path.join(root, "samples", "**", "sample.json"),
                                recursive=True)):
-        with open(mp) as fh:
-            m = json.load(fh)
-        if m["metadata"]["sample_info"]["label"] == "invalid":
-            yield os.path.dirname(mp), m
+        sample = loader.Sample.from_dir(os.path.dirname(mp))
+        if not sample.info.is_valid:
+            yield sample
 
 
 def test_the_release_validates(release):
@@ -54,49 +52,42 @@ def test_the_release_validates(release):
 
 
 def test_every_invalid_clip_describes_each_violator(release):
-    for cdir, m in _invalid_clips(release):
-        v = m["annotations"]["violation_summary"]
-        violators = v["violators"]
-        assert v["violator_timing"] in ("independent", "sync", "shared")
-        assert [c["instance_id"] for c in violators] == [
-            i for i in v["causal_body_ids"]
-            if any(c["instance_id"] == i for c in violators)]
-        assert min(c["t_event_frame"] for c in violators) == v["t_event_frame"]
-        for c in violators:
-            assert c["t_event_frame"] <= c["t_observable_frame"]
-            for s, e in c["violation_windows"]:
-                assert 0 <= s <= e < m["metadata"]["sample_info"]["num_frames"]
+    for sample in _invalid_clips(release):
+        v = sample.violation
+        assert v.timing in ("independent", "sync", "shared")
+        assert [c["id"] for c in v.violators] == [
+            i for i in v.causal_ids if any(c["id"] == i for c in v.violators)]
+        assert min(c["t_event"] for c in v.violators) == v.t_event
+        for c in v.violators:
+            assert c["t_event"] <= c["t_observable"]
+            for s, e in c["windows"]["active"]:
+                assert 0 <= s <= e < sample.video.num_frames
 
 
 def test_independent_violators_keep_their_own_windows(release):
     seen = 0
-    for cdir, m in _invalid_clips(release):
-        v = m["annotations"]["violation_summary"]
-        if v["violator_timing"] != "independent":
+    for sample in _invalid_clips(release):
+        v = sample.violation
+        if v.timing != "independent":
             continue
         seen += 1
-        T = m["metadata"]["sample_info"]["num_frames"]
-        sample = loader.Sample.from_dir(cdir)
-        obj = sample.object_table
-        rows = [list(obj["ids"]).index(c["instance_id"]) for c in v["violators"]]
-        for k, c in enumerate(v["violators"]):
-            want = np.zeros(T, bool)
-            for s, e in c["violation_windows"]:
-                want[s:e + 1] = True
-            assert np.array_equal(obj["active"][rows[k]], want)
+        T = sample.video.num_frames
+        rows = [sample.objects.row(c["id"]) for c in v.violators]
+        for k, c in enumerate(v.violators):
+            want = rasterise([tuple(w) for w in c["windows"]["active"]], T)
+            assert np.array_equal(v.active[rows[k]], want)
         # The clip's windows are the union of the violators' own.
-        clip_active = rasterise([tuple(w) for w in v["violation_windows"]], T)
-        assert np.array_equal(clip_active, obj["active"][rows].any(axis=0))
+        clip_active = rasterise([tuple(w) for w in v.windows["active"]], T)
+        assert np.array_equal(clip_active, v.active[rows].any(axis=0))
     if not seen:
         pytest.skip("this workdir has no independently timed violators")
 
 
 def test_pixel_attribution_names_only_violators_and_their_consequences(release):
-    for cdir, m in _invalid_clips(release):
-        v = m["annotations"]["violation_summary"]
-        violator_ids = {c["instance_id"] for c in v["violators"]}
-        sample = loader.Sample.from_dir(cdir)
-        vids, cids, cmask = sample.violation, sample.causal_source, sample.causal
+    for sample in _invalid_clips(release):
+        v = sample.violation
+        violator_ids = set(v.ids.tolist())
+        vids, cids, cmask = v.object_id, v.causal_source, v.causal
         assert set(np.unique(vids[vids > 0]).tolist()) <= violator_ids
         assert np.array_equal(cids > 0, cmask > 0)
         assert set(np.unique(cids[cids > 0]).tolist()) <= violator_ids

@@ -408,66 +408,100 @@ def evaluation_set(metas, level: str) -> List[Dict[str, object]]:
 
 
 # ------------------------------------------------------------------ relabel
-def violator_values_from_sample(sample, k: int) -> Dict[str, float]:
-    """Return difficulty inputs for one row of a finished invalid sample."""
-    obj = sample.object_table
-    vid = int(obj["ids"][k])
-    seg = sample.segmentations
+def meta_from_sample(sample) -> Dict[str, object]:
+    """The generator-shaped record `measure` reads, rebuilt from a finished
+    schema-v4 `loader.Sample` -- for `relabel` and for `release.stats`.
+
+    ``camera`` is the sample's lazy camera, so its per-frame track is read from
+    HDF5 only if a factor needs it.
+    """
+    info, scene, v = sample.info, sample.scene, sample.violation
+    records = sample.objects.records
+    metadata = {
+        "sample_uid": info.uid, "pair_uid": info.pair_uid, "label": info.label,
+        "release": info.release, "tier": info.tier, "seed": info.seed,
+        "variant": info.variant, "num_frames": sample.video.num_frames,
+        "frame_rate": sample.video.fps, "resolution": list(sample.video.resolution),
+        "scenario": scene.scenario, "family": scene.family, "domain": scene.domain,
+        "physics_medium": scene.physics_medium, "condition": scene.condition,
+        "complexity": {"name": scene.level},
+        "n_actors": sum(1 for o in records if o.get("role") == "actor"
+                        and not (o.get("physics") or {}).get("dormant")),
+        "n_distractors": sum(1 for o in records if o.get("role") == "distractor"),
+        # The count difficulty was fitted on: every body the plan names, which
+        # for a two-body family (solidity) is both. `len(v.violators)` is the
+        # number the annotation marks; the two differ, and only this one
+        # reproduces the labels generation assigned.
+        "n_violators": len(v.causal_ids),
+    }
+    violation = None
+    difficulty = None
+    if v.present:
+        difficulty = dict(v.difficulty) if v.difficulty else None
+        inputs = difficulty.pop("inputs", None) if difficulty else None
+        violation = {
+            "intervention": dict(v.intervention, severity_bin=v.severity_bin),
+            "peak_residual": v.peak_residual, "violator_timing": v.timing,
+            "t_event_frame": v.t_event,
+            "observability_lag_frames": v.observability_lag,
+            "violation_windows": v.windows["active"],
+            "observable_windows": v.windows["observable"],
+            "causal_body_ids": v.causal_ids, "difficulty_inputs": inputs,
+            "violators": v.violators,
+        }
+    return {"metadata": metadata, "camera": sample.scene.camera,
+            "violation": violation, "difficulty": difficulty}
+
+
+def violator_values_from_sample(sample, object_id: int) -> Dict[str, float]:
+    """Return difficulty inputs for one violator of a finished invalid sample."""
+    v = sample.violation
+    k = sample.objects.row(object_id)
+    seg = sample.observations.segmentation
     T = int(seg.shape[0])
-    where = seg == vid
+    where = seg == int(object_id)
     have = where.reshape(T, -1).any(axis=1)
-    temporal = sample.object_arrays
     absent = np.zeros((T,), bool)
-    if "present" in temporal:
-        present = np.asarray(temporal["present"][k], bool)[:T]
+    if "present" in sample.objects.keys():
+        present = np.asarray(sample.objects["present"][k], bool)[:T]
         absent[:len(present)] = ~present
     gone = absent & ~have
     if gone.any():
-        where = where | ((sample.violation == vid) & gone[:, None, None])
-    res = sample.sample_info.get("resolution") or seg.shape[1:]
+        where = where | ((v.object_id == int(object_id)) & gone[:, None, None])
+    res = sample.video.resolution
     pixels = float(int(res[0]) * int(res[1])) or 1.0
-    active = np.asarray(obj["active"][k], bool)
+    active = np.asarray(v.active[k], bool)
     n_active = int(active.sum())
-    hidden = np.asarray(obj["occluded"][k], bool)
+    hidden = np.asarray(v.occluded[k], bool)
     return violator_values(
         area=float(where.reshape(T, -1).sum(axis=1).max()) / pixels,
         occlusion=float((hidden & active).sum()) / n_active if n_active else 0.0,
-        duration=float(np.asarray(obj["observable"][k], bool).sum()) / T if T else 0.0,
-        severity=max(0.0, float(np.asarray(obj["score"][k]).max(initial=0.0))),
-        camera=sample.camera)
-
-
-violator_values_from_clip = violator_values_from_sample
+        duration=float(np.asarray(v.observable[k], bool).sum()) / T if T else 0.0,
+        severity=max(0.0, float(np.asarray(v.score[k]).max(initial=0.0))),
+        camera=sample.scene.camera)
 
 
 def relabel(sample_dir: str) -> Optional[Dict[str, object]]:
-    """Re-derive one schema-v3 sample's difficulty metadata in place."""
-    import json
+    """Re-derive one schema-v4 sample's difficulty in place: the clip's
+    ``violation.difficulty`` (with its measured ``inputs``) and each violator's."""
     import os
 
     from .. import loader
+    from ..schema import write
 
     sample = loader.Sample.from_dir(sample_dir)
-    document = sample._document
-    violation = (document.get("annotations") or {}).get("violation_summary")
-    if not violation or sample.is_valid:
+    if sample.info.is_valid or not sample.violation.present:
         return None
-    meta = sample.display_metadata
-    vmask, seg = sample.violation_mask, sample.segmentations
-    violation["difficulty_inputs"] = inputs_for_meta(vmask, seg, meta)
+    meta = meta_from_sample(sample)
+    vmask, seg = sample.violation.mask, sample.observations.segmentation
+    inputs = inputs_for_meta(vmask, seg, meta)
     difficulty = assess(meta, vmask, seg)
-    document["metadata"]["scene"]["info"]["difficulty"] = (
-        difficulty or {}).get("level")
-    ids = [int(i) for i in sample.object_ids]
-    for rec in violation.get("violators") or []:
-        iid = int(rec.get("instance_id", -1))
-        if iid in ids:
-            rec["difficulty"] = assess_violator(
-                violator_values_from_sample(sample, ids.index(iid)))
-    path = os.path.join(sample_dir, loader.SAMPLE_METADATA)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(document, fh, indent=2, sort_keys=True)
-    os.replace(tmp, path)
+    document = sample._document
+    document["violation"]["difficulty"] = (dict(difficulty, inputs=inputs)
+                                           if difficulty else None)
+    for record in document["violation"].get("violators") or []:
+        record["difficulty"] = assess_violator(
+            violator_values_from_sample(sample, int(record["id"])))
     sample.release()
+    write.dump(document, os.path.join(sample_dir, loader.SAMPLE_METADATA))
     return document

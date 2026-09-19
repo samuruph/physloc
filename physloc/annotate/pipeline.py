@@ -1,7 +1,7 @@
 """Annotation pipeline -- runs on the HOST side of the seam.
 
 Reads what the container worker produced (traj_*.npz, passes_*.npz, plan.json)
-and writes schema-v3 samples.
+and writes schema-v4 samples.
 
     conda activate physloc
     python -m physloc.cli annotate out/phase0/drop/0173
@@ -639,8 +639,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     }
 
 
-    # ---- write both schema-v3 samples ------------------------------------
-    from ..schema import write as v3
+    # ---- write both schema-v4 samples ------------------------------------
+    from ..schema import write as schema_write
 
     sev_bin = plan_d["intervention"]["severity_bin"]
     # THE COMPLEXITY LEVEL IS PART OF A CLIP'S IDENTITY, so a level is a
@@ -695,8 +695,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         meta["difficulty"] = diff_mod.assess(
             meta, vmask if label == "invalid" else None,
             seg_i if label == "invalid" else None)
-        document, _rows, remap = v3.document_from_generation(meta)
-        public_ids = [int(obj["id"]) for obj in document["annotations"]["objects"]]
+        document, _rows, remap, side_arrays = schema_write.document_from_generation(meta)
+        public_ids = [int(obj["id"]) for obj in document["objects"]]
         row = {object_id: index for index, object_id in enumerate(public_ids)}
 
         observations = {"segmentation": seg_here.astype(np.uint16)}
@@ -718,7 +718,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                                          violation_ids).astype(np.uint16)
                 causal_ids = np.where(causal_ids == old_id, new_id,
                                       causal_ids).astype(np.uint16)
-            code = v3.COMPONENTS["shadow" if shadow_component else "body"]
+            code = schema_write.COMPONENTS["shadow" if shadow_component else "body"]
             component = np.where(violation_ids > 0, code, 0).astype(np.uint8)
             severity_pixels = smap.astype(np.float16)
         violation_maps = {
@@ -771,10 +771,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                     "momentum", "momentum_magnitude", "angular_momentum"):
             if key in state:
                 energy[key] = state[key]
-        cdir = v3.write_sample(
+        cdir = schema_write.write_sample(
             outroot, document, observations, instance_arrays, energy,
             energy_mod.energy_map(etrace, seg_here), violation_maps,
-            violation_objects)
+            violation_objects, side_arrays)
         if write_video:
             _write_mp4(p["rgba"], os.path.join(cdir, layout.RGB), tier.fps)
         written[label] = cdir
@@ -1022,7 +1022,7 @@ def _camera_block(spec, spec_d: Dict, num_frames: int, track=None,
 
 
 def _params_block():
-    """The generation knobs recorded in each schema-v3 sample."""
+    """The generation knobs recorded in each schema-v4 sample."""
     from .. import params
 
     return params.CURRENT
@@ -1054,7 +1054,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 spec=None, camera: Optional[Dict[str, object]] = None,
                 collisions: Optional[List[Dict[str, object]]] = None
                 ) -> Dict[str, object]:
-    """Build the generator record consumed by the schema-v3 writer.
+    """Build the generator record consumed by the schema-v4 writer.
 
     MOVi's four: `metadata` (who the clip is and its geometry), `camera`,
     `instances` and `events`. PhysLoc's beside them: `segmentation`,

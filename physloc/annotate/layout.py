@@ -1,4 +1,4 @@
-"""Names and discovery helpers for the single PhysLoc schema-v3 layout."""
+"""Names and discovery helpers for the single PhysLoc schema-v4 layout."""
 from __future__ import annotations
 
 import glob
@@ -24,7 +24,8 @@ PASSES: Dict[str, str] = {
 
 
 def identity(document) -> Dict[str, object]:
-    return ((document or {}).get("metadata") or {}).get("sample_info") or {}
+    """The ``sample`` block of a ``sample.json`` document: uid, pair_uid, label..."""
+    return (document or {}).get("sample") or {}
 
 
 def read(sample_dir: str) -> Dict[str, object]:

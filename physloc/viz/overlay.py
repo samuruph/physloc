@@ -129,13 +129,13 @@ def build(sample_dir: str, out_path: Optional[str] = None, panel: int = PANEL,
     sample = loader.Sample.from_dir(sample_dir)
     r = Renderer(sample, layers, panels, panel)
     out_path = out_path or os.path.join(sample_dir, layout.OVERLAY)
-    vid.write(r.render(), out_path, fps=sample.fps)
-    return {"path": out_path, "frames": sample.num_frames,
+    vid.write(r.render(), out_path, fps=sample.video.fps)
+    return {"path": out_path, "frames": sample.video.num_frames,
             "panels": list(r.panels), "layers": list(r.layers)}
 
 
 class Renderer:
-    """Composes one frame at a time from a schema-v3 `loader.Sample`."""
+    """Composes one frame at a time from a schema-v4 `loader.Sample`."""
 
     def __init__(self, clip: "loader.Sample", layers: Sequence[str] = DEFAULT_LAYERS,
                  panels: Sequence[str] = DEFAULT_PANELS, panel: int = PANEL,
@@ -151,23 +151,18 @@ class Renderer:
         self.size = int(panel)
         self.columns = max(1, min(int(columns), len(self.panels)))
         self.rows = math.ceil(len(self.panels) / self.columns)
-        self.meta = clip.display_metadata
-        self.v = self.meta.get("violation") or {}
-        self.T = clip.num_frames
-        self.ids = [int(i) for i in clip.object_ids[
-            np.asarray(clip.violation_arrays.get(
-                "is_violator", np.zeros(len(clip.object_ids), bool)), bool)]]
-        self.object_rows = {int(iid): row
-                            for row, iid in enumerate(clip.object_ids)}
-        self.granular = (self.meta.get("metadata", {}).get("physics_medium") == "granular"
-                         and len(self.ids) > 1)
-        insts = self.meta.get("instances", [])
-        self.names = {int(i["id"]): str(i.get("name", i["id"])) for i in insts}
-        self.roles = {int(i["id"]): i.get("role") for i in insts}
+        self.v = clip.violation
+        self.T = clip.video.num_frames
+        self.ids = [int(i) for i in self.v.ids]
+        objects = clip.objects
+        self.object_rows = {int(iid): row for row, iid in enumerate(objects.ids)}
+        self.granular = (clip.scene.physics_medium == "granular" and len(self.ids) > 1)
+        self.names = dict(zip((int(i) for i in objects.ids), objects.names))
+        self.roles = dict(zip((int(i) for i in objects.ids), objects.roles))
         self.width = self.columns * self.size + (self.columns + 1) * PAD
         self.panels_bottom = HEADER + PAD + self.rows * (self.size + PAD)
         timeline_rows = 1 if self.granular and self.ids else len(self.ids)
-        clocks = (0 if clip.is_valid else
+        clocks = (0 if clip.info.is_valid else
                   30 + 3 * CLOCK_ROW + timeline_rows * VIOLATOR_ROW + SEVERITY_LANE)
         self.height = self.panels_bottom + LEGEND + clocks + 40
         self._cache: Dict[str, object] = {}
@@ -190,8 +185,8 @@ class Renderer:
                 title = "RGB + " + ", ".join(self.layers)
             _label(f, _fit(title, S - 10, 0.44), (x + 5, y + 16))
             self._notes(f, name, t, x, y)
-        tl = self.clip.timeline
-        _header(f, self.width, self.meta, t, self.T, bool(tl["active"][t]),
+        tl = self.v.timeline
+        _header(f, self.width, self.clip, t, self.T, bool(tl["active"][t]),
                 bool(tl["observable"][t]), bool(tl["occluded"][t]))
         self._legend(f, self.panels_bottom)
         self._timeline(f, t, self.panels_bottom + LEGEND)
@@ -221,60 +216,61 @@ class Renderer:
         return img
 
     def _panel(self, name: str, t: int) -> np.ndarray:
-        c, S = self.clip, self.size
-        if name in PANEL_FILES and not c.has(PANEL_FILES[name]):
+        c, v, S = self.clip, self.v, self.size
+        obs = c.observations
+        if name in PANEL_FILES and not _has(c, PANEL_FILES[name]):
             return self._blank("no %s in this clip" % name)
-        if name in VIOLATION_PANELS and c.is_valid:
+        if name in VIOLATION_PANELS and c.info.is_valid:
             return self._blank("valid clip: no %s" % name)
-        if name in ("valid", "divergence") and not c.is_valid and c.twin is None:
+        if name in ("valid", "divergence") and not c.info.is_valid and c.twin is None:
             return self._blank("valid twin not found")
         if name == "rgb":
-            img = _resize(c.video[t], S)
+            img = _resize(c.video.rgb[t], S)
             for layer in self.layers:
                 getattr(self, "_layer_" + layer)(img, t)
             return img
         if name == "valid":
-            return _resize((c if c.is_valid else c.twin).video[t], S)
+            return _resize((c if c.info.is_valid else c.twin).video.rgb[t], S)
         if name == "camera":
             return self._camera(t)
         kind, arrays = {
-            "energy": ("energy", lambda: {"energy": c.energy_map}),
-            "segmentation": ("seg", lambda: {"seg": c.segmentations}),
-            "depth": ("depth", lambda: {"depth": c.pass_("depth")}),
-            "flow": ("flow", lambda: {"flow": c.pass_("forward_flow")}),
-            "backward_flow": ("flow", lambda: {"flow": c.pass_("backward_flow")}),
-            "normal": ("normals", lambda: {"normals": c.pass_("normal")}),
+            "energy": ("energy", lambda: {"energy": c.energy.map}),
+            "segmentation": ("seg", lambda: {"seg": obs.segmentation}),
+            "depth": ("depth", lambda: {"depth": obs.depth}),
+            "flow": ("flow", lambda: {"flow": obs.forward_flow}),
+            "backward_flow": ("flow", lambda: {"flow": obs.backward_flow}),
+            "normal": ("normals", lambda: {"normals": obs.normal}),
             "object_coordinates": ("normals",
-                                   lambda: {"normals": c.pass_("object_coordinates")}),
+                                   lambda: {"normals": obs.object_coordinates}),
             "mask": ("mask", lambda: {
-                "mask": c.violation, "ref": c.reference_mask,
+                "mask": v.object_id, "ref": v.reference_mask,
                 "mask_colours": {iid: self.colour(iid) for iid in self.ids}}),
-            "severity": ("sev", lambda: {"sev": c.severity_map}),
-            "causal": ("causal", lambda: {"causal": c.causal}),
+            "severity": ("sev", lambda: {"sev": v.severity_map}),
+            "causal": ("causal", lambda: {"causal": v.causal}),
             "divergence": ("div", lambda: {"diverg": c.divergence}),
         }[name]
         args = dict(mask=None, sev=None, causal=None, diverg=None, ref=None,
                     mask_colours=None,
                     energy=None, seg=None, depth=None, flow=None, normals=None)
         args.update(arrays())
-        return _panel(kind, t, c.video, size=S, **args)
+        return _panel(kind, t, c.video.rgb, size=S, **args)
 
     def _notes(self, f, name: str, t: int, x: int, y: int) -> None:
         """The per-panel scale bars and read-outs, drawn on the composed frame."""
-        c, S = self.clip, self.size
-        if name in PANEL_FILES and not c.has(PANEL_FILES[name]):
+        c, v, S = self.clip, self.v, self.size
+        if name in PANEL_FILES and not _has(c, PANEL_FILES[name]):
             return
-        if name in VIOLATION_PANELS and c.is_valid:
+        if name in VIOLATION_PANELS and c.info.is_valid:
             return
         if name == "mask":
-            _text(f, "%d px" % int(c.violation_mask[t].sum()), (x + 5, y + S - 8),
+            _text(f, "%d px" % int(v.mask[t].sum()), (x + 5, y + S - 8),
                   C_DIM, 0.40, 1)
         elif name == "severity":
-            _sev_scale(f, x, y, S, float(c.timeline["severity"][t]))
+            _sev_scale(f, x, y, S, float(v.timeline["severity"][t]))
         elif name == "causal":
-            _causal_key(f, x, y, S, c.causal[t])
+            _causal_key(f, x, y, S, v.causal[t])
         elif name == "segmentation":
-            ids = [int(u) for u in np.unique(c.segmentations[t]) if u]
+            ids = [int(u) for u in np.unique(c.observations.segmentation[t]) if u]
             _text(f, _fit("ids %s" % ",".join(map(str, ids)), S - 10, 0.36),
                   (x + 5, y + S - 8), C_DIM, 0.36, 1)
         elif name in ("flow", "backward_flow"):
@@ -282,24 +278,24 @@ class Renderer:
             if last:
                 _text(f, "undefined on this frame", (x + 5, y + S - 8), C_DIM, 0.36, 1)
         elif name == "depth":
-            d = np.asarray(c.pass_("depth")[t], np.float32)
+            d = np.asarray(c.observations.depth[t], np.float32)
             d = d[..., 0] if d.ndim == 3 else d
             here = d < DEPTH_SENTINEL
             if here.any():
                 _text(f, "%.1f-%.1f m" % (d[here].min(), d[here].max()),
                       (x + 5, y + S - 8), C_DIM, 0.36, 1)
         elif name == "energy":
-            _energy_scale(f, x, y, S, float(np.abs(c.energy_map[t]).max()))
-            if c.has("energy"):
-                twin = c.twin if not c.is_valid else None
-                _energy_curve(f, x, y, S, t, dict(c.energy),
-                              dict(twin.energy) if twin is not None
-                              and twin.has("energy") else None)
+            _energy_scale(f, x, y, S, float(np.abs(c.energy.map[t]).max()))
+            if _has(c, "energy"):
+                twin = c.twin if not c.info.is_valid else None
+                _energy_curve(f, x, y, S, t, dict(c.energy.scene),
+                              dict(twin.energy.scene) if twin is not None
+                              and _has(twin, "energy") else None)
 
     def _camera(self, t: int) -> np.ndarray:
         """Top-down (x, y) map: the camera's path and view wedge, object tracks."""
         import cv2
-        S, cam, inst = self.size, self.clip.camera, self.clip.instances
+        S, cam, inst = self.size, self.clip.scene.camera, self.clip.objects
         img = np.full((S, S, 3), C_BLANK, np.uint8)
         eye = np.asarray(cam["positions"], np.float64)[:, :2]
         keep = [i for i, iid in enumerate(inst["ids"])
@@ -354,7 +350,7 @@ class Renderer:
                           interpolation=cv2.INTER_NEAREST).astype(bool)
 
     def _layer_violation(self, img, t):
-        violation = self.clip.violation[t]
+        violation = self.v.object_id[t]
         for iid in self.ids:
             m = self._up(violation == iid)
             if m.any():
@@ -363,12 +359,12 @@ class Renderer:
                 img[m ^ _erode(m)] = col.astype(np.uint8)
 
     def _layer_visible(self, img, t):
-        m = self._up(self.clip.visible_violation[t])
+        m = self._up(self.v.visible[t])
         img[m ^ _erode(m)] = (255, 255, 255)
 
     def _layer_severity(self, img, t):
         import cv2
-        s = cv2.resize(self.clip.severity_map[t], (self.size, self.size),
+        s = cv2.resize(self.v.severity_map[t], (self.size, self.size),
                        interpolation=cv2.INTER_NEAREST)
         on = s > 0
         if on.any():
@@ -377,7 +373,7 @@ class Renderer:
             img[on] = (img[on] * 0.25 + heat[on] * 0.75).astype(np.uint8)
 
     def _layer_causal(self, img, t):
-        causal = self.clip.causal[t]
+        causal = self.v.causal[t]
         affected = self._up(causal == 2)
         img[affected] = (img[affected] * 0.5 + np.array(C_CAUSAL2) * 0.5).astype(np.uint8)
         img[affected ^ _erode(affected)] = C_CAUSAL2
@@ -385,7 +381,7 @@ class Renderer:
         img[violators ^ _erode(violators)] = C_CAUSAL1
 
     def _layer_reference(self, img, t):
-        m = self._up(self.clip.reference_mask[t])
+        m = self._up(self.v.reference_mask[t])
         img[m ^ _erode(m)] = C_REF
 
     def _boxed(self, t: int):
@@ -396,20 +392,20 @@ class Renderer:
         around nothing reads as a detection."""
         if "present" not in self._cache:
             table = {}
-            inst = self.clip.instances
-            if "present" in inst:
+            inst = self.clip.objects
+            if "present" in inst.keys():
                 for j, bid in enumerate(inst["ids"]):
                     table[int(bid)] = np.asarray(inst["present"][j], bool)
             self._cache["present"] = table
         present = self._cache["present"]
-        inst = self.clip.instances
+        inst = self.clip.objects
         return [(i, int(iid)) for i, iid in enumerate(inst["ids"])
                 if self.roles.get(int(iid)) not in UNBOXED_ROLES
                 and (int(iid) not in present or present[int(iid)][t])]
 
     def _layer_bbox2d(self, img, t):
         import cv2
-        boxes, S = self.clip.instances["bboxes"], self.size
+        boxes, S = self.clip.objects["bboxes"], self.size
         for i, iid in self._boxed(t):
             b = boxes[i, t]
             if np.isnan(b).any():
@@ -421,7 +417,7 @@ class Renderer:
         """Project instance-major world points [k,T,...,3] -> [k,T,...,3]
         of (x, y) in [0, 1] and the depth sign, once per clip."""
         if key not in self._cache:
-            cam = self.clip.camera
+            cam = self.clip.scene.camera
             p = movi.project(np.swapaxes(points, 0, 1), cam["positions"],
                              cam["quaternions"], cam["K"])
             self._cache[key] = np.swapaxes(p, 0, 1)
@@ -430,7 +426,7 @@ class Renderer:
     def _layer_bbox3d(self, img, t):
         import cv2
         S = self.size
-        proj = self._projected("bbox3d", self.clip.instances["bboxes_3d"])
+        proj = self._projected("bbox3d", self.clip.objects["bboxes_3d"])
         for i, iid in self._boxed(t):
             p = proj[i, t]
             if (p[:, 2] <= 0).any() or not np.isfinite(p[:, :2]).all():
@@ -443,7 +439,7 @@ class Renderer:
 
     def _layer_centers(self, img, t):
         import cv2
-        inst, S = self.clip.instances, self.size
+        inst, S = self.clip.objects, self.size
         for i, iid in self._boxed(t):
             x, y = inst["image_positions"][i, t]
             if not (0 <= x <= 1 and 0 <= y <= 1):
@@ -454,7 +450,7 @@ class Renderer:
 
     def _layer_velocity(self, img, t):
         import cv2
-        inst, S = self.clip.instances, self.size
+        inst, S = self.clip.objects, self.size
         ahead = inst["positions"] + inst["velocities"] * VELOCITY_SECONDS
         tips = self._projected("velocity", ahead[:, :, None, :])[:, :, 0]
         for i, iid in self._boxed(t):
@@ -468,7 +464,7 @@ class Renderer:
                             self.colour(iid), 1, cv2.LINE_AA, tipLength=0.25)
 
     def _layer_labels(self, img, t):
-        inst, S = self.clip.instances, self.size
+        inst, S = self.clip.objects, self.size
         for i, iid in self._boxed(t):
             b = inst["bboxes"][i, t]
             if np.isnan(b).any():
@@ -481,19 +477,22 @@ class Renderer:
     def _layer_events(self, img, t):
         import cv2
         S = self.size
-        for e in (self.meta.get("events") or {}).get("collisions", []):
-            if int(e.get("frame", -1)) != t or e.get("image_position") is None:
+        events = self.clip.events.collisions
+        if "frame" not in events:
+            return
+        for k in np.flatnonzero(events["frame"] == t):
+            x, y = events["image_position"][k]
+            if not (np.isfinite(x) and np.isfinite(y)):
                 continue
-            x, y = e["image_position"]
             if 0 <= x <= 1 and 0 <= y <= 1:
-                r = int(3 + 2 * math.log10(1 + 10 * max(float(e.get("force", 0)), 0)))
+                r = int(3 + 2 * math.log10(1 + 10 * max(float(events["force"][k]), 0)))
                 cv2.circle(img, (int(x * S), int(y * S)), r, C_EVENT, 1, cv2.LINE_AA)
 
     # ---- legend and timeline ---------------------------------------------
     def _legend(self, f, y: int) -> None:
         import cv2
         x, yb = PAD + 2, y + 15
-        if self.clip.is_valid:
+        if self.clip.info.is_valid:
             _text(f, "valid clip -- nothing here is violated", (x, yb), C_DIM, 0.40, 1)
             x += _w("valid clip -- nothing here is violated", 0.40) + 18
         if self.granular and self.ids:
@@ -530,11 +529,12 @@ class Renderer:
             return wins
 
         y = y0
-        if not self.clip.is_valid:
-            vwin = display_windows(v.get("violation_windows", []))
-            iwin = display_windows(v.get("intervention_windows", [])) or vwin
-            cwin = display_windows(v.get("consequence_windows", [])) or vwin
-            owin = display_windows(v.get("observable_windows", []))
+        if not self.clip.info.is_valid:
+            windows = v.windows
+            vwin = display_windows(windows["active"])
+            iwin = display_windows(windows["intervening"]) or vwin
+            cwin = display_windows(windows["consequence"]) or vwin
+            owin = display_windows(windows["observable"])
             rows = [("intervening", "being changed", iwin, C_INTERVENE),
                     ("consequence", "still wrong", cwin, C_MASK),
                     ("observable", "a viewer could tell", owin, C_OBS)]
@@ -559,7 +559,7 @@ class Renderer:
             # One row per violator. A granular medium is intentionally one
             # aggregate row: dozens of grain rows and fragmented windows hide
             # the event instead of explaining it.
-            obj = self.clip.object_table
+            obj = {key: v[key] for key in ("active", "observable", "occluded", "severity")}
             if self.granular and self.ids:
                 rows = [self.object_rows[iid] for iid in self.ids]
                 series = [("medium", C_VIOLATORS[0],
@@ -608,12 +608,12 @@ class Renderer:
                 _text(f, str(i), (fx(i) - 3, y + 15), C_DIM, 0.34, 1)
 
         t_event = t_iend = t_obs = t_end = -1
-        if not self.clip.is_valid:
-            t_event = int(v.get("t_event_frame", -1))
-            t_obs = int(v.get("t_observable_frame", -1))
-            t_end = int(v.get("t_end_frame", -1))
-            iw = v.get("intervention_windows") or v.get("violation_windows") or []
-            t_iend = max((int(e) for _, e in iw), default=t_event)
+        if not self.clip.info.is_valid:
+            as_frame = lambda value: -1 if value is None else int(value)
+            t_event, t_obs, t_end = (as_frame(v.t_event), as_frame(v.t_observable),
+                                     as_frame(v.t_end))
+            t_iend = as_frame(v.t_intervention_end if v.t_intervention_end is not None
+                              else v.t_end)
             marks = [(t_event, "t_event", C_INTERVENE), (t_iend, "t_applied", C_INTERVENE),
                      (t_obs, "t_obs", C_OBS), (t_end, "t_end", (170, 170, 210))]
             by_frame: Dict[int, List] = {}
@@ -632,14 +632,14 @@ class Renderer:
         px = fx(t) + max(1, span // (2 * max(T, 1)))
         cv2.line(f, (px, y0 + 17), (px, y + 5), (255, 255, 255), 1)
 
-        if self.clip.is_valid:
+        if self.clip.info.is_valid:
             info = "valid twin of %s" % self.clip.pair_uid
         else:
-            peak = v.get("peak_residual") or {}
+            peak = v.peak_residual
             info = ("t_event=%d  applied_to=%d  t_obs=%d  t_end=%d  lag=%d  |  "
                     "severity(t)=%.3f  peak=%.3f  r=%.3f (%s)"
-                    % (t_event, t_iend, t_obs, t_end, v.get("observability_lag_frames", 0),
-                       float(self.clip.timeline["severity"][t]),
+                    % (t_event, t_iend, t_obs, t_end, v.observability_lag or 0,
+                       float(v.timeline["severity"][t]),
                        float(peak.get("score", 0.0)), float(peak.get("value", 0.0)),
                        peak.get("law", "-")))
         _text(f, _fit(info, span, 0.44), (x0, self.height - 8), C_TEXT, 0.44, 1)
@@ -824,15 +824,10 @@ def _fit(s: str, width: int, scale: float) -> str:
     return s + "..."
 
 
-def _header(f, W, meta, t, T, active, observable, occluded):
+def _header(f, W, clip, t, T, active, observable, occluded):
     """Laid out right-to-left from measured widths so nothing ever collides."""
     import cv2
-    v = meta.get("violation") or {}
-    # Renderer.display_metadata carries a compact, already-flattened identity
-    # under ``metadata``; callers may also pass a canonical sample document.
-    # Using only layout.identity() on the compact form produced the literal
-    # header ``None / None / None`` on every schema-v3 overlay.
-    md = layout.identity(meta) or (meta.get("metadata") or {})
+    info, scene, v = clip.info, clip.scene, clip.violation
 
     # --- right edge: frame counter, then the state pill ---
     frame_s = "f %d/%d" % (t, T - 1)
@@ -852,22 +847,22 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     right_limit = x - 14
 
     # --- left edge: identity, then metadata if it still fits ---
-    left = ("%s / %s / %s" % (md.get("domain"), md.get("family"), md.get("scenario"))
-            if md.get("label") != "valid" else "valid / %s" % md.get("scenario"))
+    left = ("%s / %s / %s" % (scene.domain, scene.family, scene.scenario)
+            if not info.is_valid else "valid / %s" % scene.scenario)
     _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
     lx = PAD + 2 + _w(left, 0.52) + 22
-    sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
+    sev_bin = v.severity_bin or "-"
     # THE CONDITION AND THE LEVEL, on the frame. A clip's difficulty is not
     # readable from the picture -- a static camera looks like a moving one that
     # has not moved yet, and five lawful peers look like five distractors --
     # so watching a run meant remembering which seed was which. It is written
     # here, in the video, and it degrades gracefully: the pieces are dropped
     # right to left as the width runs out, identity first.
-    cond = md.get("condition")
-    cam = (meta.get("camera") or {}).get("motion")
+    cond = scene.condition
+    cam = scene.camera.motion
     if cam and cam != "static":
         cond = "%s:%s" % (cond or "?", cam)
-    bits = [str((md.get("complexity") or {}).get("name") or ""), sev_bin]
+    bits = [str(scene.level or ""), sev_bin]
     if cond:
         bits.append(cond)
     # HOW MANY BODIES ARE WRONG, when it is more than one. `multi` is the
@@ -878,13 +873,13 @@ def _header(f, W, meta, t, T, active, observable, occluded):
     # halves. So a `standard` clip can carry two violators, and nothing on the
     # frame said so -- you found it on L3 `stack_topple x superelastic`, where
     # the severity landed on two blocks under a label that did not mention it.
-    nc = md.get("n_violators")
-    if isinstance(nc, int) and nc > 1:
-        timing = v.get("violator_timing")
+    nc = len(v.violators)
+    if nc > 1:
+        timing = v.timing
         bits.append("%d violators%s" % (nc, " (%s)" % timing
                                         if timing in ("independent", "sync")
                                         else ""))
-    bits += ["seed %s" % md.get("seed"), "tier %s" % md.get("tier")]
+    bits += ["seed %s" % info.seed, "tier %s" % info.tier]
     for k in range(len(bits), 0, -1):
         mid = "   ".join(x for x in bits[:k] if x)
         if lx + _w(mid, 0.46) < right_limit:
@@ -1002,6 +997,16 @@ def _nice_step(x: float) -> float:
     return next(m * p for m in (1, 2, 5, 10) if m * p >= x)
 
 
+def _has(clip, name: str) -> bool:
+    """Whether a sample carries a panel's source: a render pass, the energy
+    map (``energy_map``) or the scene energy trace (``energy``)."""
+    if name == "energy_map":
+        return clip.energy.map is not None
+    if name == "energy":
+        return bool(clip.energy.scene)
+    return name in clip.observations
+
+
 # ------------------------------------------------------------------ energy
 def _energy_trace(sample_dir):
     if not sample_dir:
@@ -1011,7 +1016,7 @@ def _energy_trace(sample_dir):
     except (FileNotFoundError, ValueError):
         return None
     try:
-        return sample.scene_energy.as_dict()
+        return dict(sample.energy.scene)
     finally:
         sample.release()
 

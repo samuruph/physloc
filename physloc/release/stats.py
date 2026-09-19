@@ -1,4 +1,4 @@
-"""What a generated schema-v3 release contains, as figures and one JSON.
+"""What a generated schema-v4 release contains, as figures and one JSON.
 
 `validate` says a release is well formed and `audit` says every cell depicts
 something. Neither says what the DISTRIBUTIONS look like, and the distributions
@@ -89,48 +89,23 @@ FIGURES: Tuple[Tuple[str, str], ...] = (
 
 # ------------------------------------------------------------------- reading
 def load(root: str) -> List[Dict[str, object]]:
-    """Return every sample as the compact report record expected below."""
+    """Return every sample as the compact report record expected below.
+
+    Reads ``sample.json`` only, through the loader; the camera track is opened
+    from HDF5 only when a sample has no stored difficulty to report.
+    """
+    from .. import loader
     from ..annotate import layout
 
     out = []
     for path in layout.find(root):
-        document = layout.read(os.path.dirname(path))
-        info = document["metadata"]["sample_info"]
-        scene = document["metadata"]["scene"]["info"]
-        world = document["metadata"]["scene"]["world"]
-        counts = world.get("objects_summary") or {}
-        annotations = document.get("annotations") or {}
-        summary = annotations.get("violation_summary")
-        record = {
-            "metadata": {
-                "sample_uid": info.get("sample_uid"),
-                "pair_uid": info.get("pair_uid"),
-                "label": info.get("label"),
-                "release": info.get("dataset_version"),
-                "seed": info.get("seed"),
-                "variant": info.get("variant"),
-                "num_frames": info.get("num_frames"),
-                "frame_rate": info.get("fps"),
-                "resolution": info.get("resolution"),
-                "scenario": scene.get("type"),
-                "family": scene.get("family"),
-                "domain": scene.get("domain"),
-                "physics_medium": scene.get("physics_medium"),
-                "condition": scene.get("condition"),
-                "complexity": {"name": scene.get("complexity")},
-                "n_actors": counts.get("n_actors", counts.get("n_subjects", 0)),
-                "n_distractors": counts.get("n_distractors", counts.get("n_context", 0)),
-                "n_violators": counts.get("n_violators", 0),
-            },
-            "camera": world.get("camera") or {},
-            "violation": summary,
-            "difficulty": scene.get("difficulty_analysis"),
-        }
-        # Early schema-v3 samples retained the label but accidentally dropped
-        # the measured factor block. All inputs needed to reproduce it remain
-        # in sample.json, so reports repair those samples without opening HDF5.
-        if summary and not record["difficulty"]:
+        sample = loader.Sample(os.path.dirname(path))
+        record = D.meta_from_sample(sample)
+        # A sample without a measured difficulty block is repaired from its
+        # own sample.json, so a report never silently skips it.
+        if record["violation"] and not record["difficulty"]:
             record["difficulty"] = D.assess(record)
+        sample.release()
         out.append(record)
     return out
 

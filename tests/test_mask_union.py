@@ -113,10 +113,10 @@ def test_released_samples_have_nonempty_masks_while_active(which):
                         recursive=True):
         cdir = os.path.dirname(mp)
         sample = loader.Sample.from_dir(cdir)
-        if sample.is_valid:
+        if sample.info.is_valid:
             continue
-        mask = getattr(sample, which)
-        tl = sample.timeline
+        mask = sample.violation.mask
+        tl = sample.violation.timeline
         # WHICH window the mask answers to depends on where the violation is
         # detectable. An `event` family -- a colour that finishes changing, a
         # body that finishes growing -- is only wrong ACROSS the change: a
@@ -127,7 +127,7 @@ def test_released_samples_have_nonempty_masks_while_active(which):
         # exactly that reason, and the mask was right.
         from physloc.taxonomy import FAMILIES
 
-        fam = FAMILIES.get(sample.family)
+        fam = FAMILIES.get(sample.scene.family)
         key = ("intervening" if fam is not None and fam.detectable == "event"
                else "consequence")
         scored = np.asarray(tl[key], bool)

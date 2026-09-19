@@ -1511,7 +1511,7 @@ def _annotate(workdir, outroot, overlay=True, only=None):
 
 
 class _SampleAnnotator:
-    """Annotate each completed render into a schema-v3 sample immediately.
+    """Annotate each completed render into a schema-v4 sample immediately.
 
     Videos used to appear only when a whole job ended: a job renders its valid
     twin and then every family at every severity -- about fifty clips, fifteen
@@ -1607,7 +1607,7 @@ def _condition_in(pair_dir) -> Optional[str]:
                         recursive=True):
         try:
             with open(mp) as fh:
-                got = json.load(fh)["metadata"]["scene"]["info"].get("condition")
+                got = json.load(fh)["scene"].get("condition")
         except Exception:                                      # noqa: BLE001
             continue
         if got:
@@ -1935,7 +1935,7 @@ def _build(suppress: bool = False):
                    help="raw passes and trajectories; a relative path is placed "
                         "under out/ (e.g. `w` -> out/w)")
     p.add_argument("--outdir",
-                   help="schema-v3 samples; a relative path is placed "
+                   help="schema-v4 samples; a relative path is placed "
                         "under out/ (e.g. `r` -> out/r)")
     p.add_argument("--no-overlay", action="store_true")
     p.add_argument("--resume", action="store_true",
@@ -2017,7 +2017,7 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_config_path)
 
     p = add_parser("export",
-                   help="package an already schema-v3 generated dataset")
+                   help="package an already schema-v4 generated dataset")
     p.add_argument("root", nargs="?", default="out/release",
                    help="a generated release directory (the one with samples/)")
     p.add_argument("--outdir", required=True,

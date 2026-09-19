@@ -48,80 +48,39 @@ class PhantomImpulse(Injector):
             return None
         actor = targets[0]
         T = traj.num_frames
-        # Inside the contact-free run, with room left in it -- see
-        # `_geom.acting_frame`. Clamping to the run's LAST frame is what this
-        # did before, so on `drop` the shove landed one frame before the actor
-        # hit the floor and the floor absorbed it. You reported the strongest
-        # bin as barely visible; that was the reason, not the size of the push.
-        # `want` is left to `default_event_frame`, which jitters per scene. It
-        # used to be the constant `T // 3`, and since `acting_frame` honours a
-        # `want` that already sits inside the usable band, that constant WAS
-        # the answer on every seed: the family fired on frame 8 of 25 in every
-        # clip of ten different scenarios.
-        t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T)
-        # A drop's phantom impulse is not a landing-only effect: it can be a
-        # shove on the way down, near the landing, or during a visible rebound.
-        # When the scenario supplies a broadened physical anchor, sample from
-        # all moving/contact-free frames.  Sixty percent stays near the anchor;
-        # the rest uses the wider valid motion phase.  This deliberately lives
-        # here rather than in `anchored_event_frame`, because an impulse must
-        # remain contact-free while appearance/identity events may continue
-        # through contact.
-        anchor = spec.notes.get("event_anchor") or {}
-        if anchor.get("broad_offsets"):
-            indices = [traj.index_of(int(body.segmentation_id))
-                       for body in targets]
-            speeds = np.linalg.norm(np.asarray(traj.lin_vel[:, indices, :],
-                                               np.float64), axis=2)
-            speed = speeds[:, 0] if len(targets) == 1 else np.median(speeds, axis=1)
-            threshold = max(_geom.REST_SPEED,
-                            _geom.MOTION_SHARE * float(speed.max()))
-            free = np.ones((T,), dtype=bool)
-            contacts = traj.contacts
-            if len(targets) == 1:
-                for k in range(len(contacts)):
-                    if int(actor.segmentation_id) in (
-                            int(contacts.body_a[k]), int(contacts.body_b[k])):
-                        f = int(contacts.frame[k])
-                        if 0 <= f < T:
-                            free[max(0, f - 1):min(T, f + 2)] = False
-            valid = np.flatnonzero(free & (speed > threshold))
-            if valid.size:
-                contact = _geom.anchor_contact_frame(spec, T)
-                if contact is not None:
-                    centre = contact + int(anchor.get("offset", 0))
-                    jitter = max(1, int(anchor.get("jitter", 1)))
-                    if "jitter_seconds" in anchor:
-                        jitter = max(jitter, int(round(
-                            abs(float(anchor["jitter_seconds"])) *
-                            float(getattr(getattr(spec, "tier", None),
-                                          "fps", 12) or 12))))
-                    lo = centre - jitter
-                    hi = centre + jitter
-                    near = valid[(valid >= lo) & (valid <= hi)]
-                else:
-                    near = np.asarray([], dtype=int)
-                use_near = (_geom.event_fraction(spec, salt=3101) <
-                             float(anchor.get("near_probability", 0.6)))
-                if use_near and near.size:
-                    choices = near
-                else:
-                    choices = valid
-                    seconds = anchor.get("broad_seconds")
-                    if contact is not None and seconds is not None and len(seconds) == 2:
-                        fps = float(getattr(getattr(spec, "tier", None),
-                                            "fps", 12) or 12)
-                        lo_s, hi_s = sorted(float(x) for x in seconds)
-                        wide_lo = contact + int(round(lo_s * fps))
-                        wide_hi = contact + int(round(hi_s * fps))
-                        choices = choices[(choices >= wide_lo) &
-                                          (choices <= wide_hi)]
-                        if not choices.size:
-                            choices = valid
-                u = _geom.event_fraction(spec, salt=3102)
-                index = min(len(choices) - 1,
-                            int(round(u * (len(choices) - 1))))
-                t0 = int(choices[index])
+        # A phantom impulse has no physical anchor.  Sample it from the whole
+        # clip, not from the contact-free run immediately before the next
+        # collision.  The only restrictions are semantic: the actor must be
+        # moving, the impulse must not coincide with a recorded contact, and
+        # there must be at least one frame on either side for the instant
+        # change to be visible.  This allows impulses both before and after a
+        # barrier/collision impact.
+        indices = [traj.index_of(int(body.segmentation_id)) for body in targets]
+        speeds = np.linalg.norm(np.asarray(traj.lin_vel[:, indices, :],
+                                           np.float64), axis=2)
+        speed = speeds[:, 0] if len(targets) == 1 else np.median(speeds, axis=1)
+        threshold = max(_geom.REST_SPEED,
+                        _geom.MOTION_SHARE * float(speed.max()))
+        valid = np.zeros(T, dtype=bool)
+        valid[1:T - 1] = speed[1:T - 1] > threshold
+
+        # Keep the impulse away from contact frames themselves, but do not
+        # exclude the rest of the post-contact trajectory.
+        target_ids = {int(body.segmentation_id) for body in targets}
+        for k in range(len(traj.contacts)):
+            a = int(traj.contacts.body_a[k])
+            b = int(traj.contacts.body_b[k])
+            if target_ids.intersection((a, b)):
+                f = int(traj.contacts.frame[k])
+                if 0 <= f < T:
+                    valid[max(0, f - 1):min(T, f + 2)] = False
+
+        choices = np.flatnonzero(valid)
+        if not choices.size:
+            return None
+        u = _geom.event_fraction(spec, salt=3102)
+        t0 = int(choices[min(len(choices) - 1,
+                             int(round(u * (len(choices) - 1))))])
         # A granular medium is kicked during descent. Waiting for the pile to
         # settle turns the event into a heap twitch and misses the causal phase
         # of a pour. `acting_frame` keeps the event inside the primary grain's

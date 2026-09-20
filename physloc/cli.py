@@ -896,12 +896,28 @@ def cmd_generate(a) -> int:
         produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
         # Only what was not already annotated as it rendered. Never call
         # `_annotate` with an empty list: `only=[]` means "every variant".
-        left = [d for d in produced if os.path.normpath(d) not in annotated]
+        left = [x for x in info.get("variants", [])
+                if x.get("ok") and os.path.normpath(x["dir"]) not in annotated]
         late = []
         if left:
             with prof.timer("annotate+overlay" if not a.no_overlay else "annotate"):
-                late = list(_annotate(info["outdir"], rel,
-                                      overlay=not a.no_overlay, only=left))
+                # ONE CLIP'S ANNOTATION MUST NOT END THE RUN. The inline path
+                # logs a failure and defers it to here, where nothing caught
+                # it: the second failure went up through the worker pool and
+                # took a 130-job sweep down at job 20, with 924 finished
+                # samples already on disk and no summary of what went wrong.
+                # A clip that cannot be annotated is a bad cell, reported like
+                # any other, and the rest of the run still happens. Each is
+                # annotated on its own so one failure does not lose the
+                # variants queued beside it.
+                for x in left:
+                    try:
+                        late.extend(_annotate(info["outdir"], rel,
+                                              overlay=not a.no_overlay,
+                                              only=[x["dir"]]))
+                    except Exception as exc:                   # noqa: BLE001
+                        bad.append(dict(x, ok=False,
+                                        error="annotate failed: %r" % exc))
         results = [annotated[os.path.normpath(d)] for d in produced
                    if os.path.normpath(d) in annotated] + late
         return {"scenario": scenario, "seed": seed, "level": level,

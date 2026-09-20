@@ -16,7 +16,7 @@ from physloc import cli
 FAMILIES = ("continuity", "solidity")
 
 
-def _generate(monkeypatch, fail_first=False):
+def _generate(monkeypatch, fail_first=False, fail_always=False):
     calls = []                       # (variant dirs, thread name)
     lock = threading.Lock()
     failed = []
@@ -25,6 +25,9 @@ def _generate(monkeypatch, fail_first=False):
         assert only, "an empty `only` would annotate every variant"
         with lock:
             calls.append((tuple(only), threading.current_thread().name))
+            if fail_always:
+                failed.append(only[0])
+                raise RuntimeError("t_observable_frame=1 but the windows give 2")
             if fail_first and not failed:
                 failed.append(only[0])
                 raise RuntimeError("transient")
@@ -62,11 +65,11 @@ def _generate(monkeypatch, fail_first=False):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             rc = a.fn(a)
-    return rc, calls
+    return rc, calls, buf.getvalue()
 
 
 def test_each_clip_is_annotated_once_as_it_renders(monkeypatch):
-    rc, calls = _generate(monkeypatch)
+    rc, calls, _ = _generate(monkeypatch)
     assert rc == 0
     annotated = [os.path.basename(d) for only, _ in calls for d in only]
     assert sorted(annotated) == sorted("%s_strong" % f for f in FAMILIES)
@@ -76,8 +79,26 @@ def test_each_clip_is_annotated_once_as_it_renders(monkeypatch):
 
 
 def test_a_clip_that_fails_early_is_annotated_when_its_job_ends(monkeypatch):
-    rc, calls = _generate(monkeypatch, fail_first=True)
+    rc, calls, _ = _generate(monkeypatch, fail_first=True)
     assert rc == 0
     first = os.path.basename(calls[0][0][0])
     retried = [only for only, name in calls if name != "sample-annotator"]
     assert [os.path.basename(d) for only in retried for d in only] == [first]
+
+
+def test_a_clip_that_fails_twice_is_reported_and_the_run_continues(monkeypatch):
+    """The retry at job end had no guard, so the second failure went up through
+    the worker pool and ended the whole run. A 130-job sweep died at job 20
+    over three `colour_shift` clips, with 924 finished samples on disk.
+
+    A clip that cannot be annotated is a bad cell, reported like any other."""
+    rc, calls, text = _generate(monkeypatch, fail_always=True)
+    assert rc == 0, "one unannotatable clip must not end the run"
+    # Every clip was still attempted -- the failing one does not stop the
+    # variants queued beside it.
+    attempted = {os.path.basename(d) for only, _ in calls for d in only}
+    assert attempted == {"%s_strong" % f for f in FAMILIES}
+    # ...and the run says which cells failed, rather than dying silently.
+    for family in FAMILIES:
+        assert family in text
+    assert "annotate failed" in text

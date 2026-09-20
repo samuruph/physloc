@@ -94,9 +94,12 @@ publication. Nothing has been published yet.
   does not show where the surface was. **A level may change how a scene is lit and may not
   change whether the physics is legible in it.**
 - **The README's tables are GENERATED** by `physloc/reference.py`, from `taxonomy.py` and
-  `scenarios/base.py`, and the HuggingFace card calls the same functions. Run
-  `python -m physloc.reference --write` after changing any count; `tests/test_reference.py`
-  fails if the README is stale. This generator has silently done nothing twice, both times
+  `scenarios/base.py`. They live in TWO files -- the README holds the dataset tables, and
+  `docs/generating.md` holds `tiers`, `costs` and `costs_ladder`; `reference.BLOCK_FILES` says
+  which. The HuggingFace card is built by `reference.hf_card`, from the same `render()` calls
+  (it used to be a hardcoded stub, and this bullet claimed otherwise). It omits the cost blocks,
+  which run the CLI. Run `python -m physloc.reference --write` after changing any count;
+  `tests/test_reference.py` fails if any document is stale. This generator has silently done nothing twice, both times
   a splice regex that matched neither the empty nor the filled form -- the test compares
   each block's CONTENT against `render(name)` for that reason, not `splice(text) == text`.
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits

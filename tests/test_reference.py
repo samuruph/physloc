@@ -1,12 +1,16 @@
-"""The README's tables must match the code they describe.
+"""The generated tables must match the code they describe.
 
 Counts live in `physloc/taxonomy.py` and `physloc/scenarios/base.py` and
 nowhere else -- prose copies of them have drifted five separate ways, which is
 the whole reason `physloc/reference.py` exists. This is the tripwire: add a
-family, move a share, build a level, and the README goes stale until someone
+family, move a share, build a level, and the documents go stale until someone
 runs one command.
 
     python -m physloc.reference --write
+
+The blocks live in more than one document -- the README carries what a reader
+of the dataset needs, `docs/generating.md` what a run costs -- so every check
+here is parametrized over `reference.BLOCK_FILES` rather than one path.
 """
 import os
 import re
@@ -16,24 +20,31 @@ import pytest
 from physloc import reference
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-README = os.path.join(HERE, "README.md")
+
+FILES = sorted(set(reference.BLOCK_FILES.values()))
 
 
-def test_the_readme_tables_are_current():
-    text = open(README).read()
-    assert reference.splice(text) == text, (
-        "README.md is stale -- run `python -m physloc.reference --write`")
+def _read(name):
+    return open(os.path.join(HERE, name)).read()
+
+
+@pytest.mark.parametrize("path", FILES)
+def test_the_generated_tables_are_current(path):
+    text = _read(path)
+    assert reference.splice(text, reference.blocks_in_file(path)) == text, (
+        "%s is stale -- run `python -m physloc.reference --write`" % path)
 
 
 @pytest.mark.parametrize("name", sorted(reference.BLOCKS))
 def test_every_block_is_present_and_filled(name):
     """A marker that lost its content, or a block nobody spliced in, would let
-    the test above pass while the README said nothing."""
-    text = open(README).read()
+    the test above pass while the document said nothing."""
+    path = reference.BLOCK_FILES[name]
+    text = _read(path)
     pat = re.compile(r"<!-- physloc:%s -->\n(.*?)\n<!-- /physloc:%s -->"
                      % (name, name), re.S)
     m = pat.search(text)
-    assert m, "README has no `%s` block" % name
+    assert m, "%s has no `%s` block" % (path, name)
     body = m.group(1)
     assert body.count("\n") >= 3, "%s block looks empty" % name
     assert body.startswith("| "), "%s block is not a table" % name
@@ -65,3 +76,11 @@ def test_the_condition_block_sums_to_one():
     assert shares, out
     assert sum(shares) == 100, "conditions do not partition the clips: %s" % shares
     assert len(shares) == len(set(CONDITION_CYCLE))
+
+
+def test_every_block_has_exactly_one_home():
+    """A block missing from BLOCK_FILES would be spliced nowhere and checked
+    nowhere, which is the silent-nothing failure this module exists to stop."""
+    assert set(reference.BLOCK_FILES) == set(reference.BLOCKS)
+    for path in FILES:
+        assert os.path.exists(os.path.join(HERE, path)), path

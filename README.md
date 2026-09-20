@@ -17,67 +17,63 @@ produced the violation, so they are exact and free.
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [The dataset](#the-dataset)
-- [Taxonomy](#taxonomy)
-- [Severity](#severity)
-- [Complexity ladder](#complexity-ladder)
-- [Difficulty conditions](#difficulty-conditions)
-- [Detection difficulty](#detection-difficulty)
-- [Scene variation](#scene-variation)
-- [Splits, index and evaluation](#splits-index-and-evaluation)
-- [Generating data](#generating-data)
-- [Running the full release](#running-the-full-release)
-- [Cost and performance](#cost-and-performance)
-- [Publishing](#publishing)
-- [Development](#development)
-- [References](#references)
+- **[Quick start](#quick-start)**
+- **Using the dataset**
+  - [What a sample is](#what-a-sample-is) — twins, files on disk
+  - [Loading the dataset](#loading-the-dataset) — the `Sample` API and every field
+  - [Before you train on it](#before-you-train-on-it)
+- **What is in it**
+  - [Taxonomy](#taxonomy) — medium → domain → family → scenario
+  - [What varies, and how it is labelled](#what-varies-and-how-it-is-labelled) — severity,
+    complexity ladder, difficulty conditions, detection difficulty, scene variation
+  - [Splits, index and evaluation](#splits-index-and-evaluation)
+- **Building and publishing it**
+  - [Building it yourself](#building-it-yourself)
+  - [Licensing and citation](#licensing-and-citation)
+- [Project documentation](#project-documentation) · [References](#references)
 
 ---
 
 ## Quick start
 
-**Requirements:** Linux, Docker and conda. Rendering is CPU-only — the more physical cores the
-better — and a release run wants about 2 GB of RAM per vCPU.
+**Requirements:** Linux and conda. To *generate* data you also need Docker; rendering is
+CPU-only — the more physical cores the better — and a release run wants about 2 GB of RAM per vCPU.
 
 ```bash
-# Host environment: annotation, severity, validation, visualisation.
+# Host environment: loading, annotation, severity, validation, visualisation.
 conda env create -f environment.yml
 conda activate physloc
-
-# Simulation and rendering run inside the pinned Kubric image.
-docker pull kubricdockerhub/kubruntu      # digest pinned in docker/IMAGE_DIGEST
 ```
 
-Generate a small review sweep and look at it:
-
-```bash
-python -m physloc.cli taxonomy --config review_severity   # what it produces and how long it takes
-bash scripts/run.sh review_severity                       # generate, validate, visualise, package
-```
-
-`run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
-tiled into one video.
-
-Load a dataset — either downloaded from the Hub, exported locally, or still in
-the generator output directory — and check every annotation by eye:
+**Look at a dataset** — downloaded from the Hub, exported locally, or still in the generator's
+output directory — and check every annotation by eye:
 
 ```bash
 python test_dataset_loader.py                               # downloads samueleruf/physloc-mini into data/hub
 python test_dataset_loader.py --repo <owner>/physloc-review_severity
 python test_dataset_loader.py out/review_severity
 python test_dataset_loader.py out/review_severity --gui       # browser viewer, http://localhost:8765
-python test_dataset_loader.py out/review_severity --render 0 --layers violation,reference,bbox3d
+python test_dataset_loader.py out/review_severity --render 0 --layers violation,reference,bbox3d,labels \
+  --panels rgb,valid,segmentation,depth,camera
 ```
 
-From Python, [`physloc/loader.py`](physloc/loader.py) gives every sample and pair — see
+**Load it from Python** with [`physloc/loader.py`](physloc/loader.py) — see
 [Loading the dataset](#loading-the-dataset).
 
-To generate the full dataset, see [Running the full release](#running-the-full-release).
+**Generate a small sample yourself.** Simulation and rendering run inside the pinned Kubric image:
+
+```bash
+docker pull kubricdockerhub/kubruntu      # digest pinned in docker/IMAGE_DIGEST
+python -m physloc.cli taxonomy --config review_severity   # what it produces and how long it takes
+bash scripts/run.sh review_severity                       # generate, validate, visualise, package
+```
+
+`run.sh` ends by listing what to open, starting with `coverage_strong.mp4`: every cell of the run
+tiled into one video. The full dataset is [Building it yourself](#building-it-yourself).
 
 ---
 
-## The dataset
+## What a sample is
 
 ### Valid and invalid twins
 
@@ -148,7 +144,7 @@ The complete field, dtype, axis and unit reference -- and a table of every v3
 field v4 stopped storing, with the loader derivation that replaced it -- is
 [docs/schema.md](docs/schema.md).
 
-### Loading the dataset
+## Loading the dataset
 
 The generator, exporter, loader, visualiser, and GUI all consume the same
 schema-v4 sample tree. A `Sample` is organised the way the files are, one
@@ -177,7 +173,7 @@ object and **`V`** the violators. Every `[N,...]` array is in one row order --
 body in the valid and the invalid clip. `s.objects.row(object_id)` maps an id to
 its row.
 
-#### `s.info` -- who this sample is
+### `s.info` -- who this sample is
 
 Read from `sample.json`, no arrays.
 
@@ -196,7 +192,7 @@ Read from `sample.json`, no arrays.
 | `framing_attempt` | int | how many scenes were resampled before the actors stayed in shot |
 | `provenance` | dict | `generator_commit`, `kubric_image_digest`, `blender_version`, and the measured `prefix_identical_verified` / `prefix_differing_pixels` / `prefix_identical_upto_frame` |
 
-#### `s.video` -- clip geometry and the RGB
+### `s.video` -- clip geometry and the RGB
 
 | field | type | meaning |
 |---|---|---|
@@ -208,7 +204,7 @@ Read from `sample.json`, no arrays.
 | `path` | str | absolute path to `rgb.mp4`; **no decoding** |
 | `rgb` | uint8 `[T,H,W,3]` | the decoded video, read on first access |
 
-#### `s.scene` -- what was simulated, and how it was shot
+### `s.scene` -- what was simulated, and how it was shot
 
 | field | type | meaning |
 |---|---|---|
@@ -232,7 +228,7 @@ Read from `sample.json`, no arrays.
 Under a moving camera `forward_flow`, `backward_flow` and `depth` include the
 camera's own motion; the track above is what undoes it.
 
-#### `s.observations` -- the render passes, `[T,H,W,...]`
+### `s.observations` -- the render passes, `[T,H,W,...]`
 
 Each is read from `data.h5` on first access. `segmentation` is always present;
 the rest depend on what the tier rendered, so test with `"depth" in s.observations`.
@@ -248,7 +244,7 @@ the rest depend on what the tier rendered, so test with `"depth" in s.observatio
 | `shadow_strength` | float16 `[T,H,W]` | shadow scenarios only: the matched Cycles shadow-isolation pass |
 | `shadow_source_id` | uint16 `[T,H,W]` | shadow scenarios only: which actor casts that shadow |
 
-#### `s.objects` -- who is in the scene, and every trajectory
+### `s.objects` -- who is in the scene, and every trajectory
 
 Static facts come from `sample.json`, per-frame arrays from `data.h5`.
 
@@ -275,7 +271,7 @@ o.select("violators")            # ids; subjects (default), affected, context, s
 o.spatial_mask("subjects")       # bool [T,H,W] from the segmentation
 ```
 
-#### `s.violation` -- what is wrong, where, when and how badly
+### `s.violation` -- what is wrong, where, when and how badly
 
 `present` is `False` on a valid sample and every array is then zeros of the
 right shape, so a batch may mix valid and invalid clips without special cases.
@@ -347,7 +343,7 @@ Each **violator record**: `id`, `affected_ids` (bodies it disturbed),
 max severity), for plotting; and `latent_grid()` -- `mask`, `severity_max` and
 `severity_mean` on the `[latent_frames, latent_hw, latent_hw]` token grid.
 
-#### `s.energy`, `s.events`, `s.twin`, `s.divergence`
+### `s.energy`, `s.events`, `s.twin`, `s.divergence`
 
 | field | type | meaning |
 |---|---|---|
@@ -358,7 +354,7 @@ max severity), for plotting; and `latent_grid()` -- `mask`, `severity_max` and
 | `twin` | Sample or None | the valid sample of this pair |
 | `divergence` | float32 `[T,H,W]` | the absolute RGB difference from the valid twin. **For inspection only -- never a training target**: it diverges everywhere after the event |
 
-#### Finding your way around a sample
+### Finding your way around a sample
 
 Arrays are read on first access, so a debugger's variable pane shows only what
 has already been touched. Two calls answer "what can I access here?" without
@@ -409,17 +405,9 @@ pairs[0]                            # {"pair_uid", "prompt", "valid", "invalid":
 process, so multi-worker loading is safe (`loader.torch_dataset(ds)` wraps it for
 a `DataLoader` with `collate_fn=collate`).
 
-To inspect the same API visually:
+To look at the same API visually, see the [Quick start](#quick-start).
 
-```bash
-python test_dataset_loader.py out/physloc_mini
-python test_dataset_loader.py out/physloc_mini --gui
-python test_dataset_loader.py out/physloc_mini --render 3 \
-  --layers violation,reference,bbox3d,labels \
-  --panels rgb,valid,segmentation,depth,camera
-```
-
-### Before you train on it
+## Before you train on it
 
 - **`divergence` is not the violation region.** It is `|valid − invalid|` in pixel space and
   diverges everywhere downstream of the event, so a model trained on it learns to find the edit,
@@ -433,13 +421,6 @@ python test_dataset_loader.py out/physloc_mini --render 3 \
 - **Encodings that bite:** mask depth with `segmentation > 0`; flow is
   `(row, col)`, not `(x, y)`; all per-object HDF5 tensors use the stable
   object-first axis `[N,T,...]`.
-
-### How much is generated
-
-A *cell* is one (scenario, family) pair. Per variant, each cell renders one invalid clip per
-severity bin (families with no magnitude axis render only `strong`), and each scenario renders one
-valid twin. A variant is a **fresh seed**, and each complexity level draws from its own seed block,
-so no two levels share a scene.
 
 ---
 
@@ -497,9 +478,24 @@ Five levels: **medium → domain → family → scenario → instance.**
 
 `clutter_toss` and `tumble` are declared but not built.
 
+### How much is generated
+
+A *cell* is one (scenario, family) pair. Per variant, each cell renders one invalid clip per
+severity bin (families with no magnitude axis render only `strong`), and each scenario renders one
+valid twin. A variant is a **fresh seed**, and each complexity level draws from its own seed block,
+so no two levels share a scene.
+
 ---
 
-## Severity
+## What varies, and how it is labelled
+
+Four things vary between clips, and each is recorded on every one: **severity** (how badly the law
+is broken), **complexity** (how realistic the scene is), **condition** (how many bodies, whether
+the camera moves) and a measured **detection difficulty** (how hard the violation is to find).
+Severity and complexity are independent knobs; the condition is a third; difficulty is what
+actually came out.
+
+### Severity
 
 Each cell is staged at three strengths: **`weak`, `medium`, `strong`.** Two numbers describe it,
 and they are never the same thing:
@@ -519,7 +515,7 @@ Every family's ladder is monotone in distance from lawful, enforced by
 
 ---
 
-## Complexity ladder
+### Complexity ladder
 
 Severity asks *how badly is the law broken*; complexity asks *how hard is the scene to parse*.
 They are independent axes. Four levels of scene realism, each the one below plus exactly one
@@ -542,7 +538,7 @@ thing:
 
 ---
 
-## Difficulty conditions
+### Difficulty conditions
 
 Every clip carries **exactly one** condition:
 
@@ -581,7 +577,7 @@ camera poses ship in `data.h5` (`/camera`) and the intrinsics in `sample.json`
 
 ---
 
-## Detection difficulty
+### Detection difficulty
 
 Conditions are the **knob** — what was asked for. `difficulty` is the **measurement** — what came
 out. A clip with eight distractors whose violator fills a quarter of the frame is not hard; a
@@ -602,7 +598,7 @@ array-measured inputs it was computed from:
 }
 ```
 
-### Seven factors; a clip takes its worst
+#### Seven factors; a clip takes its worst
 
 <!-- physloc:difficulty -->
 | factor | the question it asks | unit | easy | moderate | hard |
@@ -623,7 +619,7 @@ score):
 - **The sets nest** — easy ⊂ moderate ⊂ hard, so "moderate" means every clip with `rank <= 1`.
 - **Nothing cancels** — a tiny violation area is not offset by a static camera.
 
-### Where the cuts come from
+#### Where the cuts come from
 
 They are set so the **whole release lands near 30 / 40 / 30**, estimated by mixing the 872
 violated clips of the review corpus in the release's own proportions (six in ten `standard`, one
@@ -646,7 +642,7 @@ should without the label ever reading the condition:
 Two violators is deliberately **not** hard: the pair families (`newton2_mass` exchanging momentum
 between two balls, `fission`) name both bodies of a single event and are 15% of `standard` clips.
 
-### Each violator also carries its own label
+#### Each violator also carries its own label
 
 A `multi` clip whose violators are one large obvious body, one small one and one behind a screen
 is not described by any single word, so every violator carries its own label under
@@ -665,7 +661,7 @@ zones, thresholds, and label-setting factors are consolidated under
 `magnitude` (the knob; `severity` is its measurement). `pour`'s grains count as **one** body for
 `object_count` and `violators`, unless a family targets a genuine subset of them.
 
-### Thresholds
+#### Thresholds
 
 The cuts live in **`configs/common.yaml`**, written `[easy, moderate]`; which direction is easier
 belongs to the factor, not the config:
@@ -690,7 +686,7 @@ python scripts/fit_difficulty.py out/review_conditions out/review_severity
 
 ---
 
-## Scene variation
+### Scene variation
 
 Every free parameter is drawn per clip from the seed: object shape, size, colour, mass, starting
 position and velocity, floor and backdrop colour, camera pose, and the frame the violation fires
@@ -785,537 +781,65 @@ zone counts, thresholds, and the factors that set each label, read
 
 ---
 
-## Generating data
+## Building it yourself
 
-Simulation and rendering run in the pinned Kubric container; everything else runs on the host.
-`python -m physloc.cli <command> --help` documents every command.
-
-### Configs
-
-Each config answers one question. Price any of them first with
-`python -m physloc.cli taxonomy --config <name>`.
-
-| config | the question it answers |
-|---|---|
-| `review` | does **every cell** build? |
-| `review_severity` | do **weak / medium / strong** differ, for every family? |
-| `review_conditions` | do the **five conditions** do what they claim? |
-| `review_L0` … `review_L3` | does **this level** render every scene correctly? |
-| `review_ladder` | do the levels come out in their **declared proportions**? |
-| `v0_mini` | **the whole dataset in miniature** — every family, level, condition and bin |
-| `v0_release` | **the published dataset**: the whole ladder, 10 variants |
-| `v0_L0` … `v0_L3` | one level of the release on its own — the four **sum to** `v0_release` |
-
-`v0_mini` has the release's structure made small: ten variants (the fewest at which every level
-and condition appears) over three scenarios that between them cover every family.
-
-### Running and checking a config
-
-`bash scripts/run.sh <config>` runs the whole pipeline — generate, validate, **stats**, **audit**,
-coverage video, viz, **compare**, export — and passes extra flags through to `generate`. Nothing
-has to be remembered afterwards: a finished run holds its own figures, its own audit and its own
-structure videos. The steps individually:
+The published dataset was generated with this repository, and every clip records the commit,
+Kubric image digest and Blender version that made it (`s.info.provenance`). Output is byte-identical
+at any worker count, and a run resumes where it stopped.
 
 ```bash
-python -m physloc.cli generate --config review_severity
-python -m physloc.cli validate  out/review_severity      # schema + cross-checks; must exit 0
-python -m physloc.cli audit     out/review_severity      # cells whose violation is not visible
-python -m physloc.cli stats     out/review_severity      # the distributions, plotted
-python -m physloc.cli viz       out/review_severity      # every grid and sheet, one folder
-python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
-python -m physloc.cli compare   out/review_L0 out/review_L3 out/review_conditions  # dataset structure
-
-python test_dataset_loader.py out/review_severity        # load it: structure and shapes
-python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
+python -m physloc.cli taxonomy --config v0_release   # price it first
+bash scripts/run.sh v0_release                       # generate, validate, visualise, package
 ```
 
-### The whole sweep, in one command
+The full release takes days on a CPU box (`taxonomy --config v0_release` prices it); `v0_mini` is the same
+structure in miniature, and `v0_L0` … `v0_L3` generate one complexity level each. Configs, tiers,
+costs on other machines, following / stopping / resuming a run, and the Hugging Face upload are in:
 
-`scripts/run_reviews.sh` runs every review config back to back — the overnight job. Each config
-gets `run.sh` in full and a log of its own under `out/logs/`, and one config failing never stops
-the ones after it. It ends with a `compare` across **every** root the sweep produced, which is the
-only place the L0 → L3 ladder can be drawn, since a single review run holds one level.
-
-```bash
-tmux new -s reviews                       # a long run belongs in tmux
-bash scripts/run_reviews.sh               # every config
-bash scripts/run_reviews.sh review_L2 review   # ...or just these
-bash scripts/run_reviews.sh --frames 37   # every config at full clip length, into out/*_f37
-export PHYSLOC_PUSH_OWNER=<user>          # optional: each run lands on the hub as physloc-<config>
-```
-
-Each run leaves everything worth looking at beside its samples:
-
-```
-out/<config>/
-  coverage_strong.mp4     every invalid clip in one video -- open this first
-  audit.txt               the cells whose violation is not visible
-  stats/                  the six figures and stats.json
-  viz/                    every grid and sheet, one folder
-  compare/<level>/        variants and conditions of a cell, side by side
-out/compare/              the same across every run of the sweep, including the level ladder
-out/logs/<config>.txt     what that run printed
-```
-
-`compare` draws at most `PHYSLOC_COMPARE_LIMIT` videos per kind (default 12 per run, 20 across the
-sweep), spread over the scenarios, because every eligible cell is hundreds of videos on a full
-review. It renders nothing new — it reads finished samples.
-
-`stats` checks the run came out in the shape it declares; it reads only `sample.json`, so it takes
-seconds over a full release. **`generate` writes it at the end of every run and `export` ships it
-with the release**, where the dataset card shows every figure:
-
-```
-out/review_severity/stats/
-  1_overview.png              levels, conditions vs their declared shares, severity bins, violator timing
-  2_taxonomy.png              domain -> family sunburst; clips per scenario, grouped by medium
-  3_coverage.png              the scenario x family lattice under named domain bands, with totals
-  4_difficulty.png            easy / moderate / hard; per level; which factor set it; the rule table
-  5_difficulty_factors.png    every factor, one dot per clip, against its two cuts
-  6_timing_and_severity.png   when events fire, observability lag, measured severity per bin
-  stats.json                  the numbers behind all six; `stats.draw(json, dir)` redraws them
-```
-
-**How a difficulty label is decided.** Each of the seven factors in `annotate/difficulty.py`
-has two cuts, which make three zones; a clip's label is its WORST zone. So a clip is easy only
-when every factor is easy, and one hard factor makes it hard. `4_difficulty.png` prints every
-cut and whether it was fitted to the review corpus or chosen from what the quantity means.
-
-`viz` re-reads finished samples — nothing is rendered again — and names its videos so the sort
-order is the reading order:
-
-```
-out/review_severity/viz/
-  L0_drop_0777_solidity.mp4        one family: the valid clip beside weak/medium/strong
-  L0_drop_0777_sheet_strong.mp4    one scene: every family, at one bin
-```
-
-`compare` shows the dataset's structure: one scenario x family, side by side along one axis. It
-takes several release roots, because a review run usually holds one level:
-
-```
-out/review_L0/compare/           (or --outdir)
-  levels/drop__antigravity.mp4     L0 | L1 | L2 | L3 -- each level's OWN scene, not twins
-  variants/drop__solidity.mp4      up to 5 variants of the cell at one level (--level, -n)
-  conditions/drop__solidity.mp4    standard | camera | distractors | multi | camera+multi
-```
-
-Each tile is the invalid sample with its violation mask and timeline; a missing tile says "not
-generated". `--scenario drop --family solidity` draws one cell; `--limit N` draws N cells per kind
-spread over the scenarios. It reads finished samples only, at a few seconds per video.
-
-### Overriding a config
-
-Anything on the command line overrides the config:
-
-```bash
-python -m physloc.cli generate --config review --scenario drop --family solidity
-python -m physloc.cli generate --config review --scenario drop,collision -n 6
-python -m physloc.cli generate --config review --complexity all --variants 10
-PHYSLOC_CAMERA_MOTION=orbit python -m physloc.cli generate --config review --scenario drop
-```
-
-`--workers N` runs N render containers at once, and `--workers auto` (used by the `v0_*` configs)
-is one per core. Output is byte-identical at any worker count.
-
-Generated output always lives under `out/`: a relative `--outdir` or `--workdir` is placed there
-(`--outdir my_run` writes `out/my_run`), so nothing is ever written into the repository root.
-Absolute paths are used as given.
-
-### Generating one level at a time
-
-`v0_L0` … `v0_L3` **partition** `v0_release`: each carries the variants that level gets in a full
-run, so all four together produce exactly what the release config produces.
-
-```bash
-python -m physloc.cli taxonomy --config v0_L0     # price the level
-python -m physloc.cli generate --config v0_L0     # ...and generate only that level
-```
-
-Use them to spread a release across machines, regenerate one level after a fix, or ship an
-L0-only dataset. Nothing collides: the clip path is keyed by level and every level draws from its
-own seed block.
-
-### Tiers
-
-A tier is a geometry — how big and how long — and nothing else:
-
-<!-- physloc:tiers -->
-| tier | resolution | frames | duration | spp | latent grid |
-|---|---|---|---|---|---|
-| `debug` | 128² | 25 @ 12 fps | 2.08 s | 16 | 7×8×8 |
-| `release` | 512² | 89 @ 30 fps | 2.97 s | 64 | 23×16×16 |
-<!-- /physloc:tiers -->
-
-`debug` is for iteration and never published. Frame counts are `4k+1` so they map exactly onto a
-video VAE's temporal stride. `v0` / `v1` are what a published dataset is *called*, set by
-`--outdir`, not tiers.
-
-**Every config spells out its tier's geometry** in its `defaults:` block, so a run is resized
-there rather than by inventing a tier:
-
-```yaml
-defaults:
-  tier: release
-  resolution: 512      # square render size, pixels
-  fps: 30              # frames per second
-  frames: 89           # clip length; must be 4k+1
-  spp: 64              # Cycles samples per pixel
-```
-
-As shipped these restate the tier and change nothing. Change one and only that field moves:
-every clip records it in its tier name (e.g. `release+f49`), and `taxonomy` scales its price
-with `frames`. Resolution and spp change the per-frame cost itself, so re-measure it with
-`physloc/render/probe_cost.py` before trusting a price at a new size.
-
-### Generation knobs
-
-Shares, counts and bands live in **`configs/common.yaml`**, and any config may override part of
-it in its own `params:` block:
-
-```bash
-python -m physloc.cli params                    # what is in force, and what differs from defaults
-python -m physloc.cli params --config v0_mini   # ...for one run
-```
-
-| section | what it holds |
-|---|---|
-| `ladder` | each level's share of a full generation |
-| `conditions` | the difficulty cycle — its length is the period, its contents the shares |
-| `objects` | extra-object counts, violator counts, distractor size / speed / clearance |
-| `camera` | motion kinds and weights, travel and dolly ranges |
-| `materials` | the mass scale |
-| `difficulty` | the detection-difficulty thresholds |
-
-Every layer is validated, so a typo is an error rather than a silently ignored value. The resolved
-values are written to `params.json` and recorded in every `sample.json`.
+- [docs/generating.md](docs/generating.md) — configs, running, cost and performance
+- [docs/publishing.md](docs/publishing.md) — validate, export, upload, verify
 
 ---
 
-## Running the full release
+## Licensing and citation
 
-```bash
-bash scripts/run.sh v0_release
-```
-
-That is the whole command: it generates, validates, visualises and packages the release into
-`out/physloc_v0`. Nothing needs editing first — the release config uses one worker per core,
-resumes automatically, and renders with the default backend (64 spp, NLM denoiser, adaptive
-sampling off).
-
-A release takes days, so start it inside **tmux**, which keeps it running after you close the
-terminal or disconnect:
-
-```bash
-tmux new -s release              # open a named session
-bash scripts/run.sh v0_release   # start the run inside it
-                                 # Ctrl-b then d: detach and leave it running
-tmux attach -t release           # come back to it later
-```
-
-Before the first run on a new machine, check the price:
-
-```bash
-python -m physloc.cli taxonomy --config v0_release
-```
-
-### Following a run
-
-- **The progress bar** counts frames — every frame of every clip — so it moves steadily, and its
-  label keeps the finished clips (renders) and a weighted ETA:
-
-  ```
-  generate all:  12%|███▏                  | 74847/623420 [5h 14m<renders 1227/10220 | eta 1d 14h]
-  ```
-
-- **A status line every five minutes** appears above the bar, with frames, renders and jobs:
-
-  ```
-    status: frames 74847/623420 | renders 1227/10220 | jobs 18/260 done, 84 running, 12 waiting for memory | elapsed 5h 14m | eta 1d 14h
-  ```
-
-  A *job* is one container rendering one scenario at one level and variant — its valid clip and
-  every family at every severity, one after another; a *render* is one clip; a frame is one of
-  its 61 images.
-
-- **`out/physloc_v0/progress.log`** records every finished job and every status line with a
-  timestamp. Follow it from any terminal, whether or not the tmux session is attached:
-
-  ```bash
-  tail -f out/physloc_v0/progress.log
-  ```
-
-- **Samples appear as renders finish.** Each result is consolidated as
-  `sample.json`, `rgb.mp4`, and `data.h5` under `out/physloc_v0/samples/`, so the first ones show
-  up within the first hour, not when a whole job ends. Until then,
-  `out/work_v0/<level>/<scenario>/<seed>/_scratch/images/` holds the frames of each clip in
-  progress.
-- **At the end**, a stage profile reports where the time went. Its `occupancy` line says how many
-  workers were busy on average; far below the worker count means jobs were waiting on memory or
-  on a long straggler, not on cores.
-
-### Stopping a run
-
-Each render runs in its own Docker container, and a container does not die with the process that
-started it — so stopping a run has to stop the containers too:
-
-- **Ctrl-C once** in the terminal running it: no new jobs start, the run's render containers are
-  killed, and it exits saying how many finished jobs are kept. **Ctrl-C twice** exits at once.
-- **From any other terminal**, or when the run's terminal is gone:
-
-  ```bash
-  bash scripts/stop.sh      # stops every generate / run.sh, then every PhysLoc container
-  ```
-
-It reports what is still running afterwards — `0 ... 0` means everything has stopped. Finished jobs
-are kept either way, and running the same command again resumes.
-
-### Resuming, splitting and memory
-
-- **Resuming.** Running the same command again continues where it stopped: a finished job is
-  skipped when its recorded request — config, dials and render backend — matches, so an
-  interruption loses only the jobs in flight and a changed setting re-renders rather than mixing.
-  To start over, delete `out/physloc_v0` and `out/work_v0`.
-- **Across machines.** Run one level per machine — `bash scripts/run.sh v0_L0` on one,
-  `v0_L1` on the next, and so on; see [Generating one level at a time](#generating-one-level-at-a-time).
-- **Memory.** A job starts only when its memory fits in host RAM, and every container is capped,
-  so a crowded machine cannot OOM-kill its own jobs; smaller jobs may start ahead of a big one
-  that does not fit yet. One job type is heavy: release-size L3 `pour`, which measured 39–47 GB
-  in a live run and is charged 55 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). On a machine with much
-  less memory, check it once — run this and watch `docker stats` in a second terminal:
-
-  ```bash
-  python -m physloc.cli generate --config v0_L3 --scenario pour --family continuity \
-      --severity strong --variants 1 --workers 1 \
-      --outdir out/_pour_l3_probe --workdir out/_pour_l3_probe_work
-  ```
-
----
-
-## Cost and performance
-
-### What each config costs
-
-Priced from constants measured on a 32-vCPU machine, at each config's own worker count.
-`taxonomy --config <name>` prints the same figure with a per-level split. The price covers
-rendering; a real run finishes roughly 10% over it.
-
-<!-- physloc:costs -->
-| config | levels | cells | renders | workers | wall clock |
-|---|---|---|---|---|---|
-| `review_severity` | L0 | 166 | 511 | 32 | **30 min** |
-| `review_conditions` | L0 | 6 | 80 | 32 | **6 min** |
-| `review_L0` | L0 | 166 | 179 | 32 | **12 min** |
-| `review_L1` | L1 | 166 | 179 | 32 | **12 min** |
-| `review_L2` | L2 | 166 | 179 | 32 | **1.2 h** |
-| `review_L3` | L3 | 166 | 179 | 32 | **1.2 h** |
-| `review_ladder` | L0+L1+L2+L3 | 12 | 320 | 32 | **48 min** |
-| `review` | L0 | 166 | 511 | 32 | **30 min** |
-| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 32 | 99 h (**4.1 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 32 | 50 h (**2.1 days**) |
-| `v0_L2` | L2 | 166 | 1533 | 32 | 84 h (**3.5 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 32 | 56 h (**2.3 days**) |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 289 h (**12.0 days**) |
-<!-- /physloc:costs -->
-
-### Where a release's time goes
-
-<!-- physloc:costs_ladder -->
-| level | variants | renders | per render | at 32 workers | share of the run |
-|---|---|---|---|---|---|
-| **L0** | 10 | 5110 | 204 s | 99 h (**4.1 days**) | 34% |
-| **L1** | 5 | 2555 | 204 s | 50 h (**2.1 days**) | 17% |
-| **L2** | 3 | 1533 | 464 s | 84 h (**3.5 days**) | 29% |
-| **L3** | 2 | 1022 | 464 s | 56 h (**2.3 days**) | 19% |
-| **all four** | -- | 10220 | -- | 289 h (**12.0 days**) | 100% |
-<!-- /physloc:costs_ladder -->
-
-L0 and L1 are three quarters of the renders and about half the time; L2 and L3 cost more per
-render because their HDRI dome encloses the scene. `v0_L0` alone is a complete, publishable
-dataset.
-
-### Expected time on other machines
-
-Scaled from the 32-vCPU measurements by physical cores, including ~10% for scene build,
-simulation and annotation. Rough: the per-core speed of a different CPU is not measured.
-
-| machine | expected | pessimistic (+25%) |
+| what | licence | where it is recorded |
 |---|---|---|
-| 32 vCPU = 16 cores + HT | 464 h (**19.3 days**) | 24.2 days |
-| 64 vCPU = 32 cores + HT | 232 h (**9.7 days**) | 12.1 days |
-| 96 vCPU = 48 cores + HT (e.g. c7i.24xlarge) | 155 h (**6.4 days**) | 8.1 days |
-| 96 vCPU = 96 cores, no HT (e.g. c7a.24xlarge) | 95 h (**4.0 days**) | 5.0 days |
-| 192 vCPU = 96 cores + HT (e.g. c7i.48xlarge) | 77 h (**3.2 days**) | 4.0 days |
-| 4 × 96 vCPU (48 cores + HT each) | 39 h (**1.6 days**) | 2.0 days |
+| annotations, renders and metadata | `CC-BY-4.0` by default; `export --license` overrides | `LICENSE`, `dataset.json` |
+| scanned objects (**L3**) | Google Scanned Objects, `CC BY-SA 4.0` | per asset, `objects.records[i].asset.license` |
+| HDRI environments (**L2, L3**) | HDRI Haven | environment name in `scene.environment.hdri`; **licence string not yet recorded** |
 
-- **Prefer physical cores.** One render cannot use many threads, so throughput follows physical
-  cores; hyperthreads add only ~20%.
-- **Give it RAM**: about 2 GB per vCPU, so memory admission rarely queues anything but L3 `pour`.
-- **Several machines scale almost linearly** — split by level, as above.
+Two things to settle before v0 is published: L3 clips contain `CC BY-SA 4.0` assets, so check that
+the licence you export under is compatible with that share-alike term; and HDRI environments do not
+yet carry a licence string the way scanned objects do, which `physloc validate` should enforce for
+every asset source.
 
-### Render settings
+To cite this dataset (provisional until a release exists — the repository and Hub id are
+placeholders):
 
-The release renders at **64 spp with the NLM denoiser and adaptive sampling off**. Against a
-512-spp reference, 99% of pixels are within two levels (0–255) at a third of the render time.
-Other settings exist as environment variables for experiments; they change the pixels, so never
-mix them inside a release.
-
-**How every number in this section was measured** — thread scaling, parallel throughput, memory
-per job, the render-setting experiments, and how prices are computed — is in
-[docs/performance.md](docs/performance.md).
+```bibtex
+@misc{physloc,
+  title  = {PhysLoc: a spatio-temporally annotated physics-violation video dataset},
+  author = {Ruffino, Samuele},
+  year   = {2026},
+  note   = {Dataset, schema v4. <owner>/<repo>}
+}
+```
 
 ---
 
-## Publishing to Hugging Face
+## Project documentation
 
-Generation already writes the canonical schema-v4 tree. Publishing is a
-validation, packaging, inspection, and upload sequence.
-
-### 1. Validate the generated dataset
-
-```bash
-conda activate physloc
-
-python -m physloc.cli validate out/review_conditions_f37
-python -m physloc.cli stats out/review_conditions_f37
-```
-
-Validation must report `"ok": true`. The stats command writes the six review
-figures and `stats/stats.json`. At the end of generation, PhysLoc also writes
-`dataset.json`, `schema.json`, `index.parquet`, and `splits/` directly
-into the generated root.
-
-### 2. Build a clean publication directory
-
-```bash
-python -m physloc.cli export out/review_conditions_f37 \
-  --outdir out/review_conditions_f37_hf \
-  --license CC-BY-4.0
-```
-
-The source and destination must differ. The exported directory contains the
-complete dataset card, licence, global metadata, JSON Schema, Parquet index,
-split lists, standalone loader, and every `sample.json`, `rgb.mp4`, and
-`data.h5`.
-
-### 3. Inspect the packaged dataset locally
-
-```bash
-python test_dataset_loader.py out/review_conditions_f37_hf
-python test_dataset_loader.py out/review_conditions_f37_hf --gui --port 8765
-```
-
-### 4. Authenticate once
-
-```bash
-hf auth login
-```
-
-Use a Hugging Face write token. Authentication is handled by the current
-`hf` CLI; do not use the deprecated `huggingface-cli`.
-
-### 5. Upload
-
-The one-command PhysLoc route packages and uploads:
-
-```bash
-python -m physloc.cli export out/review_conditions_f37 \
-  --outdir out/review_conditions_f37_hf \
-  --license CC-BY-4.0 \
-  --push-to YOUR_USERNAME/physloc-review-conditions
-```
-
-Add `--private` to create a private dataset repository:
-
-```bash
-python -m physloc.cli export out/review_conditions_f37 \
-  --outdir out/review_conditions_f37_hf \
-  --push-to YOUR_USERNAME/physloc-review-conditions \
-  --private
-```
-
-Or upload an already-packaged directory directly:
-
-```bash
-hf upload YOUR_USERNAME/physloc-review-conditions \
-  out/review_conditions_f37_hf . \
-  --type dataset \
-  --commit-message "Publish PhysLoc schema v4"
-```
-
-### 6. Download and verify
-
-```bash
-hf download YOUR_USERNAME/physloc-review-conditions \
-  --repo-type dataset \
-  --local-dir data/physloc-review-conditions
-
-python test_dataset_loader.py data/physloc-review-conditions
-python -m physloc.cli validate data/physloc-review-conditions
-```
-
-The Parquet index stores relative paths only; MP4 and HDF5 bytes are not
-duplicated inside it. For a metadata-only inspection, download
-`dataset.json`, `schema.json`, `index.parquet`, `splits/**`, and
-`samples/**/sample.json`. Full localisation or energy experiments also need
-the corresponding `data.h5`; RGB experiments need `rgb.mp4`.
-
-## Development
-
-### Two environments
-
-| | runs | contains |
-|---|---|---|
-| **container** — pinned Kubric image | scene sampling, simulation, rendering | Kubric 2022.4.1, Blender 2.93.4, PyBullet, Python 3.9 |
-| **host** — `conda activate physloc` | annotation, residuals, masks, validation, visualisation | numpy, scipy, opencv, jsonschema, Python 3.11 |
-
-They meet at the trajectory seam, `traj.npz`; never install Kubric, Blender or PyBullet on the
-host. `docker/kubric.sh <script.py>` runs a script from this repo inside the container.
-`bash scripts/fetch_refs.sh` checks out a read-only copy of the Kubric source for reference.
-
-### Keeping the tables honest
-
-The taxonomy, ladder, condition, difficulty, material, tier and cost tables in this README are
-**generated** from `physloc/taxonomy.py`, `physloc/scenarios/base.py` and `physloc/cli.py`. After
-changing any of them:
-
-```bash
-python -m physloc.reference            # is the README current? exits 1 if stale
-python -m physloc.reference --write    # regenerate the tables in place
-```
-
-`tests/test_reference.py` fails when they are stale, and the HuggingFace card is generated from the
-same functions.
-
-### Tests
-
-```bash
-python -m pytest tests                 # the full suite: about 40 minutes, pour cells are slowest
-python -m pytest tests/test_reference.py tests/test_cpu_slots.py   # a quick subset
-```
-
-### Repository layout
-
-```
-physloc/scenarios/    scenario builders, the complexity ladder and conditions (base.py)
-physloc/injectors/    the violation families, one file per domain
-physloc/render/       the container worker, and probes for render cost
-physloc/sim/          trajectories and the simulation seam
-physloc/residuals/    the physical residuals severity is measured from
-physloc/annotate/     residuals -> masks, severity, clocks, and schema-v4 samples
-physloc/loader.py     reads a release and derives every annotation (numpy only)
-physloc/release/      export, splits, dataset card
-physloc/viz/          the overlay renderer, browser viewer, grids, sheets; every mp4
-test_dataset_loader.py  load a dataset, print its structure, look at it
-physloc/cli.py        the `physloc` command line
-configs/              common.yaml and one file per run
-scripts/              run.sh, run_fast.sh, probes and refresh tools
-docs/schema.md        the sample layout, fields, axes, units, and loader contract
-docs/performance.md   how cost and performance were measured
-docs/PLAN.md          the design document
-docs/roadmap.md       what is next
-```
+| document | for |
+|---|---|
+| [docs/schema.md](docs/schema.md) | the sample layout, every field, axis and unit, and the loader contract |
+| [docs/generating.md](docs/generating.md) | configs, running a release, cost and performance |
+| [docs/publishing.md](docs/publishing.md) | validating, packaging and uploading to Hugging Face |
+| [docs/development.md](docs/development.md) | the two environments, tests, repository layout |
+| [docs/energy.md](docs/energy.md) | how the energy annotation is computed, and its limits |
+| [docs/performance.md](docs/performance.md) | how every cost and speed number was measured |
+| [docs/PLAN.md](docs/PLAN.md) | the design reasoning behind the annotations |
+| [docs/roadmap.md](docs/roadmap.md) | what is next |
 
 ---
 

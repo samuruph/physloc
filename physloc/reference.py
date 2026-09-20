@@ -272,16 +272,41 @@ BLOCKS = {"media": media, "domains": domains, "scenarios": scenarios,
           "difficulty": difficulty,
           "costs_ladder": costs_ladder}
 
+#: Which document each block lives in, relative to the repository root. The
+#: README is the dataset release document and carries the tables a reader of
+#: the dataset needs; what a run costs and how big a tier is belong to whoever
+#: generates it, and live with the rest of the operator material.
+BLOCK_FILES = {"media": "README.md", "domains": "README.md",
+               "scenarios": "README.md", "ladder": "README.md",
+               "conditions": "README.md", "materials": "README.md",
+               "difficulty": "README.md",
+               "tiers": "docs/generating.md",
+               "costs": "docs/generating.md",
+               "costs_ladder": "docs/generating.md"}
+
+
+def blocks_in_file(path: str) -> List[str]:
+    """The block names belonging to one document."""
+    return [n for n, f in BLOCK_FILES.items() if f == path]
+
 
 def render(name: str) -> str:
     return BLOCKS[name]()
 
 
-def splice(text: str) -> str:
-    """Replace every generated block in `text`, leaving the prose alone."""
+def splice(text: str, names=None) -> str:
+    """Replace the named generated blocks in `text`, leaving the prose alone.
+
+    `names` defaults to every block. A block whose markers are absent is a
+    no-op either way, so splicing a document with the full set still only
+    touches what that document actually contains -- but passing the file's own
+    subset keeps a `--write` from pricing fourteen configs to update a README
+    that holds no cost table.
+    """
     import re
 
-    for name, fn in BLOCKS.items():
+    for name in (BLOCKS if names is None else names):
+        fn = BLOCKS[name]
         # `(.*?)` with DOTALL, so it matches an empty block and a filled one
         # alike. Both narrower forms have now failed, in opposite directions
         # and both silently:
@@ -322,7 +347,7 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--write", action="store_true",
-                    help="rewrite the generated blocks in README.md in place")
+                    help="rewrite the generated blocks in every document")
     ap.add_argument("--block", choices=sorted(BLOCKS),
                     help="print one block and exit")
     a = ap.parse_args(argv)
@@ -330,15 +355,19 @@ def main(argv=None) -> int:
         print(render(a.block))
         return 0
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(here, "README.md")
-    text = open(path).read()
-    out = splice(text)
-    if not a.write:
-        print("README is %s" % ("CURRENT" if out == text else "STALE"))
-        return 0 if out == text else 1
-    open(path, "w").write(out)
-    print("wrote %s" % path)
-    return 0
+    stale = 0
+    for name in sorted(set(BLOCK_FILES.values())):
+        path = os.path.join(here, name)
+        text = open(path).read()
+        out = splice(text, blocks_in_file(name))
+        if a.write:
+            if out != text:
+                open(path, "w").write(out)
+            print("wrote %s" % name)
+            continue
+        print("%s is %s" % (name, "CURRENT" if out == text else "STALE"))
+        stale += out != text
+    return 1 if stale else 0
 
 
 if __name__ == "__main__":

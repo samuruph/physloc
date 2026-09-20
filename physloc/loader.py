@@ -306,8 +306,26 @@ class _Namespace:
     def __contains__(self, key: str) -> bool:
         return key in self.keys()
 
+    def _h5_path(self, key: str) -> Optional[str]:
+        """The HDF5 dataset behind `key`, when there is one -- so `describe()`
+        can report a shape without reading the array."""
+        return None
+
+    def __dir__(self) -> List[str]:
+        """Attributes AND the lazily-read arrays.
+
+        `objects.positions` comes from HDF5 through `__getattr__`, so without
+        this neither `dir()` nor a debugger's variable pane lists it, and the
+        block looks like it holds five fields when it holds fourteen.
+        """
+        return sorted(set(super().__dir__()) | set(self.keys()))
+
     def as_dict(self, keys: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         return {key: self[key] for key in (keys or self.keys())}
+
+    def describe(self) -> str:
+        """Every field of this block, with its type -- without reading arrays."""
+        return _describe(self, type(self).__name__.lower())
 
     def __repr__(self) -> str:
         scalars = []
@@ -460,6 +478,9 @@ class _Group(_Namespace):
 
     GROUP = ""
 
+    def _h5_path(self, key: str) -> Optional[str]:
+        return self.GROUP + "/" + key
+
     def keys(self) -> List[str]:
         return sorted(self._sample._h5_keys(self.GROUP))
 
@@ -502,6 +523,9 @@ class Objects(_Namespace):
         self.roles = [o.get("role") for o in self.records]
         self.groups = [o.get("analysis_group", "context") for o in self.records]
         self._rows = {int(i): row for row, i in enumerate(self.ids)}
+
+    def _h5_path(self, key: str) -> Optional[str]:
+        return None if key in self.STATIC else "/objects/" + key
 
     def keys(self) -> List[str]:
         return list(self.STATIC) + [key for key in self._sample._h5_keys("/objects")
@@ -822,6 +846,41 @@ class Events(_Namespace):
                 for key in self._sample._h5_keys("/events/collisions")}
 
 
+def _describe(namespace: "_Namespace", title: str, indent: str = "") -> str:
+    """One line per field: its shape and dtype, or its value.
+
+    Shapes come from HDF5 metadata, so describing a sample reads no array. A
+    field the loader derives has no shape until it is asked for, and is shown
+    as its axes instead.
+    """
+    sample = namespace._sample
+    lines = ["%s%s" % (indent, title)]
+    block = title.split(".")[-1]
+    for key in namespace.keys():
+        kind = type(namespace)
+        path = namespace._h5_path(key)
+        axes = FIELDS.get("%s.%s" % (block, key), "")
+        if path is not None and sample._h5_has(path):
+            node = sample._h5_file()[path]
+            shown = "%s %s" % (node.dtype, list(node.shape))
+        elif _is_lazy(kind, key):
+            shown = "[%s] on access" % axes if axes else "on access"
+        else:
+            value = namespace[key]
+            if hasattr(value, "shape"):
+                shown = "%s %s" % (value.dtype, list(value.shape))
+            elif isinstance(value, dict):
+                shown = "dict(%s)" % ", ".join(sorted(value))
+            elif isinstance(value, (list, tuple)):
+                shown = "%s[%d]" % (type(value).__name__, len(value))
+            else:
+                shown = repr(value)
+        if len(shown) > 46:
+            shown = shown[:45] + "\u2026"
+        lines.append("%s  %-20s %s" % (indent, key, shown))
+    return "\n".join(lines)
+
+
 def _plain(value: Any) -> Any:
     """A namespace as a nested dict. Blocks backed by ``sample.json`` give their
     metadata only (``video`` without ``rgb``, ``violation`` without its maps --
@@ -904,6 +963,22 @@ class Sample:
             return np.zeros(self.observations.segmentation.shape, np.float32)
         return self._cached("divergence", lambda: divergence(
             self.twin.video.rgb, self.video.rgb))
+
+    def describe(self) -> str:
+        """Every field this sample carries, block by block, with its type.
+
+        What a debugger cannot show: the arrays are read lazily, so a variable
+        pane lists only what has already been touched. This reads HDF5 metadata
+        and no array. `print(sample.describe())`, or `ns.describe()` for one
+        block.
+        """
+        out = ["Sample %s" % self.uid]
+        for name in self.NAMESPACES:
+            out.append(_describe(getattr(self, name), "s." + name, indent="  "))
+        out.append("  s.twin                 %s"
+                   % ("Sample(%s)" % self.twin.uid if self.twin else "None"))
+        out.append("  s.divergence           float32 [T,H,W] (needs the twin)")
+        return "\n".join(out)
 
     def resolve(self, field: str) -> Any:
         """The value a dotted selector names, e.g. ``"violation.mask"``."""

@@ -224,6 +224,29 @@ def test_collate_pads_per_object_fields(tmp_path):
     assert batch["info"]["uid"] == ["a/pair/valid", "b/pair/valid"]
 
 
+def test_every_field_is_discoverable_without_reading_it(dataset_root):
+    """What a debugger shows must be what the block holds.
+
+    `objects.positions` arrives through `__getattr__` from HDF5, so `dir()` --
+    and every IDE variable pane -- listed the handful of JSON-backed fields and
+    none of the arrays, which reads as "this sample has no trajectories".
+    """
+    sample = L.PhysLocDataset(dataset_root, label="invalid")[0]
+    for namespace in (sample.objects, sample.observations, sample.violation,
+                      sample.info, sample.scene):
+        listed = set(dir(namespace))
+        assert set(namespace.keys()) <= listed, namespace
+    assert "positions" in dir(sample.objects)
+    assert "segmentation" in dir(sample.observations)
+
+    # describe() answers the same question in one call, and reads no array.
+    text = sample.describe()
+    for line in ("s.objects", "positions", "s.violation", "severity_map", "s.twin"):
+        assert line in text, line
+    assert not [key for key in sample._cache if key.startswith("h5:")]
+    assert "positions" in sample.objects.describe()
+
+
 def test_collating_plain_dicts_matches_collating_samples(tmp_path):
     """A DataLoader's workers hand collate `to_dict()` rows, not Samples; the
     batch -- `objects.valid` included -- must not depend on which it got."""

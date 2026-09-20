@@ -358,6 +358,35 @@ max severity), for plotting; and `latent_grid()` -- `mask`, `severity_max` and
 | `twin` | Sample or None | the valid sample of this pair |
 | `divergence` | float32 `[T,H,W]` | the absolute RGB difference from the valid twin. **For inspection only -- never a training target**: it diverges everywhere after the event |
 
+#### Finding your way around a sample
+
+Arrays are read on first access, so a debugger's variable pane shows only what
+has already been touched. Two calls answer "what can I access here?" without
+reading anything:
+
+```python
+print(s.describe())          # every block and field, with dtype and shape
+print(s.objects.describe())  # or just one block
+s.objects.keys()             # ['ids', 'names', ..., 'positions', 'velocities', ...]
+dir(s.objects)               # the same fields, plus the methods
+```
+
+```text
+Sample v0/L0/drop/91739_multi/invalid_continuity_strong
+  s.objects
+    ids                  int32 [8]
+    names                list[8]
+    positions            float32 [8, 25, 3]
+    ...
+  s.violation
+    severity_bin         'strong'
+    mask                 [T,H,W] on access
+    severity_map         [T,H,W] on access
+```
+
+`on access` marks a field the loader derives or reads lazily: it has no shape
+until you ask for it, so its axes are shown instead.
+
 Every namespace also answers `ns["key"]`, `keys()` and `get()`. For training,
 name the fields and let `to_dict`/`collate` build the same nesting as plain
 dicts, padding every per-object field to the batch's largest N:

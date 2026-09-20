@@ -542,7 +542,19 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             observable |= c["own_obs"] & (c["active"] | ~active)
             observable |= c["visible"] | c["visible_inv"]
     else:
-        observable = observable_all
+        # THE CLIP IS OBSERVABLE WHEN ONE OF ITS VIOLATORS IS, which is the
+        # union of what they each report and not a second measurement over all
+        # of them at once. `observable_frames` rejects anything under
+        # `min_pixels` changed pixels as path-tracing noise, and that floor is
+        # meant per BODY: measured on the aggregate it is divided by however
+        # many bodies share the clock. An L2 `pour` spreads one `colour_shift`
+        # over 96 grains, and on the frame the ramp begins no grain had changed
+        # by more than two pixels while the 96 of them summed to ten -- so the
+        # clip called itself observable a frame before every violator it is the
+        # union of, and `schema.write` rejected the sample outright.
+        observable = np.zeros((T,), bool)
+        for c in violators:
+            observable |= c["own_obs"]
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
                           primary_id, severity_t=sev_t, observable=observable)

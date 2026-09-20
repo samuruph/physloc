@@ -84,3 +84,15 @@ def test_every_block_has_exactly_one_home():
     assert set(reference.BLOCK_FILES) == set(reference.BLOCKS)
     for path in FILES:
         assert os.path.exists(os.path.join(HERE, path)), path
+
+
+def test_the_hub_card_carries_the_generated_tables_and_no_cost_blocks():
+    """The card used to be a hand-written stub naming none of the taxonomy. It
+    is built from `render()` now, and must not price a config on the way."""
+    card = reference.hf_card("CC-BY-4.0", 4, (("main", 0.75), ("held_out", 0.25)))
+    assert card.startswith("---\nlicense: cc-by-4.0\n")
+    for name in reference.CARD_BLOCKS:
+        assert reference.render(name) in card, name
+    for name in ("costs", "costs_ladder", "tiers"):
+        assert name not in reference.CARD_BLOCKS
+    assert "`main` 75%" in card and "`held_out` 25%" in card

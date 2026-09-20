@@ -290,6 +290,70 @@ def blocks_in_file(path: str) -> List[str]:
     return [n for n, f in BLOCK_FILES.items() if f == path]
 
 
+#: The blocks a Hub card carries. `costs`, `costs_ladder` and `tiers` are
+#: deliberately absent: the first two price a config by running the CLI, which
+#: has no place inside an export, and none of the three matters to someone
+#: reading the dataset rather than building it.
+CARD_BLOCKS = ("media", "domains", "scenarios", "ladder", "conditions",
+               "difficulty")
+
+
+def hf_card(license_name: str, version: int, splits=()) -> str:
+    """The dataset card published to the Hub, as the README's tables plus the
+    short prose a card needs.
+
+    A card written by hand was a 25-line stub that named none of the taxonomy,
+    the ladder or the conditions -- the things a reader finds the dataset FOR.
+    Building it from `render()` means it says what the code says.
+    """
+    head = "\n".join("- " + x for x in ("physics", "video", "benchmark",
+                                        "spatio-temporal-localization"))
+    split_text = ", ".join("`%s` %d%%" % (n, round(100 * f)) for n, f in splits)
+    parts = [
+        "---\nlicense: %s\ntask_categories:\n- video-classification\ntags:\n%s\n---\n"
+        % (license_name.lower(), head),
+        "# PhysLoc (schema v%d)\n" % version,
+        "**A physics-violation video dataset where every invalid clip ships *where* the "
+        "violation is, *when* it happens, and *how badly* — derived from the simulator, "
+        "not annotated by hand.**\n",
+        "Every invalid clip has a **valid twin**: the same scene and seed, bit-identical up "
+        "to the frame the violation is introduced. Labels per invalid clip: a violation "
+        "mask (where), a severity map (how badly), causal masks, and five per-object "
+        "clocks (when).\n",
+        "## Layout\n",
+        "Each sample is `samples/<uid>/` with `sample.json` (metadata and annotations, "
+        "every fact once), a standalone `rgb.mp4`, and one chunked `data.h5` (dense passes "
+        "and per-object arrays). `index.parquet` holds relative paths and never embeds "
+        "video bytes. The standalone `loader.py` reads it; `schema.json` is the JSON "
+        "Schema.\n",
+        "```python\nfrom loader import PhysLocDataset, collate\n"
+        "ds = PhysLocDataset(\".\", split=\"main\", fields=[\"video.rgb\", \"violation.mask\",\n"
+        "                                               \"violation.severity_map\"])\n"
+        "s = ds[0]\ns.info.uid, s.scene.family, s.violation.severity_bin\n"
+        "s.violation.mask            # [T,H,W] where the violation is\n"
+        "s.violation.violators       # per violator: id, windows, affected_ids, ...\n"
+        "s.objects.select(\"violators\")\n"
+        "batch = collate([ds[i] for i in range(4)])   # nested like to_dict()\n```\n",
+        "Download with `hf download <repo> --repo-type dataset --local-dir physloc`.\n",
+    ]
+    titles = {"media": "## Taxonomy\n\n### Medium\n", "domains": "### Domain\n",
+              "scenarios": "### Scenario\n",
+              "ladder": "## Complexity ladder\n\nScene realism only; each level "
+                        "draws its own scenes.\n",
+              "conditions": "## Difficulty conditions\n\nEvery clip carries exactly "
+                            "one.\n",
+              "difficulty": "## Detection difficulty\n\nA clip takes its worst of "
+                            "seven factors.\n"}
+    for name in CARD_BLOCKS:
+        parts += [titles[name], render(name) + "\n"]
+    parts.append("## Splits\n\n%s, grouped by `pair_uid` so a valid twin and its "
+                 "invalid siblings never cross a split.\n" % (split_text or "see `splits/`"))
+    parts.append("## Licence\n\nAnnotations, renders and metadata: `%s`. L3 clips contain "
+                 "Google Scanned Objects (`CC BY-SA 4.0`), recorded per asset in "
+                 "`objects.records[i].asset.license`.\n" % license_name)
+    return "\n".join(parts)
+
+
 def render(name: str) -> str:
     return BLOCKS[name]()
 

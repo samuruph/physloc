@@ -8,7 +8,7 @@ import shutil
 from collections import Counter
 from typing import Dict, Iterable, List, Optional
 
-from .. import loader
+from .. import loader, reference
 from ..annotate import layout
 from ..schema import write
 from ..residuals.energy import ENERGY_EXCLUDED_ROLES
@@ -237,37 +237,7 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
         json.dump(_schema(), handle, indent=2, sort_keys=True)
     with open(os.path.join(root, "LICENSE"), "w", encoding="utf-8") as handle:
         handle.write(license_name + "\n")
-    card = """---
-license: {license}
-task_categories:
-- video-classification
-tags:
-- physics
-- video
----
-
-# PhysLoc schema v{version}
-
-Each sample is `samples/<uid>/` with `sample.json` (metadata and annotations,
-every fact once), a standalone `rgb.mp4`, and one chunked `data.h5` (dense
-passes and per-object arrays). The Parquet index holds relative paths and never
-embeds video bytes.
-
-```python
-from loader import PhysLocDataset, collate
-ds = PhysLocDataset(".", split="main", fields=["video.rgb", "violation.mask",
-                                               "violation.severity_map"])
-s = ds[0]
-s.info.uid, s.scene.family, s.violation.severity_bin
-s.violation.mask            # [T,H,W] where the violation is
-s.violation.violators       # per violator: id, windows, affected_ids, ...
-s.objects.select("violators")
-batch = collate([ds[i] for i in range(4)])   # nested like to_dict()
-```
-
-Download with `hf download <repo> --repo-type dataset --local-dir physloc`.
-Publish with `hf upload <repo> <directory> --type dataset`.
-""".format(license=license_name.lower(), version=loader.SCHEMA_VERSION)
+    card = reference.hf_card(license_name, loader.SCHEMA_VERSION, SPLIT_FRACTIONS)
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as handle:
         handle.write(card)
     shutil.copyfile(loader.__file__, os.path.join(root, "loader.py"))

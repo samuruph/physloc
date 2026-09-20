@@ -171,32 +171,192 @@ s.events          # collisions, one array per field
 s.twin            # the valid Sample of this pair
 ```
 
-Below, `T` is frames, `H,W` image size, `N` exported objects and `V` violators.
+Throughout, **`T`** is frames, **`H,W`** the image size, **`N`** every exported
+object and **`V`** the violators. Every `[N,...]` array is in one row order --
+`s.objects.ids[i]` owns row `i` -- shared by both twins, so row `i` is the same
+body in the valid and the invalid clip. `s.objects.row(object_id)` maps an id to
+its row.
 
-```text
-s.violation
-├── severity_bin, kind, component, timing, intervention, difficulty, peak_residual
-├── violators[V]: id, affected_ids, windows{active, intervening, consequence,
-│                 observable, occluded}, t_event, t_observable, observability_lag,
-│                 peak_residual, peak_severity, difficulty, magnitude
-├── ids [V]; windows (union); t_event, t_observable, t_end, observability_lag
-├── causal_relations: violator -> affected body, over its consequence windows
-├── active, intervening, consequence, observable, occluded, affected: bool [N,T]
-├── severity, residual, score: float32 [N,T]
-├── object_id uint16, component_map uint8, causal uint8, causal_source uint16: [T,H,W]
-├── mask, visible, reference_mask: bool [T,H,W]; severity_map: float32 [T,H,W]
-├── timeline: per-frame clocks unioned over violators, plus max severity
-└── latent_grid(): mask and severity reduced to the video-token grid
+#### `s.info` -- who this sample is
+
+Read from `sample.json`, no arrays.
+
+| field | type | meaning |
+|---|---|---|
+| `uid` | str | `<release>/<level>/<scenario>/<seed>_<condition>/` then `valid` or `invalid_<family>_<bin>`; also the path under `samples/` |
+| `pair_uid` | str | the scene. One valid twin and its invalid siblings share it |
+| `valid_uid` | str | the valid twin's uid; a valid sample points at itself |
+| `label` | str | `valid` or `invalid` |
+| `is_valid` | bool | `label == "valid"` |
+| `split` | str | `main`, `held_out` or `debug`. Assigned per `pair_uid`, so a twin never crosses a split |
+| `release` | str | what the dataset is called, from `--outdir` |
+| `tier` | str | `debug` (128², 12 fps, 25 frames) or `release` (512², 30 fps, 89 frames) |
+| `seed` | int | the scene seed. The same seed at a different level is a DIFFERENT scene |
+| `variant` | int | index in the ten-slot condition cycle; says why this clip got a camera move or clutter |
+| `framing_attempt` | int | how many scenes were resampled before the actors stayed in shot |
+| `provenance` | dict | `generator_commit`, `kubric_image_digest`, `blender_version`, and the measured `prefix_identical_verified` / `prefix_differing_pixels` / `prefix_identical_upto_frame` |
+
+#### `s.video` -- clip geometry and the RGB
+
+| field | type | meaning |
+|---|---|---|
+| `num_frames` | int | `T`, always `4k+1` |
+| `fps` | float | frames per second |
+| `resolution` | (int, int) | `(H, W)` |
+| `duration` | float | `T / fps`, seconds |
+| `latent_frames`, `latent_hw` | int | the video-token grid `latent_grid()` reduces to |
+| `path` | str | absolute path to `rgb.mp4`; **no decoding** |
+| `rgb` | uint8 `[T,H,W,3]` | the decoded video, read on first access |
+
+#### `s.scene` -- what was simulated, and how it was shot
+
+| field | type | meaning |
+|---|---|---|
+| `scenario` | str | the staging: `drop`, `collision`, `barrier_pass`, `pour`, ... (13 built) |
+| `family` | str | the violated law: `continuity`, `solidity`, `shadow`, ... `None` on a valid twin, which belongs to every family staged on the scene |
+| `domain` | str | the family's group: `kinematics`, `dynamics`, `optical`, ... |
+| `physics_medium` | str | `rigid`, `granular`, `optical`, ... A granular medium counts as ONE thing for difficulty |
+| `level` | str | complexity `L0`–`L3`: baseline, materials, HDRI, GSO scans. Scene realism only |
+| `condition` | str | `standard`, `camera`, `distractors`, `multi`, `camera+multi` -- one per clip |
+| `prompt` | str | a text description of the LAWFUL scene, for text-conditioned use |
+| `size_scale` | float | the per-scene object size multiplier |
+| `camera.motion` | str | `static`, `track`, `orbit` or `dolly` |
+| `camera.K` | float64 `[3,3]` | normalised intrinsics (Kubric's convention) |
+| `camera.field_of_view`, `focal_length`, `sensor_width` | float | the lens: degrees, mm, mm |
+| `camera.look_at`, `position`, `end_position` | list[3] | the aim point held all clip, the start eye, and the end eye when it moves |
+| `camera.positions` | float64 `[T,3]` | per-frame eye, camera-to-world, metres |
+| `camera.quaternions` | float64 `[T,4]` | per-frame rotation, `w,x,y,z`, looking down −Z |
+| `environment` | dict | `background` colour, `hdri` name (L2/L3), `lighting` |
+| `physics` | dict | `engine`, `gravity` `[3]`, `step_rate` Hz, `substeps_per_frame`, and `params`: every resolved generation knob |
+
+Under a moving camera `forward_flow`, `backward_flow` and `depth` include the
+camera's own motion; the track above is what undoes it.
+
+#### `s.observations` -- the render passes, `[T,H,W,...]`
+
+Each is read from `data.h5` on first access. `segmentation` is always present;
+the rest depend on what the tier rendered, so test with `"depth" in s.observations`.
+
+| pass | type | meaning |
+|---|---|---|
+| `segmentation` | uint16 `[T,H,W]` | object id per pixel, `0` is background. Ids match `s.objects.ids` |
+| `depth` | float32 `[T,H,W,1]` | metres from the camera; background carries a huge sentinel, not a distance |
+| `forward_flow` | float32 `[T,H,W,2]` | pixel motion to the next frame; undefined on the last |
+| `backward_flow` | float32 `[T,H,W,2]` | pixel motion from the previous frame; undefined on the first |
+| `normal` | uint16 `[T,H,W,3]` | surface normal, encoded |
+| `object_coordinates` | uint16 `[T,H,W,3]` | each pixel's position in ITS OWN object's frame -- not world space |
+| `shadow_strength` | float16 `[T,H,W]` | shadow scenarios only: the matched Cycles shadow-isolation pass |
+| `shadow_source_id` | uint16 `[T,H,W]` | shadow scenarios only: which actor casts that shadow |
+
+#### `s.objects` -- who is in the scene, and every trajectory
+
+Static facts come from `sample.json`, per-frame arrays from `data.h5`.
+
+| field | type | meaning |
+|---|---|---|
+| `ids` | int32 `[N]` | the row order of every `[N,...]` array. `0` is never an object |
+| `names`, `roles`, `groups` | list[N] | name; `role` (`actor`, `prop`, `distractor`, `floor`, `occluder`, `backdrop`); `analysis_group` (`subject`, `context`, `support`, `background`) |
+| `is_violator` | bool `[N]` | rows this clip's violation names |
+| `records` | list[N] of dict | the `sample.json` record: `id`, `name`, `category`, `role`, `analysis_group`, `asset{id, source, license, held_out}`, `physics{mass, friction, rolling_friction, restitution, static, collidable, scripted, dormant, energy_eligible}`, `render{material, color, scale}` |
+| `positions` | float32 `[N,T,3]` | world position, metres |
+| `quaternions` | float32 `[N,T,4]` | rotation, `w,x,y,z` |
+| `velocities` | float32 `[N,T,3]` | m/s |
+| `angular_velocities` | float32 `[N,T,3]` | rad/s |
+| `bboxes` | float32 `[N,T,4]` | 2D box `(ymin, xmin, ymax, xmax)`, normalised to `[0,1]`, **NaN on frames where the body has no pixels** |
+| `bboxes_3d` | float32 `[N,T,8,3]` | the 8 world-space corners |
+| `image_positions` | float32 `[N,T,2]` | projected centre, normalised `(x, y)`; may fall outside `[0,1]` when off screen |
+| `visibility` | int32 `[N,T]` | how many pixels the body occupies; `0` means fully hidden or absent |
+
+```python
+o = s.objects
+o.positions[o.row(2)]            # object 2's trajectory, [T,3]
+o.record(2)                      # its static record + its row of every array
+o.select("violators")            # ids; subjects (default), affected, context, support, background, all
+o.spatial_mask("subjects")       # bool [T,H,W] from the segmentation
 ```
 
-| call | returns |
+#### `s.violation` -- what is wrong, where, when and how badly
+
+`present` is `False` on a valid sample and every array is then zeros of the
+right shape, so a batch may mix valid and invalid clips without special cases.
+
+**The description** (from `sample.json`):
+
+| field | type | meaning |
+|---|---|---|
+| `severity_bin` | str | `weak`, `medium` or `strong`: the strength that was ASKED for |
+| `kind` | str | `instant` (one frame, e.g. a teleport) or `sustained` (a window) |
+| `component` | str | `body` or `shadow` -- what the violation is ON |
+| `spatial_extent` | str | `local` (one body) or `global` (the whole scene, e.g. gravity) |
+| `timing` | str | `shared` (violators act together), `independent` (each has its own moment) or `sync` (a `multi` clip that chose one moment) |
+| `intervention` | dict | the knob that was turned: `type`, `magnitude`, `unit`, `params`. **Known before simulating** |
+| `peak_residual` | dict | the effect that was MEASURED: `law`, `value` (in the law's own units), `score` (bounded 0–1), `z_vs_valid`, `frame` |
+| `difficulty` | dict | `level` (`easy`/`moderate`/`hard`), `rank`, `binding_factors`, per-factor `factors`, and the measured `inputs` |
+| `occluded_at_event` | bool | was the violator hidden when it fired |
+| `causal_ids` | list[int] | every body the PLAN names, which for a two-body family is both |
+| `shadow` | dict or None | shadow families only: caster, light, receivers, render method, threshold |
+| `violators` | list[V] of dict | one record per violator, below |
+
+Each **violator record**: `id`, `affected_ids` (bodies it disturbed),
+`windows{active, intervening, consequence, observable, occluded}` as inclusive
+`[[start, end], ...]` frame intervals, `t_event`, `t_observable`,
+`observability_lag`, `peak_residual`, `peak_severity`,
+`frames_visible_after_event`, `difficulty` (its own), `magnitude`.
+
+**Derived by the loader** from those records -- nothing below is stored:
+
+| field | type | meaning |
+|---|---|---|
+| `ids` | int32 `[V]` | the violators' object ids |
+| `windows` | dict of intervals | the clip-level clocks: the union over violators |
+| `t_event` | int | first frame the violation is active |
+| `t_observable` | int | first frame a viewer could tell |
+| `observability_lag` | int | `t_observable − t_event`; how long the violation hides |
+| `t_end`, `t_intervention_end`, `t_consequence_end` | int | last active / last frame being changed / last frame still wrong |
+| `causal_relations` | list[dict] | `source_object_id → target_object_id` over the source's consequence windows |
+
+**The five clocks**, `bool [N,T]`, one row per object (zeros for non-violators):
+
+| clock | true while |
 |---|---|
-| `s.objects.select("violators")` | ids of a selection: `subjects` (default), `violators`, `affected`, `context`, `support`, `background`, `all` |
-| `s.objects.spatial_mask("subjects")` | `bool [T,H,W]` segmentation mask of a selection |
-| `s.objects.record(2)` | one object's `sample.json` record plus its row of every array |
-| `s.violation.visible` | the violation where a viewer can see it (invalid side, component-aware) |
-| `s.violation.reference_mask` | valid-twin footprint of the violators, when a twin is available |
-| `s.divergence` | RGB difference from the valid twin, for inspection only -- never a target |
+| `active` | the violation is happening |
+| `intervening` | the intervention is being applied |
+| `consequence` | the scene is still wrong because of it |
+| `observable` | a viewer could tell |
+| `occluded` | the violator is FULLY hidden |
+| `affected` | (not a clock) this body was disturbed BY a violator |
+
+**Per-object measurements**, `float32 [N,T]`: `severity` (0–1, what
+`severity_map` paints), `residual` (raw, in the law's units) and `score`
+(the bounded 0–1 form of the residual).
+
+**Maps**, `[T,H,W]`, invalid side unless noted:
+
+| map | type | meaning |
+|---|---|---|
+| `object_id` | uint16 | which violator owns each pixel; `0` elsewhere |
+| `component_map` | uint8 | `0` none, `1` body, `2` shadow, `3` trajectory, `4` interaction, `5` energy |
+| `causal` | uint8 | `1` a violator, `2` a body it affected |
+| `causal_source` | uint16 | which violator is responsible for that pixel |
+| `mask` | bool | **a training target.** `object_id > 0` -- the union over BOTH twins, so a vanished body still has a mask |
+| `visible` | bool | the part of `mask` a viewer can actually see |
+| `severity_map` | float32 | **a training target.** 0–1 per pixel: how badly wrong, invalid side only |
+| `reference_mask` | bool | where the violators lawfully ARE, from the valid twin. Needs `s.twin` |
+
+**Also**: `timeline` -- the clocks and severity reduced to `[T]` (any violator,
+max severity), for plotting; and `latent_grid()` -- `mask`, `severity_max` and
+`severity_mean` on the `[latent_frames, latent_hw, latent_hw]` token grid.
+
+#### `s.energy`, `s.events`, `s.twin`, `s.divergence`
+
+| field | type | meaning |
+|---|---|---|
+| `energy.scene` | dict of float32 `[T]` | `total`, `kinetic_translational`, `kinetic_rotational`, `dissipated`, `energy_in_frame` (visible bodies only) and the anomaly curves `free_anomaly`, `contact_anomaly`, `excess_loss` |
+| `energy.objects` | dict of `[N,T,...]` | `kinetic`, `potential`, `by_body` (J), `mass` (kg), `height` (m), `momentum` `[N,T,3]`, `angular_momentum`, `inertia`, `in_frame` (bool), and the derived `momentum_magnitude` |
+| `energy.map` | float32 `[T,H,W]` | per-pixel energy, J |
+| `events.collisions` | dict of arrays `[E,...]` | one row per contact: `frame`, `instances` `[E,2]`, `force`, `position` `[E,3]`, `contact_normal` `[E,3]`, `image_position` `[E,2]` |
+| `twin` | Sample or None | the valid sample of this pair |
+| `divergence` | float32 `[T,H,W]` | the absolute RGB difference from the valid twin. **For inspection only -- never a training target**: it diverges everywhere after the event |
 
 Every namespace also answers `ns["key"]`, `keys()` and `get()`. For training,
 name the fields and let `to_dict`/`collate` build the same nesting as plain

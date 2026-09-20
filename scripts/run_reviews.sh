@@ -34,8 +34,9 @@ CONFIGS=("$@")
 if [ ${#CONFIGS[@]} -eq 0 ]; then
   # Cheapest first, so a mistake in the common path shows up in minutes rather
   # than after the two-hour full review.
-  CONFIGS=(review_L0 review_L1 review_L2 review_L3 review_shadow
-           review_conditions review_severity review_ladder review)
+  # CONFIGS=(review_L0 review_L1 review_L2 review_L3 review_shadow
+  #          review_conditions review_severity review_ladder review)
+  CONFIGS=(review)
 fi
 
 mkdir -p out/logs

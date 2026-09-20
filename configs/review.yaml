@@ -60,7 +60,7 @@ defaults:
   #   applied inside every level at declared ratios (20% and 30%), stratified
   #   by variant index. So a run of one variant is entirely static and
   #   uncluttered, and only a longer run starts spending clips on them.
-  complexity: L0
+  complexity: all
 
   # tier: the render geometry, and the ONLY thing a tier says.
   #     debug    128x128, 12 fps, 25 frames, 16 spp -- ~8 s a render, never published
@@ -96,7 +96,7 @@ defaults:
   #
   #   In `defaults` rather than `generate` so `taxonomy --config review` prices
   #   the run `generate --config review` actually performs.
-  variants: 1
+  variants: 5
 
   # severity: which magnitude bins to generate.
   #     weak | medium | strong   one bin

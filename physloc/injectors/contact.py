@@ -439,7 +439,19 @@ class Solidity(Injector):
             # depth to where it is still over the surface returned exactly 0.000
             # on a clip where the block visibly sinks to z = -1.6.
             notes["support_bounds"] = None
-            notes["surface_top"] = float(_geom.surface_top(spec, actor))
+            # The surface under the body WHERE IT MAKES CONTACT, not where it
+            # started. `surface_top(spec, actor)` answered for the start, which
+            # on `rolling_ramp` is the ramp's top -- 3.63 m -- for a block that
+            # sinks into the floor after its flight. Scored, that read the
+            # lawful block 15 radii deep; staged, the hold's depth came out
+            # negative and was floored to nothing, so weak and medium both took
+            # the full spring and bounced out identically.
+            from ..residuals import laws as _laws
+            bi_c = traj.index_of(int(actor.segmentation_id))
+            fc = int(np.clip(t_contact, 0, traj.num_frames - 1))
+            pc = np.asarray(traj.pos[fc, bi_c], np.float64)
+            notes["surface_top"] = float(_laws.ground_under(
+                spec, float(pc[0]), float(pc[1]), float(pc[2])))
         if mode == "pass_through":
             # Against another moving body there is no surface to place the
             # actor a prescribed depth below. Suppressing the pair's response

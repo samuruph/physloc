@@ -27,6 +27,8 @@ DISSOLVE_REF_SECONDS = 0.5       # strong: `Dissolve.FADE_BY_BIN["strong"]` of a
 FISSION_REF_RADII = 7.0          # `Fission.SEPARATION_BY_BIN["strong"]` (knob only now;
                                  # the score's yardstick is the plan's own `r_strong`)
 FUSION_REF_RADII = 3.6           # `Fusion.MEET_RADII["strong"]`
+#: Window over which `friction` averages its deceleration -- see there.
+FRICTION_SMOOTH_SECONDS = 0.3
 
 
 def register(name: str):
@@ -76,11 +78,37 @@ def penetration(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
             n = n / nn if nn > 1e-9 else np.array([0.0, 0.0, 1.0])
             delta = (traj.pos[:, b, :].astype(np.float64)
                      - traj.pos[:, j, :].astype(np.float64))
-            gap = np.abs(delta @ n)
+            # SIGNED along the normal, not its magnitude. The magnitude peaks
+            # when the centres line up, so a body pushed back out from halfway
+            # in and one that came out the far side read the same: `solidity`'s
+            # medium and strong both saturated on `collision` and
+            # `barrier_pass`. Signed, the overlap keeps growing as the body
+            # carries on through -- which is what "how far through" means.
+            # Oriented so the body starts on the positive side.
+            s = delta @ n
+            f0 = int(np.clip(int(ctx.get("t_contact", 0)), 0, s.shape[0] - 1))
+            if s[max(0, f0 - 1)] < 0.0:
+                s = -s
             reach = float(ctx.get("partner_extent", traj.radius[j]))
-            return np.maximum(0.0, r + reach - gap) / r
+            return np.maximum(0.0, r + reach - s) / r
     top = float(ctx["surface_top"])
     lowest = traj.pos[:, b, 2] - r
+    # AGAINST THE SURFACE UNDER THE BODY NOW, where the scene can say. The
+    # flat plane of the surface it started on is wrong on a slope: a block
+    # sliding down a ramp is below its starting plane in the LAWFUL clip, so
+    # the twins' readings diverged by metres wherever the invalid block sank
+    # and stopped, and every bin saturated at 1.000. The support law had the
+    # same flaw and the same fix. The surface is the highest one under the
+    # body's TOP, so a body sunk into a face is still measured against it.
+    spec = ctx.get("spec")
+    if spec is not None and ctx.get("surface_follows", True):
+        xy = np.asarray(traj.pos[:, b, :2], np.float64)
+        top_z = np.asarray(traj.pos[:, b, 2], np.float64) + r
+        ground = np.array([ground_under(spec, float(p[0]), float(p[1]), float(z))
+                           for p, z in zip(xy, top_z)])
+        # Never below the declared surface: a body carried off the edge of a
+        # raised surface is judged by `support_bounds` below, not by the floor.
+        top = np.where(ground > float(spec.floor_level) + 1e-6, ground, top)
     depth = np.maximum(0.0, top - lowest)
     bounds = ctx.get("support_bounds")
     if bounds is not None:
@@ -660,6 +688,15 @@ def friction(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
         near[1:] |= side[:-1]
         near[:-1] |= side[1:]
         out = out * (~near)
+    # SUSTAINED, as friction is. The deceleration is a central difference, so
+    # the frame the grip engages reads as a jolt -- the same one at every bin,
+    # and it set the peak: on `barrier_pass` 778 the three bins stopped at 46,
+    # 40 and 34% of their lawful travel and scored 0.87 / 0.88 / 0.81. Averaged
+    # over `FRICTION_SMOOTH_SECONDS` the jolt washes out and what is left is
+    # the braking that lasts.
+    k = max(1, int(round(FRICTION_SMOOTH_SECONDS / max(float(traj.dt), 1e-9))))
+    if k > 1 and out.shape[0] >= k:
+        out = np.convolve(out, np.ones(k) / k, mode="same")
     return out
 
 

@@ -455,7 +455,15 @@ class Friction(Injector):
             if run is not None:
                 lo, hi = max(1, run[0] + 1), min(T - 2, run[1] - 1)
                 if lo <= hi:
-                    t0 = _geom.frame_in_band(spec, lo, hi)
+                    # EARLY IN THE SLIDE, while the block is still slow. Braked
+                    # late, near the lip, stopping on what is left of the ramp
+                    # took several g, and a cube braked that hard does not
+                    # slide to a halt -- it pitches over its leading edge and
+                    # tumbles on down, which is what every ramp clip showed.
+                    # The first quarter of the run leaves stopping to a
+                    # fraction of g; the moment still varies within it.
+                    t0 = _geom.frame_in_band(spec, lo,
+                                             lo + max(1, (hi - lo) // 4))
                     ramp_end = hi
         if not (1 <= t0 < T - 1):
             return None
@@ -555,6 +563,12 @@ class Friction(Injector):
             lawful = float(np.median(_laws.get("friction")(traj, bi, {})[t0:end + 1]))
             r_strong = max(1e-3, (v * v / (2.0 * d_strong) + g * np.sin(tilt)) / g
                            - lawful)
+            d_bin = (max(1e-3, float(self.TRAVEL_BY_BIN[severity_bin]) * d_ramp)
+                     if on_ramp else max(1e-3, float(target)))
+            brake = {"v": v, "tilt": tilt, "lawful": lawful,
+                     "d_bin": d_bin, "d_strong": d_strong}
+        else:
+            brake = None
         intervention = [(t0, T - 1 if on_ramp else
                          (ramp_end if ramp_end is not None else T - 1))]
         return InterventionPlan(
@@ -591,7 +605,46 @@ class Friction(Injector):
                    "rolling_friction": roll,
                    "target_distance_m": float(target),
                    "ramp_window_end": ramp_end,
+                   "brake": brake,
                    "r_strong": float(r_strong)})
+
+    def refine_windows(self, spec, traj_valid, traj_invalid, plan) -> None:
+        """Anchor the strong reference on this clip's measured braking.
+
+        The plan's reference is the physics of the strong bin -- speed,
+        stopping distance, slope -- and it is right to within about 15%. That
+        is not close enough on a slope, where most of every bin's reading is
+        the same thing: a body NOT sliding downhill, g sin t, about 0.33 g on
+        `rolling_ramp`. The bins differ by the braking on top of it, 0.06 g
+        against 0.11, so a 15% error put weak over the reference and all three
+        read 1.000. The model is kept for what it gets right, the ratio of
+        strong's braking to this bin's, and this clip's measured excess sets
+        the level: strong's is this one's times that ratio.
+        """
+        brake = plan.notes.get("brake")
+        if not brake:
+            return
+        from ..residuals import laws as _laws
+
+        g = 9.81
+
+        def model(d):
+            return max(1e-6, (brake["v"] ** 2 / (2.0 * max(d, 1e-6))
+                              + g * np.sin(brake["tilt"])) / g - brake["lawful"])
+
+        law = _laws.get("friction")
+        measured = 0.0
+        for bid in plan.causal_body_ids:
+            try:
+                bi_v = traj_valid.index_of(int(bid))
+                bi_i = traj_invalid.index_of(int(bid))
+            except KeyError:
+                continue
+            measured = max(measured, float(np.maximum(
+                0.0, law(traj_invalid, bi_i, {}) - law(traj_valid, bi_v, {})).max()))
+        if measured > 1e-9:
+            plan.notes["r_strong"] = float(
+                measured * model(brake["d_strong"]) / model(brake["d_bin"]))
 
     def _stopping_point(self, spec, traj, bi: int, t0: int, severity_bin: str):
         """Where along its lawful path the body will have come to rest.

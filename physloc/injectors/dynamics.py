@@ -33,14 +33,36 @@ class PhantomImpulse(Injector):
     DV_BY_BIN = {"weak": 1.8, "medium": 4.2, "strong": 10.0}     # m/s
     #: Frames the violator may spend off camera before the fit weakens the shove.
     FRAME_TOLERANCE = 4
-    #: Frames a settled medium must have left after the shove for it to be
-    #: shoved there rather than in flight -- a third of the debug tier, enough
-    #: for a spilled pile to leave the box and land.
-    MEDIUM_ROOM = 8
+    #: How often a MEDIUM is shoved while it is still falling, rather than
+    #: once it has settled into a heap. A pour reversing mid-air is the natural
+    #: form of the violation; a settled pile jumping is a stranger one, kept
+    #: but made the minority. See `_medium_fall_frames`.
+    MEDIUM_FALL_SHARE = 0.75
+    #: A medium counts as falling while at least this share of its grains is
+    #: descending faster than `MEDIUM_FALL_SPEED` m/s.
+    MEDIUM_FALLING_SHARE = 0.5
+    MEDIUM_FALL_SPEED = 0.5
 
     def strong_residual_reference(self, spec) -> float:
         g_dt = 9.81 / float(spec.tier.fps)
         return float(self.DV_BY_BIN["strong"] / g_dt)
+
+    def _medium_fall_frames(self, spec, traj, indices, T) -> np.ndarray:
+        """The frames a medium is visibly falling on, where a shove may go.
+
+        Falling is read on the whole medium -- a share of its grains still
+        descending -- not on one grain's contacts, which begin on every frame of
+        a pour. Not before `EVENT_EARLIEST_SECONDS`, so the lawful fall is seen
+        first, and leaving `min_visible_frames` for the consequence.
+        """
+        vz = np.asarray(traj.lin_vel[:, indices, 2], np.float64)
+        falling = (vz < -self.MEDIUM_FALL_SPEED).mean(axis=1) \
+            >= self.MEDIUM_FALLING_SHARE
+        lo = max(1, int(round(_geom.EVENT_EARLIEST_SECONDS * _geom._fps(spec))))
+        hi = T - 1 - _geom.min_visible_frames(spec, T)
+        falling[:lo] = False
+        falling[hi + 1:] = False
+        return np.flatnonzero(falling)
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         targets = self._group(spec)
@@ -103,12 +125,27 @@ class PhantomImpulse(Injector):
                 break
         if not choices.size:
             return None
+        # A MEDIUM IS SHOVED MOSTLY WHILE IT FALLS. The candidates above never
+        # reach the fall on a pour: the grains descend over the first half
+        # second, the band opens as they land, and the landing is one long
+        # impact because grains reach the box on every frame of it. So
+        # `band & moving & usable` came out empty on every pour measured and
+        # every shove landed on a settled heap, 14-22 frames in. A pour
+        # reversing in mid-air is the violation a viewer expects; a heap
+        # jumping is kept, as the rarer branch.
+        if len(targets) > 1:
+            falling = self._medium_fall_frames(spec, traj, indices, T)
+            if (falling.size and _geom.event_fraction(spec, salt=3103)
+                    < self.MEDIUM_FALL_SHARE):
+                choices = falling
+            else:
+                # Settled: only what comes after the fall. The fallbacks above
+                # can still reach landing frames, which belong to neither.
+                after = choices[choices > (falling.max() if falling.size else -1)]
+                choices = after if after.size else choices
         u = _geom.event_fraction(spec, salt=3102)
         t0 = int(choices[min(len(choices) - 1,
                              int(round(u * (len(choices) - 1))))])
-        # A granular medium moves only while it pours, so the moving-frame gate
-        # above already kicks it during descent rather than as a heap twitch;
-        # the whole group then receives the same clear shove.
         if t0 is None or not (1 <= t0 < T - 1):
             return None
         # ON A CONSTRAINT, kick it where it is already moving. The intervention

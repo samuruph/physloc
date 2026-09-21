@@ -98,6 +98,29 @@ def _obstacle_pairs(traj, t_event):
     return out
 
 
+def _jumped_past(traj, t_event, pair, violators, delta):
+    """Did a jump of `delta` carry the violator beyond where it lawfully
+    touched the other body of `pair` -- past the obstacle, not away from it?"""
+    import numpy as np
+
+    c = traj.contacts
+    point = None
+    for k in range(len(c)):
+        if (int(c.frame[k]) >= t_event
+                and {int(c.body_a[k]), int(c.body_b[k])} == set(pair)):
+            point = np.asarray(c.point[k], float)
+            break
+    body = next((i for i in pair if i in violators), None)
+    if point is None or body is None:
+        return True
+    start = np.asarray(traj.pos[max(0, t_event - 1), traj.index_of(body)], float)
+    towards = point - start
+    reach = float(towards @ towards)
+    if reach < 1e-9:
+        return True
+    return float(np.asarray(delta, float) @ towards) >= reach
+
+
 def _pairs_after(traj, t_event):
     c = traj.contacts
     return {(int(a), int(b)) for f, a, b in
@@ -209,6 +232,17 @@ def test_a_prevented_collision_leaves_no_contact(work):
         # correct; the claim is about an OBSTACLE it was moved past.
         obstacle = {p for p in _obstacle_pairs(a, te)
                     if p[0] in violators or p[1] in violators}
+        # PAST it, as the claim says -- not merely moved. A teleport's heading
+        # is drawn, and a body jumped BACKWARDS, away from what it was rolling
+        # towards, rolls on and meets it later: the contact survives and the
+        # physics is right. Measured on `collision` 777, where the striker was
+        # set back 0.5 m and still struck its target. Only an obstacle the jump
+        # carries the body beyond has to lose the contact.
+        if family == "continuity":
+            delta = (blob.get("intervention") or {}).get("params", {}).get("delta_m")
+            if delta is not None:
+                obstacle = {p for p in obstacle
+                            if _jumped_past(a, te, p, violators, delta)}
         if not obstacle:
             continue
 

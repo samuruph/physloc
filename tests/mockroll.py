@@ -7,10 +7,13 @@ produces a trajectory of roughly the right shape -- things fall, land, collide
 and are recorded as contacts -- which is enough to exercise every `plan()` and
 `apply()` path end to end. Physical fidelity is the container's job.
 
-Ramps are treated as axis-aligned boxes, so a block "slides" by dropping onto
-the slab's bounding top. That is wrong, and deliberately so: the test asks
-whether the code runs and the annotations are structurally sound, never whether
-the numbers are right.
+A tilted slab -- a ramp -- is a slope: a body resting on it is pushed along its
+face by gravity and slowed by friction along it. It used to be an axis-aligned
+box at its bounding top, a flat plateau a block crept across and stopped on,
+which quietly decided whether `rolling_ramp`'s in-flight families could plan at
+all: once its block was enlarged it stopped short of the lip on every seed the
+tests try. The test still asks whether the code runs and the annotations are
+structurally sound, never whether the numbers are right.
 """
 from __future__ import annotations
 
@@ -34,19 +37,46 @@ def _fixed(body, held) -> bool:
     return bool(body.static) or int(body.segmentation_id) in held
 
 
+def _rot(q):
+    w, x, y, z = (float(c) for c in q)
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
 def _tops(spec):
-    """Static surfaces as (top_z, cx, cy, hx, hy, seg_id, mu), highest first."""
+    """Static surfaces as (top_z, surface, seg_id, mu), highest first.
+
+    `surface(x, y)` is `(z, normal)` of the top face over (x, y), or None when
+    (x, y) is off it -- a plane for a tilted slab, a flat top otherwise.
+    """
     out = []
     held = _held(spec)
     for b in spec.bodies:
         if not _fixed(b, held) or not b.collides:
             continue
         if b.kind == "cube":
-            out.append((b.position[2] + b.scale[2], b.position[0], b.position[1],
-                        b.scale[0], b.scale[1], int(b.segmentation_id),
+            R = _rot(b.quaternion or (1.0, 0.0, 0.0, 0.0))
+            c = np.asarray(b.position, np.float64)
+            half = np.asarray(b.scale, np.float64)
+            n = R[:, 2] if R[2, 2] >= 0 else -R[:, 2]
+            if abs(n[2]) < 0.2:
+                continue                      # a wall, handled by `_boxes`
+            face = c + n * half[2]
+
+            def surface(x, y, R=R, c=c, half=half, n=n, face=face):
+                z = face[2] - (n[0] * (x - face[0]) + n[1] * (y - face[1])) / n[2]
+                local = R.T @ (np.array([x, y, z]) - c)
+                if abs(local[0]) > half[0] or abs(local[1]) > half[1]:
+                    return None
+                return float(z), n
+            out.append((float(face[2]), surface, int(b.segmentation_id),
                         float(b.friction)))
         else:
-            out.append((spec.floor_level, 0.0, 0.0, 1e6, 1e6,
+            level = float(spec.floor_level)
+            up = np.array([0.0, 0.0, 1.0])
+            out.append((level, lambda x, y, level=level, up=up: (level, up),
                         int(b.segmentation_id), float(b.friction)))
     return sorted(out, key=lambda r: -r[0])
 
@@ -90,11 +120,14 @@ def _box_hit(box, point, radius):
     return n, seg
 
 
-def _ground(tops, x, y, floor_level):
-    for top, cx, cy, hx, hy, seg, mu in tops:
-        if abs(x - cx) <= hx and abs(y - cy) <= hy:
-            return top, seg, mu
-    return floor_level, 0, 0.6
+def _ground(tops, x, y, floor_level, below=np.inf):
+    """(z, normal, seg_id, mu) of the highest surface under (x, y) that is not
+    above `below` -- a body beneath a ramp stands on the floor, not the ramp."""
+    for _top, surface, seg, mu in tops:
+        hit = surface(x, y)
+        if hit is not None and hit[0] <= below + 1e-6:
+            return hit[0], hit[1], seg, mu
+    return floor_level, np.array([0.0, 0.0, 1.0]), 0, 0.6
 
 
 def roll(spec, scenario=None) -> Trajectory:
@@ -150,26 +183,34 @@ def roll(spec, scenario=None) -> Trajectory:
             for i in range(B):
                 if not free[i]:
                     continue
-                top, sid, mu_s = _ground(tops, p[i, 0], p[i, 1], spec.floor_level)
-                if p[i, 2] - r[i] <= top and v[i, 2] < 0.0:
-                    p[i, 2] = top + r[i]
-                    v[i, 2] = -v[i, 2] * float(bodies[i].restitution)
-                    if abs(v[i, 2]) < 0.06:
-                        v[i, 2] = 0.0
-                    note(f, seg[i], sid, [0.0, 0.0, 1.0], p[i].tolist())
+                top, n, sid, mu_s = _ground(tops, p[i, 0], p[i, 1],
+                                            spec.floor_level,
+                                            below=p[i, 2] + r[i])
+                # The centre stands `r` off the face along its normal, which on
+                # a slope is `r / n_z` above the face's height under it.
+                lift = r[i] / max(float(n[2]), 0.2)
+                vn = float(v[i] @ n)
+                if p[i, 2] - lift <= top and vn < 0.0:
+                    p[i, 2] = top + lift
+                    v[i] -= (1.0 + float(bodies[i].restitution)) * vn * n
+                    if abs(float(v[i] @ n)) < 0.06:
+                        v[i] -= float(v[i] @ n) * n
+                    note(f, seg[i], sid, n.tolist(), p[i].tolist())
                 # Coulomb friction while in contact with the surface below.
                 # The mock ran frictionless until a framing audit used it to ask
                 # "does the actor stay in shot?", and got 0% for `rolling_ramp`
                 # at the release tier because nothing here ever slowed a sliding body
                 # down. Physical fidelity is still the container's job; this is
                 # only enough that a body which should coast to a halt does.
-                if p[i, 2] - r[i] <= top + 1e-4:
+                if p[i, 2] - lift <= top + 1e-4:
                     mu = float(bodies[i].friction) * mu_s   # PyBullet's default
-                    vt = v[i, :2]
-                    sp = float(np.hypot(vt[0], vt[1]))
+                    # Along the FACE: on a slope that is the direction a body
+                    # slides in, and the normal force is g's share across it.
+                    vt = v[i] - float(v[i] @ n) * n
+                    sp = float(np.linalg.norm(vt))
                     if sp > 1e-9:
-                        dv = mu * float(abs(g[2])) * h
-                        v[i, :2] = vt * max(0.0, 1.0 - dv / sp)
+                        dv = mu * float(abs(g[2])) * float(n[2]) * h
+                        v[i] = v[i] - vt + vt * max(0.0, 1.0 - dv / sp)
                 # Sphere against a static box, treated as axis-aligned. Needed
                 # because a scenario whose central event the mock cannot
                 # produce is a blind spot in the only test that covers every

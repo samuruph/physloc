@@ -48,7 +48,9 @@ class RampSlide(Scenario):
         # a violation fired on it had little run left to show in. Drawing the
         # lip rather than the centre also varies the scene, which a fixed ramp
         # did not. The camera is framed on whatever results, below.
-        lip_z = float(rng.uniform(0.55, 0.95))
+        # Its own stream, so the draw leaves every later physics value of the
+        # seed where it was (see `rolling_ramp`).
+        lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(0.55, 0.95))
         centre = (0.0, 0.0, lip_z + half_len * math.sin(tilt))
         half = float(rng.uniform(0.18, 0.24)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.7))

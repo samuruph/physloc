@@ -49,6 +49,16 @@ class Collision(Scenario):
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+        # NEVER DRAWN TOO SMALL TO SEE. The shot is framed on the action, and
+        # where that is wide the object shrinks with it; this enlarges it,
+        # before anything is simulated, until it is drawn at least
+        # `C.MIN_SCREEN_SHARE` of the frame wide -- see `at_least_screen_share`.
+        return C.at_least_screen_share(
+            lambda boost: self._build(seed, tier, complexity, boost),
+            self.SEG_A, C.size_scale(seed, self.name))
+
+    def _build(self, seed: int, tier: Tier, complexity: str,
+               boost: float = 1.0) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         # ONE appearance stream for the whole sample. `appearance_rng` builds a
@@ -66,7 +76,7 @@ class Collision(Scenario):
         # is that nothing in the image justifies that ratio. Give the balls
         # different sizes and "the big one is heavier" becomes a perfectly good
         # reading, and the family stops testing anything.
-        radius = float(rng.uniform(0.28, 0.36)) * C.size_scale(seed, self.name)
+        radius = float(rng.uniform(0.28, 0.36)) * C.size_scale(seed, self.name) * boost
         r_a = r_b = radius
         hue = float(rng.uniform(0, 1))
         # One shared draw, not one each -- see the IDENTICAL comment above:

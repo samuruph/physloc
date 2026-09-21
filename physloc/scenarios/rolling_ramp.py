@@ -26,6 +26,16 @@ class RollingRamp(Scenario):
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+        # NEVER DRAWN TOO SMALL TO SEE. The shot is framed on the action, and
+        # where that is wide the object shrinks with it; this enlarges it,
+        # before anything is simulated, until it is drawn at least
+        # `C.MIN_SCREEN_SHARE` of the frame wide -- see `at_least_screen_share`.
+        return C.at_least_screen_share(
+            lambda boost: self._build(seed, tier, complexity, boost),
+            self.SEG_BLOCK, C.size_scale(seed, self.name))
+
+    def _build(self, seed: int, tier: Tier, complexity: str,
+               boost: float = 1.0) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         # ONE appearance stream for the whole sample. `appearance_rng` builds a
@@ -69,7 +79,7 @@ class RollingRamp(Scenario):
         # about 0.6-0.7 s.
         lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(2.70, 3.30))
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
-        half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
+        half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name) * boost
         v0 = float(rng.uniform(0.3, 0.8))
         mu = float(rng.uniform(0.25, 0.38))
         d, _ = C.ramp_axes(tilt)

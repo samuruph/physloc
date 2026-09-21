@@ -230,6 +230,59 @@ def size_scale(seed: int, scenario: str) -> float:
     return float(rng.uniform(lo, hi)) if hi > lo else lo
 
 
+#: The smallest a scenario's main object may be DRAWN, as a share of the frame
+#: width at its own depth -- at the scenario's nominal size, so `size_scale`
+#: still varies it from scene to scene around whatever this settles on.
+#: Measured before this existed: the ramps' blocks came out at 4.4-4.6% of the
+#: frame (6 px across at the debug tier) because their shots hold a whole ramp,
+#: a flight and a run-out, against 10-20% everywhere else.
+MIN_SCREEN_SHARE = 0.12
+#: ...but never more than this multiple of the scenario's own size: past it a
+#: ramp's block starts to dwarf the ramp it slides on.
+MAX_SCREEN_BOOST = 2.0
+
+
+def screen_share(spec, seg_id: int) -> float:
+    """How wide body `seg_id` is drawn, as a share of the frame width at its
+    own distance from the camera, at its starting position. Pure geometry on
+    the spec -- nothing is simulated or rendered to answer it."""
+    import numpy as np
+
+    from .. import camera as cam
+
+    body = next(b for b in spec.bodies if int(b.segmentation_id) == int(seg_id))
+    d = float(np.linalg.norm(np.asarray(spec.camera_position, np.float64)
+                             - np.asarray(body.position, np.float64)))
+    return float(body.bounding_radius) / max(cam.TAN_HALF_FOV * d, 1e-9)
+
+
+def at_least_screen_share(build, seg_id: int, nominal_scale: float,
+                          floor: float = None, cap: float = None,
+                          rounds: int = 4):
+    """Build a scene, and rebuild it with its main object enlarged until the
+    object is drawn at least `floor` of the frame wide at its nominal size.
+
+    `build(boost)` must build the whole scene with the object's size draw
+    multiplied by `boost`, and must draw everything from the seed afresh, so a
+    rebuild changes the size and whatever follows from it -- placement,
+    run-out, framing -- and nothing else. Iterated, because a scene that frames
+    its object widens its shot a little as the object grows. All of it happens
+    before anything is simulated.
+    """
+    floor = MIN_SCREEN_SHARE if floor is None else float(floor)
+    cap = MAX_SCREEN_BOOST if cap is None else float(cap)
+    boost = 1.0
+    spec = build(boost)
+    for _ in range(rounds):
+        share = screen_share(spec, seg_id) / max(float(nominal_scale), 1e-9)
+        if share >= floor * 0.99 or boost >= cap:
+            break
+        boost = min(cap, boost * floor / max(share, 1e-9))
+        spec = build(boost)
+    spec.notes["screen_boost"] = float(boost)
+    return spec
+
+
 def understudy(actor: BodySpec, seg_id: int) -> BodySpec:
     """A dormant duplicate of `actor`, parked out of the render until summoned.
 

@@ -395,7 +395,12 @@ class GlobalGravity(_GravityScale):
     #: and medium as invisible on `pour` -- at 0.75 and 0.45 deviation, spread
     #: over a trapezoid whose mean is well under its peak, they were a pour
     #: falling slightly slowly.
-    ALPHA_BY_BIN = {"weak": 0.40, "medium": -0.35, "strong": -1.8}
+    #: Stronger across the board, and strong most of all, from 0.40 / -0.35 /
+    #: -1.8: you judged every bin too gentle and strong not strong at all. The
+    #: window is fitted on the strongest bin but already sits at its three-frame
+    #: floor on every scene measured, so a harder strong cannot shorten it and
+    #: take the weaker bins down with it -- it simply lifts further.
+    ALPHA_BY_BIN = {"weak": 0.25, "medium": -0.6, "strong": -3.0}
     #: The ladder for a scene whose bodies are RESTING when gravity bends.
     #:
     #: A lighter gravity moves nothing that is already supported: a mug on a
@@ -409,7 +414,10 @@ class GlobalGravity(_GravityScale):
     #: Weak at -0.35 was scored but, on `collision`, seen: two rolling
     #: spheres hopped a few centimetres within the three-frame window, 0.13% of
     #: the frame on one frame. -0.6 lifts them visibly.
-    SUPPORTED_ALPHA_BY_BIN = {"weak": -0.6, "medium": -1.1, "strong": -1.8}
+    #: Raised again, from -0.6 / -1.1 / -1.8, for the same reason as the
+    #: free-fall ladder: measured over the three-frame window, strong lifted
+    #: bodies 0.5-1.0 m and weak as little as 0.06 m.
+    SUPPORTED_ALPHA_BY_BIN = {"weak": -1.0, "medium": -1.8, "strong": -3.2}
     #: Share of the bodies in contact at the event for the scene to count as
     #: resting rather than falling.
     SUPPORTED_SHARE = 0.5
@@ -451,6 +459,9 @@ class Continuity(Injector):
 
     family = "continuity"
     JUMP_RADII = {"weak": 1.5, "medium": 4.0, "strong": 9.0}
+    #: `position_continuity`'s own `step_tolerance`: the jump is sized to
+    #: clear exactly the reach that law allows -- see `plan`.
+    STEP_TOLERANCE = 1.6
     #: Turns added to the scene's heading per event attempt: the drawn heading,
     #: its reverse, then either side -- see `plan`.
     RETRY_HEADING_TURNS = (0.0, np.pi, 0.5 * np.pi, -0.5 * np.pi)
@@ -507,17 +518,47 @@ class Continuity(Injector):
         heading += self.RETRY_HEADING_TURNS[
             _geom.event_attempt() % len(self.RETRY_HEADING_TURNS)]
         direction = np.array([np.cos(heading), np.sin(heading), 0.0])
-        nominal = direction * jump_r * radius
+        # PAST WHAT THE MOTION EXPLAINS. A teleport is a step no plausible speed
+        # covers, and `position_continuity` scores exactly that: the step less
+        # `step_tolerance` x the speed on either side, in radii. A jump of 1.5
+        # radii on a body already covering more than that per frame -- a
+        # falling ball, a pendulum bob, a block sliding off a ramp -- was on
+        # screen and scored 0.000; weak `continuity` failed on nine scenarios
+        # of the review sweep that way. So the bins are radii BEYOND the
+        # body's own travel, which is what the law reads back.
+        idx = [traj.index_of(int(b.segmentation_id)) for b in targets]
+        speed = float(np.linalg.norm(np.asarray(
+            traj.lin_vel[max(0, t0 - 1):t0 + 1, idx, :], np.float64), axis=2).max())
+        bi0 = traj.index_of(int(actor.segmentation_id))
+        travel = (np.asarray(traj.pos[t0, bi0], np.float64)
+                  - np.asarray(traj.pos[max(0, t0 - 1), bi0], np.float64))
+
+        def jump_for(radii):
+            """The shortest jump along `direction` whose step exceeds the law's
+            reach by `radii`: |travel + L*u| = tol*speed*dt + radii*r, solved
+            for L. Exact for the heading drawn, so it is no longer than it
+            needs to be -- a fixed worst-case margin (a jump straight against
+            the motion) overshot, and on `drop` pushed weak into obstacles
+            strong jumped clear of."""
+            want = self.STEP_TOLERANCE * speed * float(traj.dt) + radii * radius
+            b = float(travel @ direction)
+            disc = b * b - float(travel @ travel) + want * want
+            return direction * max(0.0, -b + float(np.sqrt(max(disc, 0.0))))
+
+        nominal = jump_for(jump_r)
         # A teleport big enough to leave the frame depicts an object vanishing,
         # which is `permanence`, not `continuity`. Shorten it until both lobes
         # of the two-lobed mask are actually in shot -- fitting on the longest
-        # jump so all three bins shrink together and stay ordered.
-        strongest = direction * self.JUMP_RADII["strong"] * radius
+        # jump so all three bins shrink together and stay ordered. Only the
+        # radii shrink: `reach` is what makes it a teleport at all.
+        strongest = jump_for(self.JUMP_RADII["strong"])
         scale, _ = self._fit_to_frame(
             spec, traj, [actor], t0, strongest,
-            lambda k: self._teleport(traj, actor, t0, strongest * k),
-            memo=("teleport",) + tuple(round(float(x), 9) for x in strongest))
-        delta = nominal * scale
+            lambda k: self._teleport(
+                traj, actor, t0, jump_for(self.JUMP_RADII["strong"] * k)),
+            memo=("teleport",) + tuple(round(float(x), 9)
+                                       for x in tuple(strongest) + tuple(travel)))
+        delta = jump_for(jump_r * scale)
         # LAND IT CLEAR. A teleport is a claim about position and nothing else,
         # so the body must not arrive inside something: on `collision` it
         # landed slightly overlapping the ball it was supposed to skip past,

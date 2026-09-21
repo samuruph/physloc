@@ -1810,12 +1810,37 @@ def cmd_audit(a) -> int:
     measures severity, observability and pixel evidence per cell so the decision
     to drop one is a number rather than an opinion.
     """
-    from .annotate.audit import audit, is_invisible, is_unscored
+    from .annotate.audit import audit, is_invisible, is_unscored, weak_failure
 
     rows = audit(a.root)
     if not rows:
         print("no invalid clips under %s" % a.root, file=sys.stderr)
         return 2
+
+    # THE WEAKEST BIN IS STILL A VIOLATION. Small, never absent: a weak clip
+    # the eye cannot find, or one it can that scores zero, is a label without a
+    # picture or a picture without a label. Grouped by cell, because the fix is
+    # per family -- a stronger ladder for the first, a residual that sees the
+    # violation for the second.
+    weak_bad = {}
+    for r in rows:
+        why = weak_failure(r) if r["severity_bin"] == "weak" else ""
+        if why:
+            weak_bad.setdefault((r["family"], r["scenario"], why), []).append(r)
+    n_weak = sum(1 for r in rows if r["severity_bin"] == "weak")
+    print("%d weak clip(s), %d failing the weakest-bin rule (seen AND scored)\n"
+          % (n_weak, sum(len(v) for v in weak_bad.values())))
+    if weak_bad:
+        print("%-18s %-16s %-10s %5s %9s %9s %7s" % (
+            "family", "scenario", "why", "clips", "severity", "visible%",
+            "frames"))
+        for (fam, scn, why), rs in sorted(weak_bad.items()):
+            print("%-18s %-16s %-10s %5d %9.3f %9.2f %7d" % (
+                fam, scn, why, len(rs),
+                min(float(r["peak_severity"]) for r in rs),
+                100.0 * min(float(r.get("visible_share", 0.0)) for r in rs),
+                min(int(r.get("visible_frames", 0)) for r in rs)))
+        print()
 
     unscored = [r for r in rows if is_unscored(r)]
     if unscored:

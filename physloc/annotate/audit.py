@@ -29,6 +29,20 @@ MIN_SEVERITY = 0.02
 MIN_OBSERVABLE_FRAMES = 1
 MIN_EVIDENCE = 0.02          # peak |valid - invalid| inside the mask, 0..1
 
+#: WHAT A VIEWER CAN SEE, which `evidence` does not measure. It is the PEAK
+#: difference of a single pixel, so one anti-aliased edge flickering reads as
+#: much evidence as a body jumping across the frame: `global_gravity` weak on
+#: `resting_table` scored 0.43 with nothing visibly moving. So also count the
+#: pixels that change by at least `VISIBLE_STEP` of full intensity, and ask
+#: for a patch of them -- `MIN_VISIBLE_SHARE` of the frame -- on at least
+#: `MIN_VISIBLE_FRAMES` frames. 0.1% is a 4x4 patch at the debug tier's 128^2
+#: and 16x16 at 512^2.
+VISIBLE_STEP = 25            # of 255
+MIN_VISIBLE_SHARE = 0.001
+MIN_VISIBLE_FRAMES = 2
+#: The weakest bin must still be a violation: small, but seen and scored.
+MIN_WEAK_SEVERITY = 0.03
+
 
 def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
     """Severity, observability and pixel evidence for one invalid sample."""
@@ -47,6 +61,14 @@ def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
     mask = sample.violation.mask
     if mask.any() and sample.twin is not None:
         out["evidence"] = float(sample.divergence[mask].max())
+    out["visible_share"], out["visible_frames"] = 0.0, 0
+    if sample.twin is not None:
+        a = sample.video.rgb.astype(np.int16)
+        b = sample.twin.video.rgb.astype(np.int16)
+        changed = (np.abs(a - b).max(axis=-1) >= VISIBLE_STEP)
+        share = changed.reshape(changed.shape[0], -1).mean(axis=1)
+        out["visible_share"] = float(share.max())
+        out["visible_frames"] = int((share >= MIN_VISIBLE_SHARE).sum())
     sample.release()
     return out
 
@@ -69,6 +91,27 @@ def is_unscored(row: Dict[str, object]) -> bool:
     """
     return (float(row["evidence"]) >= MIN_EVIDENCE
             and float(row["peak_severity"]) < MIN_SEVERITY)
+
+
+def is_too_faint(row: Dict[str, object]) -> bool:
+    """A viewer could not see it: too few pixels change, on too few frames."""
+    return (float(row.get("visible_share", 0.0)) < MIN_VISIBLE_SHARE
+            or int(row.get("visible_frames", 0)) < MIN_VISIBLE_FRAMES)
+
+
+def weak_failure(row: Dict[str, object]) -> str:
+    """Why a clip fails the weakest-bin rule, or '' if it passes.
+
+    Every bin is a violation, including the weakest: it may be small, never
+    absent. Two ways to fail, and they call for different fixes -- a clip too
+    faint to see needs a stronger ladder; one that is seen but scores zero
+    needs its residual law to see what the picture shows.
+    """
+    if is_too_faint(row):
+        return "too faint"
+    if float(row["peak_severity"]) < MIN_WEAK_SEVERITY:
+        return "unscored"
+    return ""
 
 
 def audit(release_root: str) -> List[Dict[str, object]]:

@@ -34,3 +34,28 @@ def test_a_visible_clip_that_scores_zero_is_unscored():
     assert audit.weak_failure(_row(0.0, 0.05, 25)) == "unscored"
     assert audit.weak_failure(_row(audit.MIN_WEAK_SEVERITY - 1e-3, 0.05, 25)) \
         == "unscored"
+
+
+def _bins(pair, family, weak, medium, strong):
+    return [{"pair_uid": pair, "family": family, "scenario": "drop",
+             "severity_bin": b, "peak_severity": s}
+            for b, s in (("weak", weak), ("medium", medium), ("strong", strong))]
+
+
+def test_a_climbing_ladder_passes():
+    assert audit.ladder_failures(_bins("p", "f", 0.1, 0.4, 0.9)) == []
+
+
+def test_a_bin_milder_than_the_one_below_is_out_of_order():
+    out = audit.ladder_failures(_bins("p", "f", 0.5, 0.3, 0.9))
+    assert [r["why"] for r in out] == ["out of order"]
+
+
+def test_three_saturated_bins_are_one_bin():
+    out = audit.ladder_failures(_bins("p", "f", 1.0, 1.0, 1.0))
+    assert [r["why"] for r in out] == ["all saturated"]
+
+
+def test_a_scene_missing_a_bin_is_not_judged():
+    rows = [r for r in _bins("p", "f", 0.5, 0.3, 0.9) if r["severity_bin"] != "medium"]
+    assert audit.ladder_failures(rows) == []

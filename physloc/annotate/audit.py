@@ -50,6 +50,7 @@ def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
     out = {
         "scenario": sample.scene.scenario, "family": sample.scene.family,
         "severity_bin": sample.violation.severity_bin,
+        "pair_uid": sample.info.pair_uid,
         "peak_severity": 0.0, "observable_frames": 0, "evidence": 0.0,
     }
     tl = sample.violation.timeline
@@ -112,6 +113,40 @@ def weak_failure(row: Dict[str, object]) -> str:
     if float(row["peak_severity"]) < MIN_WEAK_SEVERITY:
         return "unscored"
     return ""
+
+
+#: How far a stronger bin may fall below a weaker one, in severity, before the
+#: ladder counts as out of order -- measurement noise, not a real reversal.
+LADDER_SLACK = 0.02
+BINS = ("weak", "medium", "strong")
+
+
+def ladder_failures(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Scenes whose three bins do not climb.
+
+    One scene -- one `pair_uid`, one family -- rendered at every bin must come
+    out weak <= medium <= strong in measured severity, and not all three
+    pinned at the ceiling, which is one bin wearing three labels. Scenes that
+    lack a bin are skipped: there is nothing to order.
+    """
+    by = {}
+    for r in rows:
+        by.setdefault((r.get("pair_uid"), r["family"]), {})[r["severity_bin"]] = r
+    out = []
+    for (pair, family), bins in sorted(by.items(), key=lambda kv: str(kv[0])):
+        if not all(b in bins for b in BINS):
+            continue
+        s = [float(bins[b]["peak_severity"]) for b in BINS]
+        why = ""
+        if s[0] > s[1] + LADDER_SLACK or s[1] > s[2] + LADDER_SLACK:
+            why = "out of order"
+        elif min(s) >= 0.99:
+            why = "all saturated"
+        if why:
+            out.append({"pair_uid": pair, "family": family,
+                        "scenario": bins["weak"]["scenario"],
+                        "severities": s, "why": why})
+    return out
 
 
 def audit(release_root: str) -> List[Dict[str, object]]:

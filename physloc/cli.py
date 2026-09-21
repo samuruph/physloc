@@ -1810,7 +1810,8 @@ def cmd_audit(a) -> int:
     measures severity, observability and pixel evidence per cell so the decision
     to drop one is a number rather than an opinion.
     """
-    from .annotate.audit import audit, is_invisible, is_unscored, weak_failure
+    from .annotate.audit import (audit, is_invisible, is_unscored,
+                                 ladder_failures, weak_failure)
 
     rows = audit(a.root)
     if not rows:
@@ -1827,6 +1828,15 @@ def cmd_audit(a) -> int:
         why = weak_failure(r) if r["severity_bin"] == "weak" else ""
         if why:
             weak_bad.setdefault((r["family"], r["scenario"], why), []).append(r)
+    ladders = ladder_failures(rows)
+    if ladders:
+        print("%d scene(s) whose bins do not climb weak -> medium -> strong:\n"
+              % len(ladders))
+        for r in ladders:
+            print("  %-16s %-18s %-14s %s" % (
+                r["scenario"], r["family"], r["why"],
+                " / ".join("%.2f" % x for x in r["severities"])))
+        print()
     n_weak = sum(1 for r in rows if r["severity_bin"] == "weak")
     print("%d weak clip(s), %d failing the weakest-bin rule (seen AND scored)\n"
           % (n_weak, sum(len(v) for v in weak_bad.values())))

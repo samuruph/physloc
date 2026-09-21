@@ -42,6 +42,14 @@ class BarrierPass(Scenario):
     #: premise of the scenario.
     MIN_ARRIVAL_SPEED = 0.75
 
+    #: Room for the rebound at this multiple of the arrival speed -- a
+    #: super-elastic bounce at gain 2 -- over `VISIBLE_SHARE` of the clip after
+    #: the impact. See the framing in `_sample`.
+    HEADROOM = 2.0
+    VISIBLE_SHARE = 0.45
+    #: Share of the frame's width the framed box may fill.
+    FILL = 0.85
+
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
@@ -116,12 +124,34 @@ class BarrierPass(Scenario):
             color=(0.30, 0.31, 0.37), segmentation_id=self.SEG_WALL,
             role="occluder")
 
+        # FRAMED ON THE REBOUND, as `collision` is on its struck ball. The ball
+        # comes back from the wall the way it came, and a super-elastic bounce
+        # sends it back faster: at a speed gain of 2 it left the fixed shot at
+        # frame 28 of 37, two frames before the visible span a violation needs,
+        # so the fit held strong to 1.5 and the three bins were barely apart.
+        # Frame the launch, the wall, and the rebound at up to `HEADROOM` x the
+        # arrival speed over that span; keep the hand-composed viewpoint and
+        # only pull it back as far as that needs.
+        def roll(v, t):
+            t = min(t, v / max(decel, 1e-9))
+            return v * t - 0.5 * decel * t * t
+
+        t_vis = min(flight - t_travel, self.VISIBLE_SHARE * flight)
+        x_lo = min(x0, wall_x - thickness - radius
+                   - roll(self.HEADROOM * v_arrive, t_vis)) - radius
+        x_hi = wall_x + thickness
+        width = (x_hi - x_lo) / self.FILL
+        # `frame_extent` is the HALF-width.
+        pull = max(1.0, width / (2.0 * cam.frame_extent(CAMERA, LOOK_AT)))
+        look_at = (min(LOOK_AT[0], 0.5 * (x_lo + x_hi)), LOOK_AT[1], LOOK_AT[2])
+        eye = tuple(look_at[i] + pull * (CAMERA[i] - LOOK_AT[i]) for i in range(3))
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR), wall, ball,
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
-            camera_position=CAMERA, camera_look_at=LOOK_AT,
+            camera_position=eye, camera_look_at=look_at,
             floor_level=0.0, complexity=complexity,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,
                    "wall_id": self.SEG_WALL, "actor_kind": kind,

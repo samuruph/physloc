@@ -33,6 +33,20 @@ class Collision(Scenario):
     #: families are built to test.
     MIN_MEET_SPEED = 0.85
 
+    #: Room in the frame for the struck ball leaving at this multiple of the
+    #: meeting speed -- a super-elastic hit at gain 2.5 -- and for the striker
+    #: rolling back at `BACK_SHARE` of that. See the framing in `_sample`.
+    HEADROOM = 1.75
+    BACK_SHARE = 0.45
+    #: The share of the clip after the meeting the bodies are framed for: the
+    #: visible span a violation needs, with a margin.
+    VISIBLE_SHARE = 0.45
+    #: Share of the frame's width the framed box may fill.
+    FILL = 0.85
+    #: How much of the approach is in shot: the striker is framed from this
+    #: far into its roll towards the target.
+    APPROACH_SHOWN = 0.4
+
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
@@ -121,12 +135,47 @@ class Collision(Scenario):
         striker = C.with_material(striker, mat, arng, look=look)
         target = C.with_material(target, mat, arng, look=look)
 
+        # FRAMED ON WHERE THE STRUCK BALL GOES, not a fixed eye. The fixed
+        # camera lost the struck ball even in the LAWFUL clip -- it rolled out
+        # at frame 27 of 37 -- so any family that sends it off faster had no
+        # room at all: `superelastic` was fitted down to 1-7% of its gain and
+        # its three bins came out as one clip. Frame the striker's start, the
+        # struck ball's travel at up to `HEADROOM` x the meeting speed (a
+        # strong super-elastic hit), and the striker rolling back, over the
+        # stretch a violation must stay visible for.
+        v_fast = self.HEADROOM * v_meet
+        t_vis = min(flight - t_travel, self.VISIBLE_SHARE * flight)
+
+        def roll(v, t):
+            t_stop = v / max(decel, 1e-9)
+            t = min(t, t_stop)
+            return v * t - 0.5 * decel * t * t
+
+        # The striker from partway into its approach, not its start: the old
+        # camera never showed the start either -- the striker rolled in from
+        # off shot -- and framing it doubled the width for nothing.
+        x_in = striker_x + roll(speed, self.APPROACH_SHOWN * t_travel)
+        x_lo = min(x_in, target_x - r_b - r_a
+                   - roll(self.BACK_SHARE * v_fast, t_vis)) - r_a
+        x_hi = target_x + roll(v_fast, t_vis) + r_b
+        # The hand-composed VIEWPOINT is kept -- its elevation and direction --
+        # and only moved: centred on the action and pulled back as far as the
+        # run-out needs, never closer than it was. `frame_box` would have
+        # dropped the eye to table height, a different shot.
+        xc = 0.5 * (x_lo + x_hi)
+        width = (x_hi - x_lo) / self.FILL
+        # `frame_extent` is the HALF-width.
+        pull = max(1.0, width / (2.0 * cam.frame_extent(CAMERA, LOOK_AT)))
+        camera_look_at = (xc, LOOK_AT[1], LOOK_AT[2])
+        camera_position = tuple(camera_look_at[i] + pull * (CAMERA[i] - LOOK_AT[i])
+                                for i in range(3))
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR), striker, target,
                     C.understudy(striker, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
-            camera_position=CAMERA, camera_look_at=LOOK_AT,
+            camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
                    "identical_actors": True, "target_at_rest": True,

@@ -1,11 +1,12 @@
 """`pendulum_swing` -- a bob on a rigid rod, swinging about a fixed pivot.
 
-The one scenario whose motion the simulator does not solve. Kubric exposes no
-joints and PyBullet's are not reachable through it, so the arc is written
-analytically and replayed as keyframes. That is a use of the trajectory seam,
-not a hole in it: everything downstream still reads one `traj.npz`, the twins
-still share a bit-identical render path, and an injector still edits a finished
-trajectory.
+The bob is SIMULATED: an ordinary dynamic body that falls under gravity, held
+on its arc by a rod the solver enforces every substep (`sim_hooks`). Kubric
+exposes no joints, so the rod is a distance constraint applied by hook rather
+than a PyBullet joint. Only the rod's VISUAL is scripted -- it is carried
+between pivot and bob and collides with nothing. (This docstring used to say
+the arc was written analytically and replayed as keyframes; that stopped
+being true when the constraint replaced the analytic arc.)
 
 Constrained periodic motion is what `angular_momentum` needs: on a free body a
 spin reversal is a curiosity, but on a pendulum it is a swing that turns around

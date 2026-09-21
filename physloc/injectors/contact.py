@@ -262,6 +262,14 @@ class Solidity(Injector):
     #: push it back up to the depth it overshot -- and stay modest, because this
     #: is a surface yielding, not a trampoline.
     SPRING_MAX = 4.0
+    #: Horizontal drag, in 1/s, on a body while it is inside the surface. The
+    #: hold above is purely vertical, so a sunken body had nothing to grip it
+    #: sideways: it glided as if on ice. Measured on `pour` medium, the median
+    #: grain slid at a constant 0.47 m/s from frame 16 to the last and ended
+    #: 19 radii from where the lawful pile put it -- a pile that kept spreading
+    #: instead of a floor that gave way. A surface that yields still grips; at
+    #: 6/s a slide stops within half a second.
+    DRAG = 6.0
     #: How long the collision pair stays suppressed, in SECONDS. This IS the
     #: severity axis once the violation is staged: the pair is either enforced
     #: or it is not, so "how deep" is not a dial the simulator has -- but "for
@@ -838,10 +846,11 @@ class Solidity(Injector):
                 below = rest - z
                 if below <= 0.0:
                     continue
-                vz = float(pb.getBaseVelocity(idx)[0][2])
+                vx, vy, vz = (float(x) for x in pb.getBaseVelocity(idx)[0])
                 hold = min(below / sink, self.SPRING_MAX)
                 fz = mass * (g * hold - self.ARREST * min(vz, 0.0))
-                pb.applyExternalForce(idx, -1, (0.0, 0.0, fz),
+                fx, fy = -mass * self.DRAG * vx, -mass * self.DRAG * vy
+                pb.applyExternalForce(idx, -1, (fx, fy, fz),
                                       list(pb.getBasePositionAndOrientation(idx)[0]),
                                       pb.WORLD_FRAME)
 
@@ -855,8 +864,19 @@ class Solidity(Injector):
             # Every grain against every surface that could hold it up. The
             # grains stay solid to EACH OTHER, which is the point: the pour
             # still behaves like a pour on the way down, it simply has no floor.
+            #
+            # BENEATH, NOT AROUND. This used to take every static collider,
+            # which on `pour` is the floor AND the box's four walls -- so the
+            # recovered bins, whose grains are held at a shallow depth, had a
+            # pile with nothing containing it. Measured on L0 777: all 96 grains
+            # of `weak` and 94 of `medium` ended outside the box, flung up to
+            # 8.7 m, where the lawful pour loses half; the clip read as an
+            # explosion rather than a floor giving way. A surface whose top is
+            # above the one the grains rest on is a wall, and stays solid.
+            below = float(plan.notes.get("surface_top", spec.floor_level)) + 1e-2
             surfaces = [int(b.segmentation_id) for b in spec.bodies
-                        if b.static and b.collides]
+                        if b.static and b.collides
+                        and _geom.top_of(spec, b) <= below]
             out = []
             for bid in plan.causal_body_ids:
                 ia = stepper.pybullet_index(simulator, objs, spec, int(bid))

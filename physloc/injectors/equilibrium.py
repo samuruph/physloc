@@ -438,6 +438,27 @@ class Friction(Injector):
         mu = float(getattr(actor, "friction", 0.5))
         grip, roll, target = self._solve_grip(spec, traj, actor, bi, t0,
                                               severity_bin)
+        # ON A RAMP, THE SURFACE IS THE KNOB. PyBullet takes friction as the
+        # PRODUCT of the pair, and `ramp_slide` gives its ramp a coefficient of
+        # a few hundredths so the block slides at all -- so raising the block's
+        # own coefficient by 15% raised the contact's by 15% of almost nothing,
+        # and every weak clip there was indistinguishable from its twin. The
+        # solve also ignored the slope: stopping on an incline needs the grip to
+        # beat the downhill pull too, `(a + g sin t) / (g cos t)` rather than
+        # `a / g`. Solved for the contact, the ramp takes the difference -- it
+        # is the surface that grips harder than it should, which is the claim.
+        surface = None
+        if ramp_end is not None and spec.notes.get("tilt_rad") is not None:
+            tilt = float(spec.notes["tilt_rad"])
+            g = float(np.linalg.norm(traj.gravity)) or 9.81
+            v = float(np.linalg.norm(traj.lin_vel[t0, bi]))
+            accel = v * v / (2.0 * max(float(target), 1e-3))
+            need = (accel + g * np.sin(tilt)) / (g * np.cos(tilt))
+            ramp_body = next((b for b in spec.bodies
+                              if int(b.segmentation_id) == int(ramp_id)), None)
+            declared = float(getattr(ramp_body, "friction", 0.0) or 0.0)
+            surface = float(min(self.MAX_LATERAL,
+                                max(declared, need / max(grip, 1e-6))))
         intervention = [(t0, ramp_end if ramp_end is not None else T - 1)]
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
@@ -453,6 +474,9 @@ class Friction(Injector):
             params={"type": "friction_scale", "end_rate": rate,
                     "lateral_friction": grip, "rolling_friction": roll,
                     "declared_friction": mu,
+                    "surface_id": (int(ramp_id) if surface is not None
+                                   else None),
+                    "surface_friction": surface,
                     "travel_fraction": float(self.TRAVEL_BY_BIN[severity_bin]),
                     "target_distance_m": float(target)},
             # THE KNOB: how much of its lawful journey the body never makes.
@@ -584,6 +608,10 @@ class Friction(Injector):
                 pb.changeDynamics(idx, -1, lateralFriction=grip,
                                   rollingFriction=roll, spinningFriction=roll)
                 changed.append((idx, body))
+        surface = self._surface(spec, simulator, objs, plan)
+        if surface is not None:
+            pb.changeDynamics(surface[0], -1,
+                              lateralFriction=float(plan.params["surface_friction"]))
         end = plan.notes.get("ramp_window_end")
         if end is None or not changed:
             return ()
@@ -600,14 +628,34 @@ class Friction(Injector):
                     lateralFriction=float(getattr(body, "friction", 0.5)),
                     rollingFriction=declared_roll,
                     spinningFriction=declared_roll)
+            if surface is not None:
+                pb.changeDynamics(surface[0], -1, lateralFriction=surface[1])
             state["restored"] = True
 
         return (restore,)
+
+    @staticmethod
+    def _surface(spec, simulator, objs, plan):
+        """(pybullet index, declared friction) of the surface this plan grips
+        through, or None."""
+        sid = plan.params.get("surface_id")
+        if sid is None or plan.params.get("surface_friction") is None:
+            return None
+        from ..render import stepper
+        body = next((b for b in spec.bodies
+                     if int(b.segmentation_id) == int(sid)), None)
+        idx = stepper.pybullet_index(simulator, objs, spec, int(sid))
+        if body is None or idx is None:
+            return None
+        return idx, float(getattr(body, "friction", 0.5))
 
     def unstage(self, spec, simulator, objs, plan) -> None:
         import pybullet as pb
         from ..render import stepper
 
+        surface = self._surface(spec, simulator, objs, plan)
+        if surface is not None:
+            pb.changeDynamics(surface[0], -1, lateralFriction=surface[1])
         for bid in plan.causal_body_ids:
             body = next((b for b in spec.bodies
                          if int(b.segmentation_id) == int(bid)), None)

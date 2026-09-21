@@ -321,7 +321,14 @@ class ColourShift(Injector):
     #: so on colours whose antipode is closer than that, strong quietly came out
     #: no further than medium. Asking for more makes the solver take the
     #: furthest turn available on every starting colour.
-    DISTANCE_BY_BIN = {"weak": 0.25, "medium": 0.60, "strong": 1.30}
+    #:
+    #: Weak raised from 0.25, medium from 0.60. The distance is asked of the
+    #: MATERIAL, and shading and lighting compress it on the way to the pixel:
+    #: measured on the review sweep, weak moved the body's pixels by a median
+    #: 6-9 of 255 -- a change nobody watching the clip would see -- while
+    #: medium and strong both landed near 30. Every one of 23 weak clips was
+    #: too faint to find.
+    DISTANCE_BY_BIN = {"weak": 0.45, "medium": 0.75, "strong": 1.30}
     RAMP_FRACTION = 0.22
     RAMP_MIN = 3
 

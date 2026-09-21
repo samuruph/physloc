@@ -259,7 +259,15 @@ class PhantomImpulse(Injector):
             magnitude_unit="impulse_over_m_vtyp", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "delta_v_ms": dv})
+                   "delta_v_ms": dv,
+                   # THE REFERENCE THE FIT ACTUALLY LEFT. Every bin is scaled by
+                   # the frame fit, so the strong bin this clip is comparable
+                   # against is the FITTED one -- `superelastic` measures its
+                   # reference the same way. Divided by the nominal 10 m/s
+                   # instead, a pendulum fitted to 28% put weak at 0.02 however
+                   # plainly the bob's swing changed.
+                   "r_strong": float(self.DV_BY_BIN["strong"] * scale
+                                     / max(g_dt, 1e-9))})
 
     @staticmethod
     def _fastest_frame(traj, actor, want: int, T: int) -> int:

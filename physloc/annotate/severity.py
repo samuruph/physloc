@@ -82,7 +82,8 @@ class NoiseFloor:
 
 
 def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
-                  baseline: Optional[np.ndarray] = None) -> np.ndarray:
+                  baseline: Optional[np.ndarray] = None,
+                  excess_only: bool = False) -> np.ndarray:
     """Step 3. How far past its lawful twin this clip's residual sits.
 
     `baseline` is the *same body's residual in the valid twin, frame by frame*,
@@ -126,7 +127,13 @@ def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
     # and a resting body reads ~20 -- so the denominator clamped to 1e-9 and
     # every nonzero difference saturated at 1.0, flattening the severity ladder.
     denom = max(float(r_strong), 1e-9)
-    return np.clip(np.abs(r - base) / denom, 0.0, 1.0)
+    # `excess_only` for a family whose violation ADDS to a residual the lawful
+    # clip already carries. `friction` is extra deceleration; where it stops a
+    # body short of an impact the twin's deceleration at that impact has no
+    # counterpart, and an absolute difference scored the MISSING lawful spike
+    # -- the same size at every bin, so the ladder came out flat or reversed.
+    diff = np.maximum(0.0, r - base) if excess_only else np.abs(r - base)
+    return np.clip(diff / denom, 0.0, 1.0)
 
 
 def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],

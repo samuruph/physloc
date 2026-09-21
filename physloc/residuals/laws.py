@@ -19,6 +19,16 @@ Ctx = Dict[str, Any]
 _LAWS: Dict[str, Callable[[Trajectory, int, Ctx], np.ndarray]] = {}
 
 
+#: References for the discrete families' "how far / how long", each the
+#: nominal STRONG bin of its injector -- `tests/test_laws.py` pins them to the
+#: injectors' own tables so the two cannot drift apart.
+PERMANENCE_REF_SECONDS = 2.0     # strong: gone for the rest of the clip
+DISSOLVE_REF_SECONDS = 0.5       # strong: `Dissolve.FADE_BY_BIN["strong"]` of a clip
+FISSION_REF_RADII = 7.0          # `Fission.SEPARATION_BY_BIN["strong"]` (knob only now;
+                                 # the score's yardstick is the plan's own `r_strong`)
+FUSION_REF_RADII = 3.6           # `Fusion.MEET_RADII["strong"]`
+
+
 def register(name: str):
     def deco(fn):
         _LAWS[name] = fn
@@ -118,7 +128,32 @@ def mass_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     # precisely the disappearance and reappearance frames.
     returned = np.zeros_like(missing)
     returned[1:] = (present[1:] > 0.5) & (present[:-1] <= 0.5)
-    return np.maximum(missing, returned)
+    step = np.maximum(missing, returned)
+    # HOW LONG IT WAS GONE, which is what the bins vary: a body missing for
+    # half a second and one that never comes back were both "1.0 while
+    # absent", so weak, medium and strong all scored 1.000. Each absence --
+    # and the frame it ends on -- now carries its own length over
+    # `PERMANENCE_REF_SECONDS`. Read off the whole trajectory, because the
+    # event frames severity is gated on come before the length is known.
+    out = np.zeros_like(step)
+    T = step.shape[0]
+    f = 0
+    while f < T:
+        if missing[f] > 0.5:
+            g = f
+            while g < T and missing[g] > 0.5:
+                g += 1
+            # Gone to the last frame is gone for good -- the strongest claim
+            # there is, whatever time the clip had left when it fired.
+            share = (1.0 if g >= T else
+                     min(1.0, (g - f) * float(traj.dt) / PERMANENCE_REF_SECONDS))
+            out[f:g] = share
+            if g < T:
+                out[g] = share                      # the return
+            f = g
+        else:
+            f += 1
+    return out * (step > 0)
 
 
 @register("position_continuity")
@@ -298,8 +333,20 @@ def mass_dissolution(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """
     opaque = np.clip(np.asarray(traj.opacity[:, b], np.float64), 0.0, 1.0)
     gone = 1.0 - opaque / max(float(opaque[0]), 1e-9)
-    return np.maximum(np.clip(gone, 0.0, 1.0),
+    gone = np.maximum(np.clip(gone, 0.0, 1.0),
                       1.0 - traj.present[:, b].astype(np.float64))
+    # HOW ABRUPTLY, which is what the bins vary: a slow fade and a quick one
+    # both end at nothing, so every bin peaked at 1.000. The fraction gone is
+    # weighted by the fade's own speed -- the time from 5% to 95% gone,
+    # against `DISSOLVE_REF_SECONDS` -- so a body melting away over a second
+    # and a half reads as the milder of the two.
+    started = np.flatnonzero(gone >= 0.05)
+    if not started.size:
+        return gone
+    done = np.flatnonzero(gone >= 0.95)
+    end = int(done[0]) if done.size else gone.shape[0] - 1
+    fade = max(1, end - int(started[0]) + 1) * float(traj.dt)
+    return gone * min(1.0, DISSOLVE_REF_SECONDS / fade)
 
 
 @register("object_count")
@@ -322,7 +369,45 @@ def object_count(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     if not idx:
         return np.zeros((traj.num_frames,), np.float64)
     n = traj.present[:, idx].sum(axis=1).astype(np.float64)
-    return np.abs(n / max(float(n[0]), 1.0) - 1.0)
+    count = np.abs(n / max(float(n[0]), 1.0) - 1.0)
+    # HOW FAR, which is what the bins vary. A count is discrete -- one became
+    # two, or two became one -- so every bin of both families scored 1.000.
+    # `fusion` pulls its absorbed body in from further away at each bin, and
+    # `fission`'s halves end further apart; each is measured here and scaled
+    # against its strong bin (`FUSION_REF_RADII`, `FISSION_REF_RADII`).
+    if ctx.get("merge_frames") and ctx.get("keepers") and ctx.get("absorbed"):
+        reach = 0.0
+        for keep, gone, frame in zip(ctx["keepers"], ctx["absorbed"],
+                                     ctx["merge_frames"]):
+            try:
+                ki, gi = traj.index_of(int(keep)), traj.index_of(int(gone))
+            except KeyError:
+                continue
+            f = int(np.clip(int(frame), 0, traj.num_frames - 1))
+            gap = float(np.linalg.norm(traj.pos[f, ki] - traj.pos[f, gi]))
+            reach = max(reach, gap / max(float(traj.radius[ki] + traj.radius[gi]),
+                                         1e-9))
+        return count * min(1.0, reach / FUSION_REF_RADII)
+    if len(idx) >= 2 and ctx.get("fission_window_s") is not None:
+        # `fission`: the halves' separation `fission_window_s` after the split,
+        # in radii of the original -- UNnormalised, because the plan carries
+        # strong's own separation at that moment as `r_strong`. Early, because
+        # later the halves roll on or run into things and the distance stops
+        # saying how hard they came apart.
+        split = np.flatnonzero(count > 0.5)
+        if not split.size:
+            return count
+        f = int(min(traj.num_frames - 1,
+                    split[0] + round(float(ctx["fission_window_s"]) / float(traj.dt))))
+        live = [i for i in idx if bool(traj.present[f, i])]
+        sep = 0.0
+        for i in range(len(live)):
+            for j in range(i + 1, len(live)):
+                sep = max(sep, float(np.linalg.norm(
+                    np.asarray(traj.pos[f, live[i]] - traj.pos[f, live[j]], np.float64))))
+        r0 = max(float(traj.radius[b]), 1e-9)
+        return count * (sep / r0)
+    return count
 
 
 def _srgb_to_lab(rgb: np.ndarray) -> np.ndarray:
@@ -551,7 +636,31 @@ def friction(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     moving = speed > float(ctx.get("min_speed", 0.05))
     vhat = v / np.maximum(speed, 1e-9)[:, None]
     along = np.sum((a - g[None, :]) * vhat, axis=1)
-    return np.abs(along) / max(float(np.linalg.norm(g)), 1e-9) * moving.astype(np.float64)
+    out = np.abs(along) / max(float(np.linalg.norm(g)), 1e-9) * moving.astype(np.float64)
+    # A BLOW IS NOT FRICTION. A frame where the body strikes something from
+    # the side -- a contact that is not the surface beneath it -- decelerates
+    # it through the contact, which the twin comparison then scores as grip:
+    # on `collision` the striker's impact with its target read 0.8 at every
+    # bin and set the peak. Those frames, and the ones either side the
+    # central-difference acceleration straddles, are excluded.
+    c = getattr(traj, "contacts", None)
+    if c is not None and len(c):
+        bid = int(traj.body_ids[b])
+        T = traj.num_frames
+        frames = np.asarray(c.frame).astype(int)
+        mine = (((np.asarray(c.body_a) == bid) | (np.asarray(c.body_b) == bid))
+                & (frames >= 0) & (frames < T))
+        f = frames[mine]
+        centre_z = np.asarray(traj.pos[:, b, 2], np.float64)[f]
+        beneath = np.asarray(c.point, np.float64)[mine, 2] < centre_z - 1e-3
+        level = np.abs(np.asarray(c.normal, np.float64)[mine, 2]) > 0.7
+        side = np.zeros(T, bool)
+        side[f[~(beneath & level)]] = True
+        near = side.copy()
+        near[1:] |= side[:-1]
+        near[:-1] |= side[1:]
+        out = out * (~near)
+    return out
 
 
 @register("phase_consistency")

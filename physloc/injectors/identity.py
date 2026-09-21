@@ -446,6 +446,9 @@ class Fission(Injector):
     #: explosion or a division nobody can see.
     MIN_SPLIT_SPEED = 0.12
     MAX_SPLIT_SPEED = 4.0
+    #: Seconds after the split at which the halves' separation is the severity
+    #: -- see `plan` and `laws.object_count`.
+    FISSION_WINDOW_S = 0.5
     #: Points on the speed grid `_speed_for` scans.
     SOLVE_STEPS = 14
     #: Preference for the gentler impulse when two speeds land equally close to
@@ -578,8 +581,31 @@ class Fission(Injector):
         # apart, which keeps the severity ladder meaningful without prescribing
         # anything after `t_event`.
         target = float(self.SEPARATION_BY_BIN[severity_bin]) * radius
-        speed = self._speed_for(spec, traj, actor, twin, t0, unit, target)
+        # SOLVED FOR STRONG, SCALED FOR THE REST. Each bin used to be solved on
+        # its own against a preview that could not always reach its target, and
+        # on `collision` medium and strong both hit the speed cap and came out
+        # one clip: the three bins ran at 3.05 / 4.0 / 4.0 m/s. On flat ground
+        # a departure speed carries a body a distance that goes as its square,
+        # so each weaker bin takes strong's speed times the square root of its
+        # share of strong's separation -- ordered by construction, and still
+        # the speed strong's own geometry asked for.
+        strong_target = float(self.SEPARATION_BY_BIN["strong"]) * radius
+        v_strong = self._speed_for(spec, traj, actor, twin, t0, unit, strong_target)
+        speed = max(float(self.MIN_SPLIT_SPEED),
+                    v_strong * float(np.sqrt(self.SEPARATION_BY_BIN[severity_bin]
+                                             / self.SEPARATION_BY_BIN["strong"])))
         push = (unit * speed).tolist()
+        # The severity yardstick: how far apart strong's halves are
+        # `FISSION_WINDOW_S` after the split, on strong's own preview. Early,
+        # before friction and whatever the halves run into blur the ladder.
+        fps = float(spec.tier.fps)
+        k = int(round(self.FISSION_WINDOW_S * fps))
+        prev = self._split(spec, traj, actor, twin, t0, unit * v_strong, 1.0)
+        f = min(prev.num_frames - 1, t0 + k)
+        sep_strong = float(np.linalg.norm(
+            np.asarray(prev.pos[f, prev.index_of(int(twin.segmentation_id))]
+                       - prev.pos[f, prev.index_of(int(actor.segmentation_id))],
+                       np.float64))) / max(radius, 1e-9)
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
@@ -597,6 +623,8 @@ class Fission(Injector):
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
                    "twin_id": int(twin.segmentation_id),
+                   "fission_window_s": float(self.FISSION_WINDOW_S),
+                   "r_strong": float(max(sep_strong, 1e-3)),
                    "sibling_ids": [int(actor.segmentation_id),
                                    int(twin.segmentation_id)],
                    "occluded_at_event": bool(t0 in occ)})

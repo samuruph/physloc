@@ -37,9 +37,52 @@ class Support(Injector):
     persistent = True
     RISE_FRAMES = 3
     CLEARANCE_RADII = {"weak": 0.8, "medium": 2.0, "strong": 3.6}
+    #: Natural frequency, rad/s, of the pull holding a hovering body at its
+    #: height -- see `stage`.
+    HOLD_OMEGA = 8.0
 
     def strong_residual_reference(self, spec) -> float:
         return float(self.CLEARANCE_RADII["strong"])
+
+    def refine_windows(self, spec, traj_valid, traj_invalid, plan) -> None:
+        """The strong bin's residual, from this clip's own.
+
+        The reference was the strong CLEARANCE, 3.6 radii, and the law reads
+        clearance above whatever is beneath the body -- which, for a body
+        gliding off the end of a ramp, is the floor metres below. Measured on
+        `rolling_ramp` 777: 8.37 / 9.57 / 11.2 radii for weak / medium /
+        strong, all over 3.6, so all three saturated at 1.000.
+
+        Those numbers are an offset -- where the body is gliding -- plus the
+        declared clearance, and the bins share the offset: 8.37 - 0.8 + 3.6 =
+        11.17 against 11.2 measured for strong. So this clip's departure plus
+        the clearance it is short of strong IS strong's, and each bin is scored
+        against it. Measured the way the pipeline scores: the mass-weighted
+        departure from the twin over every body named.
+        """
+        from ..residuals import laws as _laws
+
+        law = _laws.get("support")
+        ctx = dict(plan.notes, spec=spec)
+        rows, weights = [], []
+        for bid in plan.causal_body_ids:
+            try:
+                bi_v = traj_valid.index_of(int(bid))
+                bi_i = traj_invalid.index_of(int(bid))
+            except KeyError:
+                continue
+            rows.append(np.abs(law(traj_invalid, bi_i, ctx)
+                               - law(traj_valid, bi_v, ctx)))
+            weights.append(float(traj_invalid.mass[bi_i]))
+        if not rows:
+            return
+        w = np.asarray(weights, np.float64)
+        w = w / w.sum() if float(w.sum()) > 0.0 else np.full_like(w, 1.0 / len(w))
+        measured = float(np.tensordot(w, np.stack(rows), axes=(0, 0)).max())
+        short = (float(self.CLEARANCE_RADII["strong"])
+                 - float(plan.params.get("clearance_radii", 0.0)))
+        if measured > 1e-9:
+            plan.notes["r_strong"] = float(measured + max(0.0, short))
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         # WHOLE MEDIUM where the scene is made of interchangeable bodies. One
@@ -184,7 +227,8 @@ class Support(Injector):
             keep = 0.0 if plan.notes.get("mode") == "hover_still" else 1.0
             pb.resetBaseVelocity(idx, [keep * float(v[0]), keep * float(v[1]),
                                        0.0], list(w))
-            targets.append((idx, float(getattr(body, "mass", 1.0))))
+            targets.append((idx, float(getattr(body, "mass", 1.0)),
+                            float(lifted[2])))
         if not targets:
             return ()
 
@@ -197,10 +241,24 @@ class Support(Injector):
         lawful = plan.notes.get("lawful_xy_velocity")
         t0 = int(plan.t_event)
 
+        # HELD AT ITS HEIGHT, not merely weightless. With gravity cancelled
+        # and nothing else, a knock that gave the body any vertical speed kept
+        # it forever: on `collision` 778 the weak bin's striker, hovering low
+        # enough to clip its target, was bumped and climbed 6 cm a frame for
+        # the rest of the clip -- past the medium bin's hover, so weak scored
+        # above medium. A critically damped pull back to the hover height is
+        # what "held up by nothing" means; it still collides with whatever it
+        # meets.
+        omega = float(self.HOLD_OMEGA)
+
         def weightless(_client, _step, frame):
-            for idx, mass in targets:
+            for idx, mass, z_hold in targets:
                 pos, _ = pb.getBasePositionAndOrientation(idx)
-                pb.applyExternalForce(idx, -1, (-g * mass).tolist(), list(pos),
+                vz = float(pb.getBaseVelocity(idx)[0][2])
+                hold = mass * (-omega * omega * (float(pos[2]) - z_hold)
+                               - 2.0 * omega * vz)
+                force = (-g * mass) + np.array([0.0, 0.0, hold])
+                pb.applyExternalForce(idx, -1, force.tolist(), list(pos),
                                       pb.WORLD_FRAME)
                 if lawful:
                     k = min(max(int(frame) - t0, 0), len(lawful) - 1)
@@ -315,6 +373,9 @@ class Friction(Injector):
     #: sliding when the deceleration becomes obvious. A body that stops dead in
     #: one frame is a different family and stays one.
     TRAVEL_BY_BIN = {"weak": 0.70, "medium": 0.50, "strong": 0.32}
+    #: Scored on the deceleration the clip ADDS to the lawful one, not on any
+    #: difference: see `severity.bounded_score`.
+    SCORE_EXCESS_ONLY = True
     #: Ceilings, so a solved coefficient stays inside what Bullet handles well.
     #: Raised from 1.2 / 0.40, which was BINDING and collapsing the ladder: the
     #: per-bin floor below is `MIN_RATIO_BY_BIN * mu`, so on a surface declared
@@ -447,19 +508,55 @@ class Friction(Injector):
         # beat the downhill pull too, `(a + g sin t) / (g cos t)` rather than
         # `a / g`. Solved for the contact, the ramp takes the difference -- it
         # is the surface that grips harder than it should, which is the claim.
+        #
+        # AND IT STOPS ON THE RAMP. The distance was a share of the body's whole
+        # remaining path -- ramp, flight and floor -- while the extra grip acts
+        # only on the ramp, so the grip asked for was a fraction of what showed:
+        # measured, `ramp_slide` travelled 83-110% of its lawful path at bins
+        # asking 70 / 50 / 32%. A block stopping partway down a slope it
+        # lawfully slides off is the unmistakable form of the claim, so on a
+        # ramp the share is of what is left of the RAMP, and the grip stays on
+        # -- a block stopped on a slope must not be let go again.
+        g = float(np.linalg.norm(traj.gravity)) or 9.81
+        v = float(np.linalg.norm(traj.lin_vel[t0, bi]))
+        tilt = 0.0
         surface = None
-        if ramp_end is not None and spec.notes.get("tilt_rad") is not None:
+        on_ramp = ramp_end is not None and spec.notes.get("tilt_rad") is not None
+        if on_ramp:
             tilt = float(spec.notes["tilt_rad"])
-            g = float(np.linalg.norm(traj.gravity)) or 9.81
-            v = float(np.linalg.norm(traj.lin_vel[t0, bi]))
-            accel = v * v / (2.0 * max(float(target), 1e-3))
-            need = (accel + g * np.sin(tilt)) / (g * np.cos(tilt))
+            ramp_path = np.asarray(traj.pos[t0:ramp_end + 1, bi, :], np.float64)
+            d_ramp = float(np.linalg.norm(np.diff(ramp_path, axis=0), axis=1).sum())
+            target = max(1e-3, float(self.TRAVEL_BY_BIN[severity_bin]) * d_ramp)
+            need = ((v * v / (2.0 * target) + g * np.sin(tilt))
+                    / (g * np.cos(tilt)))
             ramp_body = next((b for b in spec.bodies
                               if int(b.segmentation_id) == int(ramp_id)), None)
             declared = float(getattr(ramp_body, "friction", 0.0) or 0.0)
             surface = float(min(self.MAX_LATERAL,
                                 max(declared, need / max(grip, 1e-6))))
-        intervention = [(t0, ramp_end if ramp_end is not None else T - 1)]
+            ramp_end = None                  # hold the grip: see above
+        # THE REFERENCE, FROM THE PHYSICS OF THE STRONG BIN. The friction law
+        # reads unexplained along-track deceleration over g; a body brought to
+        # rest over `d` on a slope `t` reads (v^2/2d + g sin t) / g, and the
+        # lawful clip's own reading is measured on the twin. Strong's excess is
+        # the difference -- independent of this clip, so the three bins are
+        # scored against one yardstick rather than each against itself.
+        # A medium keeps the retimed measurement: its grains are not one body
+        # stopping over one distance.
+        if len(targets) <= 2:
+            from ..residuals import laws as _laws
+            if on_ramp:
+                d_strong = max(1e-3, float(self.TRAVEL_BY_BIN["strong"]) * d_ramp)
+                end = int(np.clip(t0 + max(3, int(0.5 * (T - t0))), t0 + 1, T - 1))
+            else:
+                d_strong = max(1e-3, float(target) * float(self.TRAVEL_BY_BIN["strong"])
+                               / float(self.TRAVEL_BY_BIN[severity_bin]))
+                end = T - 1
+            lawful = float(np.median(_laws.get("friction")(traj, bi, {})[t0:end + 1]))
+            r_strong = max(1e-3, (v * v / (2.0 * d_strong) + g * np.sin(tilt)) / g
+                           - lawful)
+        intervention = [(t0, T - 1 if on_ramp else
+                         (ramp_end if ramp_end is not None else T - 1))]
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],

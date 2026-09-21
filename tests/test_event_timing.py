@@ -201,7 +201,13 @@ def test_permanence_scores_only_disappearance_and_return_transitions():
     from physloc.residuals import laws
     residual = laws.get("mass_continuity")(
         invalid, invalid.index_of(plan.causal_body_ids[0]), {})
-    assert residual[t0] == 1.0 and residual[t1 + 1] == 1.0
+    # Both transitions score, and score the same: the absence's own length
+    # over `PERMANENCE_REF_SECONDS` -- how long it was gone is what the bins
+    # vary, so it is what the residual measures.
+    gone = (t1 - t0 + 1) * float(invalid.dt)
+    want = min(1.0, gone / laws.PERMANENCE_REF_SECONDS)
+    assert residual[t0] > 0.0
+    assert abs(residual[t0] - want) < 1e-9 and abs(residual[t1 + 1] - want) < 1e-9
 
 
 def _thrown_out(traj, body_id, frame):

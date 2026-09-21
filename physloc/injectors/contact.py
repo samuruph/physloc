@@ -1963,11 +1963,13 @@ class _CollisionEdit(Injector):
         bin's residual, and every bin arrives at the same reference without
         anyone having to simulate the strong bin to find it.
 
-        Only where the pair preview is unrepresentative -- a group. The
-        two-body scenarios keep the measured reference, which is exact for
-        them.
+        Everywhere, not only on a group. The two-body scenes used to keep the
+        preview's reference as "exact for them", which stopped being true when
+        the family was staged: on `collision` only the heavy ball is named, the
+        preview measured 1.9, and the clip's own departures were 2.98 / 8.07 /
+        25.5 -- exactly the mass ratios -- so every bin saturated at 1.000.
         """
-        if len(plan.causal_body_ids) < 2:
+        if not plan.causal_body_ids:
             return
         ratio = float(plan.notes.get("ratio") or 0.0)
         if ratio <= 0.0:

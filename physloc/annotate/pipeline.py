@@ -312,7 +312,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         fl = sev_mod.NoiseFloor.calibrate([r_v])
         strong = here.get("r_strong") or inj.strong_residual_reference(spec)
         return {"r_valid": r_v, "r_invalid": r_i, "floor": fl, "r_strong": strong,
-                "s_invalid": sev_mod.bounded_score(r_i, fl, strong, baseline=r_v),
+                "s_invalid": sev_mod.bounded_score(
+                    r_i, fl, strong, baseline=r_v,
+                    excess_only=bool(getattr(inj, "SCORE_EXCESS_ONLY", False))),
                 "s_valid": sev_mod.bounded_score(r_v, fl, strong, baseline=r_v)}
 
     primary = _score(primary_id, {})

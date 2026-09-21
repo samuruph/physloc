@@ -954,6 +954,143 @@ class Fusion(Injector):
                                   int(round(self.DRAW_IN_FRACTION
                                             * traj.num_frames)))})
 
+    #: STAGED. The merge used to be written into the trajectory: the absorbed
+    #: body's path interpolated onto its neighbour's, the survivor's size scaled
+    #: for the render only, and everything after the merge re-integrated by the
+    #: host's approximation rather than solved. Staged, the approach is an
+    #: attraction the simulator integrates, the survivor grows in the PHYSICS
+    #: (`ShapeSwap`), the absorbed body leaves the world (`Vanish`), and the
+    #: merged body -- carrying both masses and their joint momentum -- meets the
+    #: floor and everything else through the solver.
+    simulated = True
+    #: The draw-in is a critically damped pull on the absorbed body, at
+    #: this many natural periods per draw-in window, so the absorbed body is
+    #: inside its neighbour by the time it is removed rather than still on
+    #: its way.
+    DRAW_IN_OMEGA = 7.0
+
+    def _swell_profile(self, n: int) -> np.ndarray:
+        """Survivor scale per frame of the draw-in: smoothstep to `SWELL`.
+        Shared by the staged resize and the render channel, so the collision
+        shape and the drawn body are the same size on every frame."""
+        u = (np.arange(n, dtype=np.float64) + 1.0) / max(n, 1)
+        return 1.0 + (float(self.SWELL) - 1.0) * (u * u * (3.0 - 2.0 * u))
+
+    def stage(self, spec, simulator, objs, plan):
+        import pybullet as pb
+
+        from ..render import stepper
+
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        draw = max(1, int(plan.notes["draw_in"]))
+        spf = stepper.substeps_of(simulator)
+        dt = 1.0 / (float(spec.tier.fps) * spf)
+        g = np.asarray(spec.gravity, np.float64)
+        omega = self.DRAW_IN_OMEGA / (draw / float(spec.tier.fps))
+        profile = self._swell_profile(draw)
+        merges = []
+        for keep_id, gone_id, frame in zip(plan.notes["keepers"],
+                                           plan.notes["absorbed"],
+                                           plan.notes["merge_frames"]):
+            keep, gone = by_id.get(int(keep_id)), by_id.get(int(gone_id))
+            if keep is None or gone is None:
+                continue
+            swap = stepper.ShapeSwap(simulator, objs, spec, keep)
+            vanish = stepper.Vanish(simulator, objs, spec, gone)
+            if not (swap.ok and vanish.ok):
+                continue
+            merges.append({"t": int(frame), "keep": keep, "gone": gone,
+                           "swap": swap, "vanish": vanish, "stage": "wait"})
+        self._merges = merges
+        if not merges:
+            return ()
+
+        def draw_in(_client, step, frame):
+            for m in merges:
+                t, end = m["t"], m["t"] + draw
+                if m["stage"] == "done" or frame < t:
+                    continue
+                gi = m["vanish"].idx
+                ki = m["swap"].live
+                if m["stage"] == "wait":
+                    # Through its neighbour: the absorbed body stops colliding
+                    # with anything, since it is on its way INTO a body.
+                    pb.setCollisionFilterGroupMask(gi, -1, 0, 0)
+                    m["stage"] = "pull"
+                if frame < end:
+                    # On the ABSORBED body only, critically damped on the
+                    # separation, plus the gravity no floor carries for it any
+                    # more. A mutual force was tried: equal and opposite keeps
+                    # the pair's momentum through the draw-in, but the survivor
+                    # then lurched towards a partner two metres off -- 2.2 to
+                    # 5.5 m/s in one frame on `collision` -- where what a merge
+                    # looks like is the one body carrying on and the other
+                    # sliding into it. Momentum is conserved AT the merge, below.
+                    pg, _ = pb.getBasePositionAndOrientation(gi)
+                    pk, _ = pb.getBasePositionAndOrientation(ki)
+                    vg, _ = pb.getBaseVelocity(gi)
+                    vk, _ = pb.getBaseVelocity(ki)
+                    mg = float(m["gone"].mass)
+                    d = np.asarray(pk, np.float64) - np.asarray(pg, np.float64)
+                    v = np.asarray(vk, np.float64) - np.asarray(vg, np.float64)
+                    f = mg * (omega * omega * d + 2.0 * omega * v)
+                    pb.applyExternalForce(gi, -1, (f - mg * g).tolist(), pg,
+                                          pb.WORLD_FRAME)
+                    # The survivor grows as it swallows, in the solver too.
+                    k = min(frame - t, draw - 1)
+                    s = float(profile[k])
+                    m["swap"].set_scale((s, s, s))
+                    continue
+                # Inside: one body now. Momentum conserved across a perfectly
+                # inelastic merge, and the survivor carries both masses.
+                vg, _ = pb.getBaseVelocity(gi)
+                vk, wk = pb.getBaseVelocity(m["swap"].live)
+                mg = float(m["gone"].mass)
+                mk = float(m["keep"].mass)
+                v_f = ((mk * np.asarray(vk, np.float64) + mg * np.asarray(vg, np.float64))
+                       / max(mk + mg, 1e-9))
+                m["swap"].set_scale((float(self.SWELL),) * 3, mass=mk + mg,
+                                    velocity=(v_f.tolist(), list(wk)))
+                m["vanish"].hide()
+                m["stage"] = "done"
+
+        return (draw_in,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        import pybullet as pb
+
+        for m in getattr(self, "_merges", ()) or ():
+            m["swap"].restore()
+            m["vanish"].show()
+            if m["vanish"].ok:
+                pb.setCollisionFilterGroupMask(m["vanish"].idx, -1, 1, 1)
+        self._merges = []
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """The render side: the survivor's size, and the absorbed body's
+        absence, neither of which PyBullet can tell the renderer."""
+        draw = max(1, int(plan.notes["draw_in"]))
+        T = traj_valid.num_frames
+        profile = self._swell_profile(draw)
+        traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
+        traj_invalid.present = np.asarray(traj_invalid.present).copy()
+        traj_invalid.pos = np.asarray(traj_invalid.pos).copy()
+        for keep_id, gone_id, frame in zip(plan.notes["keepers"],
+                                           plan.notes["absorbed"],
+                                           plan.notes["merge_frames"]):
+            ki = traj_valid.index_of(int(keep_id))
+            gi = traj_valid.index_of(int(gone_id))
+            t = int(frame)
+            n = min(draw, T - t)
+            if n <= 0:
+                continue
+            traj_invalid.scale_mul[t:t + n, ki, :] = profile[:n, None].astype(np.float32)
+            if t + n < T:
+                traj_invalid.scale_mul[t + n:, ki, :] = float(self.SWELL)
+                traj_invalid.present[t + n:, gi] = False
+                _hold_where_it_vanished(traj_invalid, gi, t + n, T - 1)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         draw = int(plan.notes["draw_in"])

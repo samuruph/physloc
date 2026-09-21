@@ -238,14 +238,14 @@ publication. Nothing has been published yet.
      keyframe does. **This is the default and the goal**; a family stays off it only when
      nothing in the simulator corresponds to what it changes.
    - **edited**: the finished trajectory is rewritten and re-integrated by `_rewrite_from`.
-     Approximate contacts. **Six families remain here**, and they are the ones whose subject
+     Approximate contacts. **Five families remain here**, and they are the ones whose subject
      the simulator does not own: `colour_shift` (a material property), `shadow`,
      `shadow_inverted` and `shadow_shape` (a scripted stand-in body, since Blender's shadow
-     is not an object PyBullet knows about), `time_slip` (a reparameterisation of time
-     itself) and `fusion` (its draw-in is prescribed motion). `solidity` decides **per
-     plan**: a two-body pass-through stages as a disabled collision pair, while its granular
-     `sink_group` mode edits, because removing the floor under forty grains is a scene edit
-     rather than one pair. The other sixteen stage.
+     is not an object PyBullet knows about) and `time_slip` (a reparameterisation of time
+     itself). `fusion` STAGES now: its draw-in is a pull the simulator integrates, the
+     survivor grows through `ShapeSwap` and the absorbed body leaves through `Vanish`.
+     `solidity` and `immutability` decide **per plan** (`simulates()`); `solidity`'s
+     granular `sink_group` mode stages as many disabled pairs. The other eighteen stage.
 
      Do not take this list on trust — it has been wrong before. It is derivable:
      `simulated` on the class, `simulates()` when a family decides per plan.

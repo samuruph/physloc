@@ -112,12 +112,40 @@ def _riding_on(spec, traj, actor, latest: int):
     return None
 
 
-def _approach_speed(traj, actor_id: int, partner_id: int, t0: int) -> float:
-    """Closing speed just before contact, from the lawful rollout.
+def _contact_normal_speed(traj, bi: int, t0: int, normal) -> float:
+    """Speed INTO the surface at the moment of contact, from the lawful rollout.
+
+    The last free frame is `t0 - 1`, and the body goes on accelerating for the
+    rest of the way in: a `drop` ball reads 6.55 m/s there and hits at 7.1. A
+    rebound of `gain` times the earlier number is then a loss for any gain
+    below ~1.08, so weak `superelastic` sent the ball back to 96% of its drop
+    height -- a lively bounce, not an impossible one -- and its energy law read
+    0. Gravity's work over the remaining distance closes the gap exactly:
+    v_c^2 = v_n^2 + 2 g_n d, with d the distance moved along the approach
+    between `t0 - 1` and `t0`. Against a wall g_n is 0 and nothing changes.
+    """
+    f = max(0, int(t0) - 1)
+    v = np.asarray(traj.lin_vel[f, bi], np.float64)
+    n = np.asarray(normal, np.float64)
+    n = n / max(float(np.linalg.norm(n)), 1e-9)
+    if float(v @ n) < 0.0:
+        n = -n                                     # along the approach
+    v_n = float(v @ n)
+    d = max(0.0, float((np.asarray(traj.pos[t0, bi], np.float64)
+                        - np.asarray(traj.pos[f, bi], np.float64)) @ n))
+    g_n = max(0.0, float(np.asarray(traj.gravity, np.float64) @ n))
+    return float(np.sqrt(max(v_n, 0.0) ** 2 + 2.0 * g_n * d))
+
+
+def _approach_speed(traj, actor_id: int, partner_id: int, t0: int,
+                    normal=None) -> float:
+    """Closing speed at contact, from the lawful rollout.
 
     Relative for two moving bodies, absolute against a static one -- the
     coefficient of restitution is defined on whichever of those the collision
-    actually has.
+    actually has. Against a static one, and given the impact normal, it is the
+    speed at the moment of contact rather than a frame before -- see
+    `_contact_normal_speed`.
     """
     f = max(0, int(t0) - 1)
     ia = traj.index_of(int(actor_id))
@@ -125,9 +153,12 @@ def _approach_speed(traj, actor_id: int, partner_id: int, t0: int) -> float:
     try:
         ib = traj.index_of(int(partner_id))
     except Exception:                                         # noqa: BLE001
-        return float(np.linalg.norm(va))
-    vb = np.asarray(traj.lin_vel[f, ib], np.float64)
+        ib = None
+    vb = (np.asarray(traj.lin_vel[f, ib], np.float64) if ib is not None
+          else np.zeros(3))
     if float(np.linalg.norm(vb)) < 1e-9:
+        if normal is not None:
+            return _contact_normal_speed(traj, ia, t0, normal)
         return float(np.linalg.norm(va))
     return float(np.linalg.norm(va - vb))
 
@@ -748,6 +779,15 @@ class Solidity(Injector):
         when_clear = bool(plan.params.get("restore_when_clear"))
         if plan.params.get("mode") == "sink_group":
             return tuple(hooks)      # the floor stays gone -- see `_stageable`
+        # A SINKING BODY THAT SETTLES STAYS SUNK. Restoring the pair after a
+        # moment ejected it: a body resting on a table has no speed to carry it
+        # in, so in 0.17 s it reached 0.16 radii of a declared 0.30 and was
+        # pushed straight back out -- a two-frame dip, visible on one frame, on
+        # every weak `resting_table` and `stack_topple` clip. Held at its
+        # declared depth for the rest of the clip, as the granular mode already
+        # is, the body sits visibly embedded in a surface that did not stop it.
+        if plan.params.get("mode") == "sink" and plan.params.get("settles"):
+            return tuple(hooks)
         state = {"restored": False}
 
         def clear() -> bool:
@@ -1022,7 +1062,16 @@ class SuperElastic(Injector):
     #: judged the strongest bin about right for a weak one -- a stronger strong
     #: over an unchanged weak would just stretch the gap and leave the bottom of
     #: the ladder invisible.
-    GAIN_BY_BIN = {"weak": 2.20, "medium": 3.60, "strong": 6.00}
+    #:
+    #: Steeper at the bottom since, from 2.20 / 3.60: the weaker bins are a
+    #: smaller share of strong. On `drop` every bin is scaled by one frame fit,
+    #: and with the old shares the three rebounds peaked at 2.86 / 3.08 /
+    #: 3.49 m off a 2.70 m drop -- you judged weak and medium too close to
+    #: strong.
+    #: Weak then nudged back to 1.8: at 1.5 the horizontal rebounds
+    #: (`collision`, `barrier_pass`) scored 0.02-0.05 -- visible, but under the
+    #: weakest-bin floor.
+    GAIN_BY_BIN = {"weak": 1.80, "medium": 2.75, "strong": 6.00}
     #: Frames the pair may spend off camera before the fit weakens the bounce.
     #:
     #: The default of one was the binding constraint on `barrier_pass`, not the
@@ -1039,11 +1088,25 @@ class SuperElastic(Injector):
     #: clips was declined rather than rendered weaker. A gain of 1.15-1.25 is
     #: what the frame holds there, and it still returns the ball higher than
     #: it fell, which is the violation.
+    #:
+    #: Finer still at the bottom, now that the bounce is delivered. While the
+    #: stage drove the ball into the floor, nothing a fit chose ever left the
+    #: shot; with the rebound real, `drop` and `pyramid_impact` threw strong
+    #: out of the top at every rung to 0.03 and the worker declined it. A ball
+    #: dropped from near the top of the frame has little headroom, and it needs
+    #: little: even a lossless bounce returns it ten times higher than the
+    #: lawful one, so the ladder can compress without anything going unseen.
     FIT_LADDER = Injector.FIT_LADDER + (0.22, 0.17, 0.13, 0.10, 0.07, 0.05,
-                                        0.03)
+                                        0.03, 0.02, 0.013, 0.008)
     #: Share of the visible extent a boosted grain of a MEDIUM may climb --
     #: see `frame_speed_cap` in `plan`.
     MEDIUM_RISE_SHARE = 0.5
+    #: Below this speed, in m/s, a partner held from beneath counts as part of
+    #: the surface it rests on -- see `plan`.
+    HELD_PARTNER_SPEED = 0.3
+    #: ...and only when the impact normal is at least this vertical, so the
+    #: partner is pressed into its support rather than knocked along it.
+    HELD_PARTNER_VERTICAL = 0.7
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as
@@ -1073,6 +1136,15 @@ class SuperElastic(Injector):
             # Reflection is quadratic in the normal, so its sign does not
             # matter -- only that it is the *impact's* normal.
             v_out = v_in - (1.0 + gain) * float(np.dot(v_in, n)) * n
+            if len(targets) == 1 and normal is not None:
+                # One body against a surface: rebound at `gain` times the speed
+                # it HITS at, which is what `stage` delivers -- see
+                # `_contact_normal_speed`. Tangential motion is kept.
+                u = np.asarray(n, np.float64) / max(float(np.linalg.norm(n)), 1e-9)
+                if float(v_in @ u) > 0.0:
+                    u = -u                         # out of the surface
+                v_c = _contact_normal_speed(traj, bi, t0, u)
+                v_out = v_in - float(v_in @ u) * u + u * (gain * v_c)
             out.lin_vel[t0, bi, :] = v_out.astype(np.float32)
             v_by_body[int(body.segmentation_id)] = v_out
 
@@ -1173,6 +1245,32 @@ class SuperElastic(Injector):
             return None
 
         targets = self._targets(spec, actor, partner_id)
+        # A PARTNER RESTING ON SOMETHING IS A SURFACE. Splitting the boost
+        # between striker and partner keeps momentum, and is right for two free
+        # bodies -- but the top sphere of a pyramid is not free: on
+        # `pyramid_impact` it was driven down into the spheres beneath it at
+        # 3.6 m/s, which absorbed it at once, so the pair's energy never rose
+        # and every bin scored 0 while the cube visibly came back up. A partner
+        # nearly still and held from below takes the impact the way a floor
+        # does, and only the striker bounces.
+        #
+        # ONLY WHEN THE IMPACT PRESSES IT INTO WHAT HOLDS IT. A ball resting on
+        # the floor and struck from the side is free to go -- `collision`'s
+        # target is exactly that -- and treating it as a wall left it standing
+        # still while the striker rebounded, which is not a super-elastic
+        # collision at all. The pyramid's top sphere is struck from ABOVE, into
+        # the spheres beneath it; that is the case this is for.
+        held = False
+        if len(targets) == 2 and abs(float(np.asarray(normal, np.float64)[2])) \
+                > self.HELD_PARTNER_VERTICAL:
+            from ..residuals import laws as _laws
+            ip = traj.index_of(int(partner_id))
+            still = float(np.linalg.norm(traj.lin_vel[max(0, t0 - 1), ip])) \
+                < self.HELD_PARTNER_SPEED
+            support = _laws.supported_frames(traj, ip)
+            if still and support is not None and support[max(0, t0 - 1)]:
+                held = True
+                targets = [actor]
         # A WHOLE MEDIUM bounces when it ARRIVES. `first_impact` reports the
         # primary grain's own first contact, which on `pour` is frame 7 -- by
         # then most of the pour has already landed and stopped, and multiplying
@@ -1218,8 +1316,14 @@ class SuperElastic(Injector):
         top = _top_of_partner(spec, traj, partner_id, t0)
         strong_preview = self._boosted(spec, traj, targets, t0,
                                        1.0 + excess * fit, normal)
+        # Measured with the context the annotation will score with: a pair is
+        # scored on its SUMMED energy (`pair_ids`), and measuring one body here
+        # put the reference on a different quantity from the score.
+        pair_ids = ([int(b.segmentation_id) for b in targets]
+                    if len(targets) == 2 else [int(actor.segmentation_id)])
         r_strong = self._measure(strong_preview, int(actor.segmentation_id),
-                                 "energy_at_contact", {"surface_top": top})
+                                 "energy_at_contact",
+                                 {"surface_top": top, "pair_ids": pair_ids})
         # NEVER BELOW WHAT THE BIN DECLARES. `_boosted` steps a medium with
         # `_rewrite_group`, which resolves the grains against each other
         # approximately and badly under-reports what the staged rollout does:
@@ -1230,7 +1334,17 @@ class SuperElastic(Injector):
         # family can always defend, and the measurement is only allowed to
         # raise it -- which is what it is for on a scene where much of the
         # body's energy is potential at the moment of impact.
-        r_strong = max(r_strong, float((1.0 + excess * fit) ** 2 - 1.0))
+        #
+        # ONLY ON A MEDIUM. For one body or a pair the preview now describes
+        # the staged bounce -- same approach speed, same normal -- and the
+        # nominal floor is the wrong yardstick there: the law divides by the
+        # pair's whole mechanical energy, so a slow contact high in a stack
+        # gains a small FRACTION however hard it is boosted. On `stack_topple`
+        # 783 the blocks met at 0.81 m/s, strong measured 1.99 against a floor
+        # of 35, and every bin scored under 0.06 while the clip visibly changed
+        # a tenth of the frame.
+        if len(targets) > 2 or r_strong <= 1e-9:
+            r_strong = max(r_strong, float((1.0 + excess * fit) ** 2 - 1.0))
 
         return InterventionPlan(
             family=self.family, kind="instant", t_event=windows[0][0],
@@ -1247,14 +1361,19 @@ class SuperElastic(Injector):
                    # Both participants, so `energy_at_contact` can score the
                    # pair rather than one body. A moving partner carries away
                    # part of the gain and neither half shows it alone.
-                   "pair_ids": [int(actor.segmentation_id), int(partner_id)],
+                   "pair_ids": ([int(actor.segmentation_id)] if held else
+                                [int(actor.segmentation_id), int(partner_id)]),
+                   "partner_held": held,
                    # The approach speed, measured from the VALID rollout rather
                    # than observed at run time. The world is reset to t_event,
                    # and at t_event the bodies are already touching -- so a hook
                    # that waits to see a free frame before contact never sees
                    # one, records an approach of zero, and boosts by nothing.
-                   "approach_speed": float(_approach_speed(
-                       traj, int(actor.segmentation_id), int(partner_id), t0)),
+                   "approach_speed": float(
+                       _contact_normal_speed(traj, traj.index_of(
+                           int(actor.segmentation_id)), t0, normal) if held
+                       else _approach_speed(traj, int(actor.segmentation_id),
+                                            int(partner_id), t0, normal)),
                    # THE CEILING ON A RUNAWAY. See `stage`: nothing may leave a
                    # contact faster than `gain` times the fastest speed the
                    # LAWFUL rollout ever reaches. A fact about the scene, so it
@@ -1298,6 +1417,11 @@ class SuperElastic(Injector):
                    "speed_gain": gain, "n_bounces": 1,
                    "r_strong": float(r_strong),
                    "impact_normal": [float(x) for x in normal],
+                   # The INCOMING velocity, from the frame before the impact, so
+                   # `stage` can aim the rebound against it -- see there.
+                   "approach_velocity": [
+                       float(x) for x in traj.lin_vel[
+                           t0 - 1, traj.index_of(int(targets[0].segmentation_id))]],
                    "targets": [int(b.segmentation_id) for b in targets]})
 
     @staticmethod
@@ -1409,7 +1533,8 @@ class SuperElastic(Injector):
         # RELATIVE speed and the correction is split evenly between them --
         # otherwise the clip gains momentum as well as energy and annotates
         # only one of the two.
-        paired = partner is not None and len(movers) <= 2
+        paired = (partner is not None and len(movers) <= 2
+                  and not plan.notes.get("partner_held"))
         approach0 = float(plan.notes.get("approach_speed", 0.0))
         normal0 = np.asarray(plan.notes.get("impact_normal", (0.0, 0.0, 1.0)),
                              np.float64)
@@ -1509,6 +1634,14 @@ class SuperElastic(Injector):
                 # the ground by a head-on horizontal collision. You reported
                 # that as the struck ball jumping; this is why it jumped.
                 n = normal0
+                # Oriented by the recorded approach, not trusted: the stored
+                # normal's sign varies between seeds (see the single-body case
+                # below), and a flipped `n` drives the pair INTO each other.
+                # The striker approaches its partner, so `n` is the side its
+                # incoming velocity points to.
+                v_in = plan.notes.get("approach_velocity")
+                if v_in is not None and float(np.asarray(v_in, np.float64) @ n) < 0.0:
+                    n = -n
                 sep = float((vb - va) @ n)
                 extra = approach0 * gain - sep
                 if extra <= 0.0:
@@ -1529,7 +1662,22 @@ class SuperElastic(Injector):
                 return
             for _sid, idx in movers:
                 v = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
-                n = normal0 if float(v @ normal0) >= 0.0 else -normal0
+                # AGAINST THE INCOMING VELOCITY. This used to take whichever side
+                # the body was already moving towards, which assumes the solver
+                # has resolved the impact by the frame the world is reset to --
+                # and whether it has depends on where the contact fell between
+                # substeps. On `drop` L2 2000777 it had not: the ball was still
+                # arriving, the boost drove it INTO the floor, and weak left at
+                # the lawful 1.29 m/s where the plan asked for 6.2. The normal's
+                # stored sign is no help either: measured, it is +z on one seed
+                # and -z on another. The approach velocity is the one thing that
+                # always says which way is "out", and it is what `_boosted`
+                # reflects on the host, so the two now agree.
+                v_in = np.asarray(plan.notes.get("approach_velocity") or v,
+                                  np.float64)
+                n = -normal0 if float(v_in @ normal0) > 0.0 else normal0
+                if plan.notes.get("approach_velocity") is None:
+                    n = normal0 if float(v @ normal0) >= 0.0 else -normal0
                 # Tangential motion is untouched: restitution is a statement
                 # about the normal component and nothing else.
                 v_out = v - float(v @ n) * n + n * (approach0 * gain)
@@ -1621,7 +1769,10 @@ class SuperElastic(Injector):
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
-        targets = self._targets(spec, actor, plan.notes["targets"][-1])
+        if plan.notes.get("partner_held"):
+            targets = [actor]
+        else:
+            targets = self._targets(spec, actor, plan.notes["targets"][-1])
         out = self._boosted(spec, traj, targets,
                             int(plan.params["first_contact_frame"]),
                             float(plan.params["speed_gain"]),
@@ -1783,9 +1934,39 @@ class _CollisionEdit(Injector):
         if ratio <= 0.0:
             return
         strongest = float(self.RATIO_BY_BIN["strong"])
-        measured = max(
-            (self._measure(traj_invalid, int(bid), "linear_momentum", {})
-             for bid in plan.causal_body_ids), default=0.0)
+        # THE DEPARTURE FROM THE TWIN, not the raw residual. The score is
+        # |invalid - valid| frame by frame, and the raw momentum residual of a
+        # grain in a pile is dominated by LAWFUL contact spikes -- Kubric reports
+        # a contact force, so every resting grain reads ~20-50 -- which that
+        # subtraction removes. Scaled by 25/3 at the weak bin, the lawful spike
+        # became the reference: 416 on `pour`, against a violation of 9.9, and
+        # weak `newton2_mass` scored 0.02 on every pour clip. Measured as the
+        # score measures it, the reference is the violation's own size.
+        #
+        # AND AS THE PIPELINE AGGREGATES IT. A medium is scored as the
+        # mass-weighted mean over its grains, frame by frame, so the largest
+        # single grain's departure is the wrong yardstick: once the paths
+        # diverge, each grain's lawful contact spikes land on different frames
+        # in the two twins, and the worst grain read ~53 at the weak bin -- a
+        # reference of ~440, and weak still scored 0.01. Measured the way it is
+        # scored, the peak comes out at exactly ratio / strongest.
+        from ..residuals import laws as _laws
+        law = _laws.get("linear_momentum")
+        rows, weights = [], []
+        for bid in plan.causal_body_ids:
+            try:
+                bi_v = traj_valid.index_of(int(bid))
+                bi_i = traj_invalid.index_of(int(bid))
+            except KeyError:
+                continue
+            rows.append(np.abs(law(traj_invalid, bi_i, {})
+                               - law(traj_valid, bi_v, {})))
+            weights.append(float(traj_invalid.mass[bi_i]))
+        if not rows:
+            return
+        w = np.asarray(weights, np.float64)
+        w = w / w.sum() if float(w.sum()) > 0.0 else np.full_like(w, 1.0 / len(w))
+        measured = float(np.tensordot(w, np.stack(rows), axes=(0, 0)).max())
         if measured <= 0.0:
             return
         plan.notes["r_strong"] = float(measured * strongest / ratio)

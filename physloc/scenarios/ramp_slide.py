@@ -50,7 +50,11 @@ class RampSlide(Scenario):
         # did not. The camera is framed on whatever results, below.
         # Its own stream, so the draw leaves every later physics value of the
         # seed where it was (see `rolling_ramp`).
-        lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(0.55, 0.95))
+        # Raised again, from 0.55-0.95 m, for a longer flight off the end:
+        # measured, the block was airborne for 1-2 frames (0.08-0.17 s) before
+        # it landed, and at 1.2-1.7 m still only 3 -- it keeps touching the
+        # lip as it tips off. 1.8-2.3 m.
+        lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(1.80, 2.30))
         centre = (0.0, 0.0, lip_z + half_len * math.sin(tilt))
         half = float(rng.uniform(0.18, 0.24)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.7))

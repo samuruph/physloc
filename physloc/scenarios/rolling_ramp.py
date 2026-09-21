@@ -64,7 +64,10 @@ class RollingRamp(Scenario):
         # ITS OWN STREAM. Drawn from `rng` it shifted every later draw -- block
         # size, launch speed, friction, start -- so raising the ramp silently
         # changed every other parameter of every seed too.
-        lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(1.80, 2.30))
+        # Raised again, from 1.80-2.30 m, for a longer flight: measured, the
+        # block was airborne for 5 frames (0.42 s). At 2.7-3.3 m it flies for
+        # about 0.6-0.7 s.
+        lip_z = float(C.appearance_rng(seed, self.name + "/lip").uniform(2.70, 3.30))
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
         half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.8))

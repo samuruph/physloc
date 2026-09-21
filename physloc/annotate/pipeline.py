@@ -232,6 +232,46 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # frames where the vertical velocity flips upward, and their neighbours,
     # since the acceleration estimate is a central difference.
     def _unsupported(tr, body_index):
+        # FROM WHAT HOLDS THE BODY UP, where the rollout recorded contacts. The
+        # height test below asks whether a body is above ONE surface, and a
+        # scene has several: on `resting_table` the reference was the floor, so
+        # bodies sitting on the table read as in free flight on every frame of
+        # the valid twin -- at rest, a = 0, which "fails" free fall by exactly
+        # 1 g -- and that lawful 1.0 became the noise floor that swallowed the
+        # violation; `global_gravity` scored 0.000 at every bin there. The table
+        # is also dynamic, so no fixed height describes it once it moves.
+        #
+        # SUPPORT, not any contact. A contact counts only when it is beneath the
+        # body and roughly horizontal -- a grain resting on a grain is held up,
+        # grains brushing side-on in a falling stream are not; counting those
+        # gated a pour out of its own fall.
+        #
+        # LANDINGS, not lift-offs, get a frame either side. The acceleration is a
+        # central difference, so a frame beside an impact straddles it. A body
+        # LEAVING a surface is the other way round: reversed gravity lifting it
+        # off is the violation, and widening there deleted exactly the frames it
+        # acts on. The stepper records contacts on every substep, stamped with
+        # their frame, so a bounce completed between samples is still here.
+        c = getattr(tr, "contacts", None)
+        if c is not None and len(c):
+            bid = int(tr.body_ids[body_index])
+            T_ = tr.num_frames
+            frames = np.asarray(c.frame).astype(int)
+            mine = ((np.asarray(c.body_a) == bid) | (np.asarray(c.body_b) == bid)) \
+                & (frames >= 0) & (frames < T_)
+            f = frames[mine]
+            centre_z = np.asarray(tr.pos[:, body_index, 2], np.float64)[f]
+            beneath = np.asarray(c.point, np.float64)[mine, 2] < centre_z - 1e-3
+            level = np.abs(np.asarray(c.normal, np.float64)[mine, 2]) > 0.7
+            support = np.zeros(T_, bool)
+            support[f[beneath & level]] = True
+            vz = np.asarray(tr.lin_vel[:, body_index, 2], np.float64)
+            landing = np.zeros(T_, bool)
+            landing[1:] = support[1:] & ~support[:-1] & (vz[:-1] < -0.05)
+            near = landing.copy()
+            near[1:] |= landing[:-1]
+            near[:-1] |= landing[1:]
+            return (~support & ~near).astype(np.float64)
         r = float(tr.radius[body_index])
         z = tr.pos[:, body_index, 2] - r
         vz = tr.lin_vel[:, body_index, 2]

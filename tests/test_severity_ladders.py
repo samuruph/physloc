@@ -40,6 +40,7 @@ BINS = ("weak", "medium", "strong")
 LAWFUL = {
     ("antigravity", "ALPHA_BY_BIN"): 1.0,
     ("global_gravity", "ALPHA_BY_BIN"): 1.0,
+    ("global_gravity", "SUPPORTED_ALPHA_BY_BIN"): 1.0,
     ("shadow_inverted", "FRACTION_BY_BIN"): 1.0,
     ("superelastic", "GAIN_BY_BIN"): 1.0,
     ("newton2_mass", "RATIO_BY_BIN"): 1.0,

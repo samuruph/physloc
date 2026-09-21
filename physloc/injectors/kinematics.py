@@ -158,6 +158,10 @@ class _GravityScale(Injector):
         """Which bodies to bend, given the rollout. Overridden by `antigravity`."""
         return self._targets(spec)
 
+    def _ladder(self, traj, targets, t0: int):
+        """The alpha table this plan uses. Overridden by `global_gravity`."""
+        return self.ALPHA_BY_BIN
+
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         targets = self._choose(spec, traj)
         if len(targets) < self.MIN_BODIES:
@@ -181,8 +185,9 @@ class _GravityScale(Injector):
         n_left = traj.num_frames - t0
         n_want = self._window_len(max(2, int(round(self.WINDOW_FRACTION * n_left))),
                                   t0, traj.num_frames)
-        alpha = self.ALPHA_BY_BIN[severity_bin]
-        strongest = self.ALPHA_BY_BIN["strong"]
+        ladder = self._ladder(traj, targets, t0)
+        alpha = ladder[severity_bin]
+        strongest = ladder["strong"]
 
         # Keep the bodies on screen by **shortening the window**, not by
         # weakening the intervention. The bin is a qualitative claim -- gravity
@@ -202,6 +207,8 @@ class _GravityScale(Injector):
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "gravity_scale", "alpha_peak": alpha,
+                    "ladder": ("supported" if ladder is not self.ALPHA_BY_BIN
+                               else "free"),
                     "profile": "trapezoid", "frames": int(t1 - t0 + 1),
                     "frames_requested": int(n_want),
                     "extent": self.spatial_extent},
@@ -389,8 +396,38 @@ class GlobalGravity(_GravityScale):
     #: over a trapezoid whose mean is well under its peak, they were a pour
     #: falling slightly slowly.
     ALPHA_BY_BIN = {"weak": 0.40, "medium": -0.35, "strong": -1.8}
+    #: The ladder for a scene whose bodies are RESTING when gravity bends.
+    #:
+    #: A lighter gravity moves nothing that is already supported: a mug on a
+    #: table at 0.4 g is a mug on a table. Measured on the review sweep, weak
+    #: `global_gravity` scored 0 on every clip of `collision`, `pyramid_impact`,
+    #: `stack_topple` and two of three `resting_table` -- not a scoring fault,
+    #: there was nothing on screen. A weak violation must be small, not absent,
+    #: so where the bodies are supported every bin reverses gravity and they
+    #: differ in how hard. Strong is the same as the free-fall ladder, so the
+    #: window, which is fitted on the strongest bin, is too.
+    #: Weak at -0.35 was scored but, on `collision`, seen: two rolling
+    #: spheres hopped a few centimetres within the three-frame window, 0.13% of
+    #: the frame on one frame. -0.6 lifts them visibly.
+    SUPPORTED_ALPHA_BY_BIN = {"weak": -0.6, "medium": -1.1, "strong": -1.8}
+    #: Share of the bodies in contact at the event for the scene to count as
+    #: resting rather than falling.
+    SUPPORTED_SHARE = 0.5
     MIN_BODIES = 2
     spatial_extent = "global"
+
+    def _ladder(self, traj, targets, t0: int):
+        c = traj.contacts
+        if not len(c) or not targets:
+            return self.ALPHA_BY_BIN
+        ids = {int(b.segmentation_id) for b in targets}
+        frame = np.asarray(c.frame)
+        near = (frame >= t0 - 1) & (frame <= t0)
+        touching = set(np.asarray(c.body_a)[near].tolist()) \
+            | set(np.asarray(c.body_b)[near].tolist())
+        share = len(ids & {int(i) for i in touching}) / float(len(ids))
+        return (self.SUPPORTED_ALPHA_BY_BIN if share >= self.SUPPORTED_SHARE
+                else self.ALPHA_BY_BIN)
 
     def _targets(self, spec):
         # Not the SCRIPTED ones. A kinematic prop -- `pendulum_swing`'s rod,

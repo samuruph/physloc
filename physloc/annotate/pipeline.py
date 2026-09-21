@@ -252,21 +252,10 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # off is the violation, and widening there deleted exactly the frames it
         # acts on. The stepper records contacts on every substep, stamped with
         # their frame, so a bounce completed between samples is still here.
-        c = getattr(tr, "contacts", None)
-        if c is not None and len(c):
-            bid = int(tr.body_ids[body_index])
-            T_ = tr.num_frames
-            frames = np.asarray(c.frame).astype(int)
-            mine = ((np.asarray(c.body_a) == bid) | (np.asarray(c.body_b) == bid)) \
-                & (frames >= 0) & (frames < T_)
-            f = frames[mine]
-            centre_z = np.asarray(tr.pos[:, body_index, 2], np.float64)[f]
-            beneath = np.asarray(c.point, np.float64)[mine, 2] < centre_z - 1e-3
-            level = np.abs(np.asarray(c.normal, np.float64)[mine, 2]) > 0.7
-            support = np.zeros(T_, bool)
-            support[f[beneath & level]] = True
+        support = laws.supported_frames(tr, body_index)
+        if support is not None:
             vz = np.asarray(tr.lin_vel[:, body_index, 2], np.float64)
-            landing = np.zeros(T_, bool)
+            landing = np.zeros(tr.num_frames, bool)
             landing[1:] = support[1:] & ~support[:-1] & (vz[:-1] < -0.05)
             near = landing.copy()
             near[1:] |= landing[:-1]

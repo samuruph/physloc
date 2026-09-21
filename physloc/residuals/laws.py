@@ -429,24 +429,109 @@ def angular_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     return out * (~touching).astype(np.float64)
 
 
+def supported_frames(traj: Trajectory, b: int) -> np.ndarray:
+    """Frames on which something beneath body `b` is holding it up.
+
+    From the contact record: a contact counts when its point is below the
+    body's centre and its normal is roughly vertical, so a grain resting on a
+    grain is held up and grains brushing side-on in a falling stream are not.
+    The stepper records contacts on every substep, stamped with their frame, so
+    a bounce completed between two samples is still here. None when the rollout
+    carries no contacts to ask.
+    """
+    c = getattr(traj, "contacts", None)
+    if c is None or not len(c):
+        return None
+    bid = int(traj.body_ids[b])
+    T = traj.num_frames
+    frames = np.asarray(c.frame).astype(int)
+    mine = (((np.asarray(c.body_a) == bid) | (np.asarray(c.body_b) == bid))
+            & (frames >= 0) & (frames < T))
+    f = frames[mine]
+    centre_z = np.asarray(traj.pos[:, b, 2], np.float64)[f]
+    beneath = np.asarray(c.point, np.float64)[mine, 2] < centre_z - 1e-3
+    level = np.abs(np.asarray(c.normal, np.float64)[mine, 2]) > 0.7
+    held = np.zeros(T, bool)
+    held[f[beneath & level]] = True
+    return held
+
+
+def _quat_matrix(q) -> np.ndarray:
+    w, x, y, z = (float(v) for v in q)
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def ground_under(spec, x: float, y: float, below: float) -> float:
+    """Height of the highest static surface under (x, y) at or below `below`.
+
+    Tilted surfaces are measured on their own face: a ramp is a rotated cube,
+    and the height of its top face varies along it. Only surfaces at or below
+    `below` count, so a body underneath a table is measured to the floor.
+    """
+    best = float(spec.floor_level)
+    for s in spec.bodies:
+        if not (s.static and s.collides) or s.kind != "cube":
+            continue
+        if s.role in ("floor", "backdrop", "distractor"):
+            continue
+        R = _quat_matrix(s.quaternion or (1.0, 0.0, 0.0, 0.0))
+        c = np.asarray(s.position, np.float64)
+        h = np.asarray(s.scale, np.float64)
+        n = R[:, 2]                                   # the top face's normal
+        if abs(n[2]) < 0.2:
+            continue                                  # a wall, not a surface
+        if n[2] < 0:
+            n = -n
+        top = c + n * h[2]
+        # The face's height at (x, y), then whether (x, y) is on the face.
+        z = top[2] - (n[0] * (x - top[0]) + n[1] * (y - top[1])) / n[2]
+        local = R.T @ (np.array([x, y, z]) - c)
+        if abs(local[0]) > h[0] or abs(local[1]) > h[1]:
+            continue
+        if z <= below + 1e-3 and z > best:
+            best = float(z)
+    return best
+
+
 @register("support")
 def support(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Equilibrium: a body held up by nothing.
 
     Clearance between the body's lowest point and the surface below it, in
-    radii, counted only on frames where the body is *not* in free flight. Both
-    halves are needed: a ball mid-arc has metres of clearance and is perfectly
-    lawful, while a hovering one has the same clearance and is not. What
-    separates them is whether it is accelerating at g.
+    radii, counted only on frames where the body is neither in free flight nor
+    resting on anything. All three matter: a ball mid-arc has metres of
+    clearance and is lawful, and so is a block sitting on another block.
+
+    THE SURFACE UNDER THE BODY NOW, not the one it started on. The reference was
+    `surface_top`, the support the body began on -- the top of the ramp, the
+    block below it in the stack -- and the violation happens after the body has
+    left it: on `ramp_slide` the block hovers at 0.77 m where the lawful one
+    reaches 0.36, measured against a 1.02 m ramp top that is a negative
+    clearance, so `support` scored 0.000 at every bin, strong included.
     """
-    top = float(ctx["surface_top"])
     r = max(float(traj.radius[b]), 1e-9)
-    clearance = np.maximum(0.0, (traj.pos[:, b, 2] - r) - top) / r
+    z = np.asarray(traj.pos[:, b, 2], np.float64)
+    spec = ctx.get("spec")
+    if spec is not None:
+        xy = np.asarray(traj.pos[:, b, :2], np.float64)
+        ground = np.array([ground_under(spec, float(p[0]), float(p[1]),
+                                        float(zb) - r)
+                           for p, zb in zip(xy, z)])
+    else:
+        ground = np.full_like(z, float(ctx["surface_top"]))
+    clearance = np.maximum(0.0, (z - r) - ground) / r
     g = traj.gravity.astype(np.float64)
     a = traj.acceleration(b).astype(np.float64)
     falling = (np.linalg.norm(a - g[None, :], axis=1)
                / max(float(np.linalg.norm(g)), 1e-9)) < float(ctx.get("free_fall_tol", 0.35))
-    return clearance * (~falling).astype(np.float64)
+    free = ~falling
+    held = supported_frames(traj, b)
+    if held is not None:
+        free &= ~held
+    return clearance * free.astype(np.float64)
 
 
 @register("friction")

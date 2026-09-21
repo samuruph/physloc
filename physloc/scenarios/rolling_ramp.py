@@ -55,7 +55,12 @@ class RollingRamp(Scenario):
         # debug tier -- every `rolling_ramp` x `angular_momentum` job declined,
         # measured on seeds 777-781. A higher lip and the gentler tilt above
         # (less of that speed pointing down) give the fall ~5-6 frames.
-        lip_z = 1.70
+        #
+        # DRAWN, and higher on average. It was a fixed 1.70 m, so every scene
+        # had the same ramp; a longer fall also gives a violation more of the
+        # clip to act in and be seen in. The floor of the range stays above the
+        # old value, so the airborne stretch `angular_momentum` needs only grows.
+        lip_z = float(rng.uniform(1.80, 2.30))
         centre = (0.0, 0.0, lip_z + half_len * sin_t)
         half = float(rng.uniform(0.17, 0.22)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.8))

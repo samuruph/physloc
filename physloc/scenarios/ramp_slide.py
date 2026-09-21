@@ -42,7 +42,14 @@ class RampSlide(Scenario):
         assert math.tan(tilt) > mu + 0.1, "ramp is too shallow to slide"
 
         half_len, thick = 1.35, 0.07
-        centre = (0.0, 0.0, 0.95)
+        # THE LOW END IS DRAWN, and set clear of the floor. A fixed centre at
+        # 0.95 m put the lip 0.28-0.42 m up across the tilt range -- the block
+        # reached the bottom almost at floor level, so the slide was short and
+        # a violation fired on it had little run left to show in. Drawing the
+        # lip rather than the centre also varies the scene, which a fixed ramp
+        # did not. The camera is framed on whatever results, below.
+        lip_z = float(rng.uniform(0.55, 0.95))
+        centre = (0.0, 0.0, lip_z + half_len * math.sin(tilt))
         half = float(rng.uniform(0.18, 0.24)) * C.size_scale(seed, self.name)
         v0 = float(rng.uniform(0.3, 0.7))
         d, _ = C.ramp_axes(tilt)
@@ -65,7 +72,6 @@ class RampSlide(Scenario):
         a_slide = 9.81 * max(sin_t - mu * mu * cos_t, 0.05)
         v_lip = math.sqrt(v0 ** 2 + 2.0 * a_slide * (half_len - start_along))
         vx_lip, vz_lip = v_lip * cos_t, -v_lip * sin_t
-        lip_z = centre[2] - half_len * sin_t
         t_fall = (-vz_lip + math.sqrt(vz_lip ** 2 + 2.0 * 9.81 * max(lip_z, 0.0))) / 9.81
         x_lip = half_len * cos_t
         x_land = x_lip + vx_lip * t_fall

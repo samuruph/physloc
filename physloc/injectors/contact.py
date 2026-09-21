@@ -1080,7 +1080,14 @@ class SuperElastic(Injector):
     #: constant went. A ball that comes back much faster than it arrived SHOULD
     #: leave the shot sooner -- that is what the violation looks like -- and the
     #: cost is a few frames of empty mask at the tail.
-    FRAME_TOLERANCE = 4
+    #:
+    #: Raised to 10. The fit also asks the worker's own visibility gate, so the
+    #: frames that must stay in shot -- the span after the event -- are
+    #: protected either way; this budget only capped how soon after that span
+    #: a faster rebound may roll out. At 4 it was the binding constraint on
+    #: `collision` once the shot held the struck ball: strong stopped at a
+    #: gain of 1.35 where the gate allows 2.0, and the bins stayed bunched.
+    FRAME_TOLERANCE = 10
     #: DEEPER than the shared ladder. A dropped ball arrives at its fastest,
     #: so the shared floor of 0.28 -- a speed gain of 2.4 -- still threw it
     #: 10-13 m up on every `drop` seed measured (777-781), and on `stack_topple`
@@ -1127,6 +1134,38 @@ class SuperElastic(Injector):
         """
         out = self._clone(traj)
         v_by_body = {}
+        if len(targets) == 2 and normal is not None:
+            # A FREE PAIR, as `stage` stages it: the separation along the normal
+            # raised to `gain` x the approach, split by mass so momentum is kept.
+            # Reflecting each body's own velocity instead sent the striker
+            # straight back where the simulator stops it and speeds the target
+            # up -- a different collision. On `collision` that preview threw the
+            # striker out of the side of the shot by frame 16-21, the fit sized
+            # itself on it, and every bin was squeezed to 3% of its gain: weak,
+            # medium and strong sent the struck ball off at 2.16 / 2.20 / 2.31
+            # m/s against a lawful 1.69.
+            a, b = targets
+            ia, ib = traj.index_of(int(a.segmentation_id)), traj.index_of(int(b.segmentation_id))
+            n = np.asarray(normal, np.float64)
+            n = n / max(float(np.linalg.norm(n)), 1e-9)
+            v_in = traj.lin_vel[t0 - 1, ia].astype(np.float64)
+            if float(v_in @ n) < 0.0:
+                n = -n                              # actor -> partner
+            va = traj.lin_vel[t0, ia].astype(np.float64)
+            vb = traj.lin_vel[t0, ib].astype(np.float64)
+            approach = float(((traj.lin_vel[t0 - 1, ia] - traj.lin_vel[t0 - 1, ib])
+                              .astype(np.float64)) @ n)
+            extra = max(0.0, approach * gain - float((vb - va) @ n))
+            ma = max(float(traj.mass[ia]), 1e-9)
+            mb = max(float(traj.mass[ib]), 1e-9)
+            v_by_body[int(a.segmentation_id)] = va - n * extra * (mb / (ma + mb))
+            v_by_body[int(b.segmentation_id)] = vb + n * extra * (ma / (ma + mb))
+            for body in targets:
+                sid = int(body.segmentation_id)
+                out.lin_vel[t0, traj.index_of(sid), :] = v_by_body[sid].astype(np.float32)
+                self._rewrite_from(spec, traj, out, body, t0 + 1, v0=v_by_body[sid],
+                                   restitution=float(body.restitution))
+            return out
         for body in targets:
             bi = traj.index_of(int(body.segmentation_id))
             v_in = traj.lin_vel[t0 - 1, bi].astype(np.float64)

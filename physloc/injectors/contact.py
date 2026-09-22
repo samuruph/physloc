@@ -301,6 +301,17 @@ class Solidity(Injector):
     #: instead of a floor that gave way. A surface that yields still grips; at
     #: 6/s a slide stops within half a second.
     DRAG = 6.0
+    #: A body that does not settle -- `strong` -- is not held, but it must not
+    #: free-fall either: at a 6.5 m/s impact speed it clears a rendered floor
+    #: within a frame, so its segmentation footprint goes empty before the
+    #: penetration law has anything to measure it on, and the family's own
+    #: peak_severity -- gated to visible frames -- came out BELOW medium's
+    #: steady 0.8-radius hold. This is the terminal downward speed a
+    #: non-settling body is damped to instead: slow enough to stay visible
+    #: sinking well past every settling bin's depth before it finally clears
+    #: the render and vanishes, which is still "through, for good" -- just
+    #: witnessed on the way.
+    PASS_TERMINAL_SPEED = 0.6
     #: How long the collision pair stays suppressed, in SECONDS. This IS the
     #: severity axis once the violation is staged: the pair is either enforced
     #: or it is not, so "how deep" is not a dial the simulator has -- but "for
@@ -848,8 +859,6 @@ class Solidity(Injector):
         nothing left to push against once the centre is through, and going all
         the way is what the bin means.
         """
-        if not plan.params.get("settles"):
-            return ()
         # Only where the body goes DOWN through something. A head-on
         # pass-through travels sideways into a wall with its centre below the
         # wall's top face, so a depth test written against that face would fire
@@ -858,6 +867,7 @@ class Solidity(Injector):
         # already separated by how long the pair stays off.
         if plan.params.get("mode") == "pass_through":
             return ()
+        settles = bool(plan.params.get("settles"))
         import pybullet as pb
 
         from ..render import stepper
@@ -889,6 +899,8 @@ class Solidity(Injector):
             return ()
         t0 = plan.t_event
 
+        v_cap = float(self.PASS_TERMINAL_SPEED)
+
         def settle(_client, _step, frame):
             if frame < t0:
                 return
@@ -896,11 +908,20 @@ class Solidity(Injector):
                 z = float(pb.getBasePositionAndOrientation(idx)[0][2])
                 # How far below its own lawful resting height the body has got.
                 below = rest - z
-                if below <= 0.0:
-                    continue
                 vx, vy, vz = (float(x) for x in pb.getBaseVelocity(idx)[0])
-                hold = min(below / sink, self.SPRING_MAX)
-                fz = mass * (g * hold - self.ARREST * min(vz, 0.0))
+                if settles:
+                    if below <= 0.0:
+                        continue
+                    hold = min(below / sink, self.SPRING_MAX)
+                    fz = mass * (g * hold - self.ARREST * min(vz, 0.0))
+                elif below > 0.0:
+                    # DAMPED, NOT HELD. No spring term -- there is no depth
+                    # this settles at -- only enough drag to cap the descent
+                    # at `v_cap` once it is already below its rest height, so
+                    # gravity keeps winning and the body keeps going down.
+                    fz = mass * max(0.0, -self.ARREST * (vz + v_cap))
+                else:
+                    fz = 0.0
                 fx, fy = -mass * self.DRAG * vx, -mass * self.DRAG * vy
                 pb.applyExternalForce(idx, -1, (fx, fy, fz),
                                       list(pb.getBasePositionAndOrientation(idx)[0]),

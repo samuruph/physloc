@@ -543,32 +543,26 @@ class Friction(Injector):
             surface = float(min(self.MAX_LATERAL,
                                 max(declared, need / max(grip, 1e-6))))
             ramp_end = None                  # hold the grip: see above
-        # THE REFERENCE, FROM THE PHYSICS OF THE STRONG BIN. The friction law
-        # reads unexplained along-track deceleration over g; a body brought to
-        # rest over `d` on a slope `t` reads (v^2/2d + g sin t) / g, and the
-        # lawful clip's own reading is measured on the twin. Strong's excess is
-        # the difference -- independent of this clip, so the three bins are
-        # scored against one yardstick rather than each against itself.
-        # A medium keeps the retimed measurement: its grains are not one body
-        # stopping over one distance.
-        if len(targets) <= 2:
-            from ..residuals import laws as _laws
-            if on_ramp:
-                d_strong = max(1e-3, float(self.TRAVEL_BY_BIN["strong"]) * d_ramp)
-                end = int(np.clip(t0 + max(3, int(0.5 * (T - t0))), t0 + 1, T - 1))
-            else:
-                d_strong = max(1e-3, float(target) * float(self.TRAVEL_BY_BIN["strong"])
-                               / float(self.TRAVEL_BY_BIN[severity_bin]))
-                end = T - 1
-            lawful = float(np.median(_laws.get("friction")(traj, bi, {})[t0:end + 1]))
-            r_strong = max(1e-3, (v * v / (2.0 * d_strong) + g * np.sin(tilt)) / g
-                           - lawful)
-            d_bin = (max(1e-3, float(self.TRAVEL_BY_BIN[severity_bin]) * d_ramp)
-                     if on_ramp else max(1e-3, float(target)))
-            brake = {"v": v, "tilt": tilt, "lawful": lawful,
-                     "d_bin": d_bin, "d_strong": d_strong}
-        else:
-            brake = None
+        # THE REFERENCE IS THE MEASURED RETIMED-STRONG PREVIEW, computed once
+        # above (`r_strong`) from `traj` -- the SAME shared valid rollout for
+        # weak, medium and strong -- so all three bins are scored against one
+        # yardstick without depending on which bin's own render produced it.
+        #
+        # A THEORETICAL yardstick used to stand in for it on a slope: total
+        # grip needed to stop over distance `d` at tilt `t` is
+        # `(v^2/2d + g sin t) / g`, `g sin t` being what it takes just to hold
+        # position. That is correct physics, and it was also useless as a
+        # REFERENCE: rescaled per bin by `measured * model(d_strong)/model(d_bin)`,
+        # the render's own measurement cancels out of the final score
+        # algebraically -- `peak = measured / r_strong` reduces to exactly
+        # `model(d_bin) / model(d_strong)`, a function of the travel-fraction
+        # knob and nothing the render did. And because `g sin t` is the SAME
+        # constant added to both `model(d_bin)` and `model(d_strong)`, it
+        # dominated the ratio wherever it was large next to `v^2/2dg`: on
+        # `rolling_ramp` that put weak at 0.80 of strong's score, medium at
+        # 0.87, a decade of scaling seen as three points to one. The retimed
+        # preview has no such term to cancel with -- it is one number, held
+        # fixed, and every bin's OWN measured excess is scored against it.
         intervention = [(t0, T - 1 if on_ramp else
                          (ramp_end if ramp_end is not None else T - 1))]
         return InterventionPlan(
@@ -605,46 +599,7 @@ class Friction(Injector):
                    "rolling_friction": roll,
                    "target_distance_m": float(target),
                    "ramp_window_end": ramp_end,
-                   "brake": brake,
                    "r_strong": float(r_strong)})
-
-    def refine_windows(self, spec, traj_valid, traj_invalid, plan) -> None:
-        """Anchor the strong reference on this clip's measured braking.
-
-        The plan's reference is the physics of the strong bin -- speed,
-        stopping distance, slope -- and it is right to within about 15%. That
-        is not close enough on a slope, where most of every bin's reading is
-        the same thing: a body NOT sliding downhill, g sin t, about 0.33 g on
-        `rolling_ramp`. The bins differ by the braking on top of it, 0.06 g
-        against 0.11, so a 15% error put weak over the reference and all three
-        read 1.000. The model is kept for what it gets right, the ratio of
-        strong's braking to this bin's, and this clip's measured excess sets
-        the level: strong's is this one's times that ratio.
-        """
-        brake = plan.notes.get("brake")
-        if not brake:
-            return
-        from ..residuals import laws as _laws
-
-        g = 9.81
-
-        def model(d):
-            return max(1e-6, (brake["v"] ** 2 / (2.0 * max(d, 1e-6))
-                              + g * np.sin(brake["tilt"])) / g - brake["lawful"])
-
-        law = _laws.get("friction")
-        measured = 0.0
-        for bid in plan.causal_body_ids:
-            try:
-                bi_v = traj_valid.index_of(int(bid))
-                bi_i = traj_invalid.index_of(int(bid))
-            except KeyError:
-                continue
-            measured = max(measured, float(np.maximum(
-                0.0, law(traj_invalid, bi_i, {}) - law(traj_valid, bi_v, {})).max()))
-        if measured > 1e-9:
-            plan.notes["r_strong"] = float(
-                measured * model(brake["d_strong"]) / model(brake["d_bin"]))
 
     def _stopping_point(self, spec, traj, bi: int, t0: int, severity_bin: str):
         """Where along its lawful path the body will have come to rest.

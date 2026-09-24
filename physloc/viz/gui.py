@@ -514,7 +514,7 @@ const FILTERS = [["scenario", "Scenario"], ["family", "Violation family"], ["lev
 const LAYER_GROUPS = [
   ["Annotation", ["violation", "visible", "severity", "causal", "reference"]],
   ["Geometry", ["bbox2d", "bbox3d", "centers", "velocity", "labels", "events"]]];
-const LAYER_NAME = {violation: "Violation mask", visible: "Visible part", severity: "Severity heat",
+const LAYER_NAME = {violation: "Violation footprint (both twins)", visible: "Visible part", severity: "Severity heat",
   causal: "Causal bodies", reference: "Lawful position", bbox2d: "2D boxes", bbox3d: "3D boxes",
   centers: "Centres", velocity: "Velocity", labels: "Labels", events: "Collisions"};
 const LAYER_SWATCH = {violation: "#ff4646", visible: "#ffffff", severity: "#f7931e", causal: "#5aa0ff",

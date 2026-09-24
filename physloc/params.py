@@ -55,6 +55,9 @@ DEFAULTS: Dict[str, Any] = {
         # `multi`: at least this many violators, and always this many bodies
         # left lawful, so there is something to contrast against.
         "multi_violators_min": 2,
+        # Keep the violating group bounded while leaving total actor counts
+        # (`extra_max`) unchanged for lawful peers and distractors.
+        "multi_violators_max": 5,
         "multi_lawful_min": 1,
         # `multi`: the share of clips whose violators all violate at ONE
         # moment. The rest give each violator a moment of its own, so both
@@ -209,6 +212,7 @@ def apply(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     B.MULTI_ACTORS = B.EXTRA_OBJECTS
     B.MULTI_VIOLATOR_RANGE = (int(o["multi_violators_min"]),
                              int(o["multi_lawful_min"]))
+    B.MULTI_VIOLATOR_MAX = int(o["multi_violators_max"])
     from .injectors import multi as MU
 
     MU.MULTI_SYNC_SHARE = float(o["multi_sync_share"])

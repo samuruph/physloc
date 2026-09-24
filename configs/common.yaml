@@ -62,6 +62,9 @@ objects:
   # scene is a violating majority, which is deliberate: it makes the small
   # scenes the hardest.
   multi_violators_min: 2
+  # Upper bound on the violating group. This does not cap the scene's total
+  # actor count: extra bodies remain available as lawful peers or distractors.
+  multi_violators_max: 5
   multi_lawful_min: 1
 
   # A distractor's size as a fraction of the actor's; how fast a MOVING one

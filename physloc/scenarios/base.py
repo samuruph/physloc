@@ -1313,10 +1313,12 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     spec.notes["n_actors"] = total
     if total < 3:
         return                       # too few to pose the question at all
-    # HOW MANY VIOLATE, also drawn per clip: at least two, and never all of
-    # them, so there is always a lawful body to contrast against.
-    lo = min(MULTI_VIOLATOR_RANGE[0], total - MULTI_VIOLATOR_RANGE[1])
-    hi = total - MULTI_VIOLATOR_RANGE[1]
+    # HOW MANY VIOLATE, also drawn per clip: at least two, at most the
+    # configured cap, and never all actors, so there is a lawful body to
+    # contrast against.
+    available = total - MULTI_VIOLATOR_RANGE[1]
+    hi = min(available, MULTI_VIOLATOR_MAX)
+    lo = min(MULTI_VIOLATOR_RANGE[0], hi)
     m = int(rng.randint(lo, hi + 1)) if hi > lo else hi
     spec.notes["n_violators_wanted"] = m
     # `_group` takes a FRACTION and rounds, so the fraction is chosen to round
@@ -1490,15 +1492,14 @@ EXTRA_OBJECTS = (3, 10)
 #: thing there: how many actors are in shot.
 MULTI_ACTORS = EXTRA_OBJECTS
 
-#: How many of them violate: at least two -- one violator is what `standard`
-#: already is -- and at most all but one, so there is always a lawful object to
-#: contrast against.
+#: How many of them violate: between two and five by default -- one violator is
+#: what `standard` already is -- and at most all but one, so there is always a
+#: lawful object to contrast against.
 #:
-#: Note what the upper bound allows: at N = 3 the only legal draw is M = 2, a
-#: violating MAJORITY. That is deliberate and it is your call; it makes the
-#: small scenes the hardest ones, because "most things are wrong" is a
-#: different perceptual claim from "one thing is wrong".
+#: At N = 3 the only legal draw remains M = 2, a violating MAJORITY. The
+#: configured ceiling also keeps a large scene's violating group countable.
 MULTI_VIOLATOR_RANGE = (2, 1)   # (minimum, how many lawful bodies to keep)
+MULTI_VIOLATOR_MAX = 5
 
 
 def condition_for(variant: int, n_variants: Optional[int] = None,

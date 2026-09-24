@@ -640,7 +640,7 @@ should without the label ever reading the condition:
 | `standard` | ~50 / 37 / 13 | one or two bodies, a static camera: only the evidence factors bite |
 | `camera` | ~0 / 88 / 12 | any real move is past `camera_motion`'s easy cut, and the sampler never reaches its hard one |
 | `distractors` | ~0 / 86 / 14 | 3–10 extras put `object_count` past 3, and only the biggest draws pass 10 |
-| `multi` | ~0 / 43 / 57 | two violators is moderate, three or more is hard |
+| `multi` | ~0 / 43 / 57 | two violators is moderate, three to five are hard |
 | `camera+multi` | 0 / 0 / 100 | both apply |
 
 Two violators is deliberately **not** hard: the pair families (`newton2_mass` exchanging momentum

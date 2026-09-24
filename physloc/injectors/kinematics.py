@@ -295,6 +295,13 @@ class AntiGravity(_GravityScale):
 
     family = "antigravity"
 
+    # The per-body review clips need a more legible lower end than the shared
+    # gravity ladder: on `review_f37`, the old weak pulse was barely visible.
+    # Move weak up to the old medium setting and put medium between the old
+    # medium and strong settings. Keep strong unchanged so the top of the
+    # ladder remains comparable with the previous generation.
+    ALPHA_BY_BIN = {"weak": -1.6, "medium": -2.8, "strong": -4.0}
+
     def _targets(self, spec):
         live = self._all_actors(spec)
         if not live:

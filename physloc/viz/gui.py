@@ -340,9 +340,14 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .badge.hard{color:#fff;background:#23478a;border-color:#3764b3}
 .siblings{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;align-items:center}
 .siblings .lab{color:var(--faint);font-size:11.5px;margin-right:2px}
+.siblings .row{display:flex;gap:5px;flex-wrap:wrap;align-items:center;width:100%}
+.siblings .row + .row{margin-top:3px}
+.siblings .row .lab{min-width:72px}
 .sib{font-size:11.5px;padding:1px 9px;border-radius:7px;border:1px solid var(--line2);background:transparent;
   color:var(--dim);cursor:pointer}
 .sib:hover{color:var(--text);border-color:#465068} .sib.on{background:#1c2638;color:var(--text);border-color:var(--accent2)}
+.sib:disabled{color:var(--faint);opacity:.45;cursor:default}
+.sib:disabled:hover{color:var(--faint);border-color:var(--line2)}
 .stage{flex:1;min-height:0;display:flex;gap:12px;padding:4px 14px 10px}
 .view{flex:1;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;
   background:radial-gradient(ellipse at center,#171a21 0,#0a0b0e 75%);border-radius:var(--r);border:1px solid var(--line);overflow:hidden}
@@ -727,14 +732,59 @@ function header() {
   $("#prompt").textContent = c.prompt || c.uid;
   const pair = S.index.samples.filter(x => x.pair_uid === S.index.samples[S.cur].pair_uid);
   const box = $("#siblings");
-  box.innerHTML = pair.length > 1 ? `<span class="lab">same scene</span>` : "";
-  for (const x of pair) {
-    if (pair.length < 2) break;
+  const scenarios = [...new Set(S.index.samples.map(x => x.scenario).filter(Boolean))].sort();
+  if (pair.length < 2 && scenarios.length < 2) { box.innerHTML = ""; return; }
+
+  // Keep family selection separate from severity selection. The old row made
+  // one button for every family x severity combination, which gets crowded as
+  // soon as a scene contains several violation families.
+  const families = [...new Set(pair.filter(x => x.label !== "valid").map(x => x.family))].sort();
+  const current = S.index.samples[S.cur];
+  const family = current.label === "valid" ? families[0] : current.family;
+  // Scenarios are a top-level navigation axis, so they come from the whole
+  // dataset rather than the current pair (which normally contains only one
+  // scenario).
+  const familySamples = pair.filter(x => x.family === family && x.label !== "valid");
+  const bySeverity = new Map(familySamples.map(x => [x.severity_bin, x]));
+  box.innerHTML = `<div class="row"><span class="lab">scenario</span></div><div class="row"><span class="lab">violation family</span></div><div class="row"><span class="lab">severity</span></div>`;
+  const scenarioRow = box.children[0], familyRow = box.children[1], severityRow = box.children[2];
+  for (const scenario of scenarios) {
     const b = document.createElement("button");
-    b.className = "sib" + (x.i === S.cur ? " on" : "");
-    b.textContent = x.label === "valid" ? "valid" : pretty(x.family) + (x.severity_bin && x.severity_bin !== "strong" ? " " + x.severity_bin : "");
-    b.onclick = () => openClip(x.i);
-    box.append(b);
+    b.className = "sib" + (scenario === current.scenario ? " on" : "");
+    b.textContent = pretty(scenario);
+    b.onclick = () => {
+      const candidates = S.index.samples.filter(x => x.scenario === scenario);
+      const target = candidates.find(x => x.level === current.level &&
+                    x.condition === current.condition && x.family === current.family &&
+                    x.severity_bin === current.severity_bin) ||
+                    candidates.find(x => x.family === current.family &&
+                    x.severity_bin === current.severity_bin) ||
+                    candidates.find(x => x.family === current.family) ||
+                    candidates[0];
+      if (target) openClip(target.i);
+    };
+    scenarioRow.append(b);
+  }
+  for (const f of families) {
+    const b = document.createElement("button");
+    b.className = "sib" + (f === family ? " on" : "");
+    b.textContent = pretty(f);
+    b.onclick = () => {
+      const target = pair.find(x => x.family === f && x.severity_bin === current.severity_bin) ||
+                    pair.find(x => x.family === f && x.severity_bin === "strong") ||
+                    pair.find(x => x.family === f);
+      if (target) openClip(target.i);
+    };
+    familyRow.append(b);
+  }
+  for (const severity of ["weak", "medium", "strong"]) {
+    const b = document.createElement("button");
+    const target = bySeverity.get(severity);
+    b.className = "sib" + (target && target.i === S.cur ? " on" : "");
+    b.textContent = severity;
+    b.disabled = !target;
+    if (target) b.onclick = () => openClip(target.i);
+    severityRow.append(b);
   }
 }
 

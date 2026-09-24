@@ -14,9 +14,11 @@ accident of the draw.
 
 Only where splitting means something, and only where it can be honoured:
 
-* the family's violators ARE its group (`Injector._group`), not a pair it
+* the family acts on its requested number of bodies, not a coupled group it
   stages together -- `newton2_mass` exchanges momentum between two bodies and
-  has no per-body version;
+  has no per-body version. Some families (notably `antigravity`) rank eligible
+  actors and choose that many, so the selected ids need not be the random ids
+  returned by `_group`;
 * the plan STAGES, so the worker can apply each violator's intervention at its
   own frame in one simulation (`stepper.run_segments`);
 * the violation is not scene-wide (`spatial_extent == "global"`) and not a
@@ -82,9 +84,14 @@ def splittable(inj, spec, plan: InterventionPlan, staged: bool) -> bool:
         return False
     if getattr(spec, "physics_medium", "rigid") == "granular":
         return False
-    group = {int(b.segmentation_id) for b in inj._group(spec)}
+    group = inj._group(spec)
     violators = set(_dynamic_ids(spec, plan.causal_body_ids))
-    return len(group) >= 2 and violators == group
+    # `_group` is the requested group SIZE. A family can select the actual
+    # members from that many eligible actors (antigravity ranks airborne runs),
+    # so requiring exact id equality incorrectly disabled its local per-body
+    # timing. Each split sub-plan below is still checked to target exactly its
+    # requested body; coupled plans fail that check and stay shared.
+    return len(group) >= 2 and len(violators) == len(group)
 
 
 def violator_plans(inj, spec, traj, make_rng: Callable[[], np.random.RandomState],

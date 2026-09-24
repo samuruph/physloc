@@ -430,13 +430,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                    win_mod.observable_frames(seg_v, seg_i, [bid],
                                              rgb_valid=pv["rgba"],
                                              rgb_invalid=pi["rgba"]))
-        if independent:
-            scored_on = _score(bid, clock.get("notes") or {})
-            obs = own_obs
-            seen = (seen_all if shadow_component else
-                    masks_mod.footprint(seg_i, [bid]).any(axis=(1, 2)))
-        else:
-            scored_on, obs, seen = primary, observable_all, seen_all
+        # A shared clock means the violators act at the same time; it does not
+        # mean they have the same residual. Score every body against its own
+        # valid twin and paint that body's evidence onto its own pixels. Using
+        # the primary body's score here made a shared multi clip silently lose
+        # every other violator whose response differed.
+        scored_on = _score(bid, clock.get("notes") or {})
+        obs = own_obs
+        seen = (seen_all if shadow_component else
+                masks_mod.footprint(seg_i, [bid]).any(axis=(1, 2)))
         scored = c_iv if detectable == "event" else c_cq
         visible, s_visible = sev_mod.attribute_to_evidence(
             scored_on["s_invalid"], scored, obs)

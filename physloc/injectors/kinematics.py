@@ -328,6 +328,18 @@ class AntiGravity(_GravityScale):
         bodies can ask for a share of them. One floating grain out of forty is
         a few pixels nobody will find; a dozen rising together is the point.
         """
+        # `multi.violator_plans` sets an explicit one-body target while it
+        # builds each actor's independent gravity pulse. Honor that target here
+        # instead of ranking all actors again: otherwise every sub-plan can
+        # choose the same longest-airborne body and fail the per-body check,
+        # silently sending local antigravity back to a shared clock.
+        named = (spec.notes.get("family_targets") or {}).get(self.family)
+        if named:
+            by_id = {int(b.segmentation_id): b for b in spec.bodies}
+            chosen = [by_id[int(i)] for i in named if int(i) in by_id]
+            if chosen:
+                return chosen
+
         live = self._all_actors(spec)
         if not live:
             return []

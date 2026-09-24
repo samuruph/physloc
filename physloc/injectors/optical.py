@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 
 from ..sim.trajectory import Trajectory
+from . import _geom
 from .base import Injector, InterventionPlan, register
 
 
@@ -49,9 +50,29 @@ class Shadow(Injector):
         norm = float(np.linalg.norm(bearing))
         perp = (np.array([-bearing[1], bearing[0]]) / norm if norm > 1e-6
                 else np.array([1.0, 0.0]))
-        offset = (self.OFFSET_RADII[severity_bin]
-                  * float(caster.bounding_radius)
-                  * perp * float(self._instance_rng(spec).choice([-1.0, 1.0])))
+        # Both perpendicular directions break the same law. Pick the side
+        # whose *projected ground shadow* stays in shot at strong severity,
+        # then reuse it for every bin so the ladder remains comparable. A
+        # random side discarded valid L3 scans even though the other side fit.
+        si = traj.index_of(int(shade.segmentation_id))
+        p = np.asarray(traj.pos[:, si, :], np.float64)
+        denom = max(-float(light[2]), 1e-6)
+        top = float(spec.notes.get("surface_top", 0.0))
+        projected = p.copy()
+        projected[:, :2] += ((p[:, 2] - top) / denom)[:, None] * light[None, :2]
+        projected[:, 2] = top
+        full = self.OFFSET_RADII["strong"] * float(caster.bounding_radius)
+        preferred = float(self._instance_rng(spec).choice([-1.0, 1.0]))
+        ranked = []
+        for sign in (preferred, -preferred):
+            shifted = projected[t0:].copy()
+            shifted[:, :2] += sign * full * perp[None, :]
+            seen = np.asarray(_geom.in_frame(
+                spec, shifted, from_frame=t0, num_frames=T), bool)
+            head = min(3, len(seen))
+            ranked.append((int(seen[:head].sum()), int(seen.sum()), sign))
+        sign = max(ranked, key=lambda item: item[:2])[2]
+        offset = self.OFFSET_RADII[severity_bin] * float(caster.bounding_radius) * perp * sign
 
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],

@@ -230,7 +230,10 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
     if spec.hdri_id and renderer is not None:
         hdri_src = kb.AssetSource.from_manifest(HDRI)
         hdri_tex = hdri_src.create(asset_id=spec.hdri_id)
-        renderer._set_ambient_light_hdri(hdri_tex.filename)
+        # The HDRI lights the actor as well as remaining visible in the
+        # backdrop. The directional key provides an interpretable main shadow
+        # bearing, while the HDRI contributes natural fill.
+        renderer._set_ambient_light_hdri(hdri_tex.filename, strength=1.0)
 
     objs = {}
     for b in spec.bodies:
@@ -795,8 +798,23 @@ def replay(spec, objs, traj: Trajectory, renderer=None, scene=None) -> None:
 
 def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     t0 = time.perf_counter()
-    stack = renderer.render()
-    dt = time.perf_counter() - t0
+    # An HDRI gives realistic reflections and fill, but its broad illumination
+    # can cast a second patch from the hidden caster. Render the actual Cycles
+    # shadow with the directional key alone, then apply that measured key-light
+    # loss to a fully HDRI-lit no-caster image. Both are renders of the same
+    # scene, camera, materials and receiving geometry.
+    key_only_hdri = spec.scenario == "shadow_track" and bool(spec.hdri_id)
+    world_strength = (renderer.ambient_node.inputs["Strength"]
+                      if key_only_hdri else None)
+    original_strength = (world_strength.default_value
+                         if world_strength is not None else None)
+    if world_strength is not None:
+        world_strength.default_value = 0.0
+    try:
+        stack = renderer.render()
+    finally:
+        if world_strength is not None:
+            world_strength.default_value = original_strength
 
     # A true Cycles shadow has no segmentation id. Isolate it with a matched
     # no-caster-shadow render: only the camera-hidden caster's shadow-ray flag
@@ -805,25 +823,42 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     # materials, receiver geometry and denoiser used by the RGB render.
     caster = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
     clear = None
+    key_shadow_delta = None
     if caster is not None and caster.name in objs:
         obj = objs[caster.name]
         bobj = obj.linked_objects.get(renderer)
         if bobj is not None:
-            if hasattr(bobj, "visible_shadow"):
-                bobj.visible_shadow = False
-            elif hasattr(bobj, "cycles_visibility"):
-                bobj.cycles_visibility.shadow = False
-            clear = renderer.render()
-            if hasattr(bobj, "visible_shadow"):
-                bobj.visible_shadow = True
-            elif hasattr(bobj, "cycles_visibility"):
-                bobj.cycles_visibility.shadow = True
+            try:
+                if hasattr(bobj, "visible_shadow"):
+                    bobj.visible_shadow = False
+                elif hasattr(bobj, "cycles_visibility"):
+                    bobj.cycles_visibility.shadow = False
+                if world_strength is not None:
+                    world_strength.default_value = 0.0
+                clear_key = renderer.render()
+                if world_strength is not None:
+                    world_strength.default_value = original_strength
+                    clear = renderer.render()
+                else:
+                    clear = clear_key
+            finally:
+                if world_strength is not None:
+                    world_strength.default_value = original_strength
+                if hasattr(bobj, "visible_shadow"):
+                    bobj.visible_shadow = True
+                elif hasattr(bobj, "cycles_visibility"):
+                    bobj.cycles_visibility.shadow = True
             normal = np.asarray(stack["rgba"])[..., :3].astype(np.float32)
-            no_shadow = np.asarray(clear["rgba"])[..., :3].astype(np.float32)
+            no_shadow = np.asarray(clear_key["rgba"])[..., :3].astype(np.float32)
+            if world_strength is not None:
+                key_shadow_delta = np.maximum(no_shadow - normal, 0.0)
             scale = 255.0 if max(float(normal.max()), float(no_shadow.max())) > 1.5 else 1.0
+            from physloc.loader import SHADOW_STRENGTH_THRESHOLD
             strength = np.clip((no_shadow - normal).mean(axis=-1) / scale,
-                               0.0, 1.0).astype(np.float16)
-            source = np.where(strength > (1.0 / 255.0),
+                               0.0, 1.0)
+            strength = np.where(strength > SHADOW_STRENGTH_THRESHOLD,
+                                strength, 0.0).astype(np.float16)
+            source = np.where(strength > SHADOW_STRENGTH_THRESHOLD,
                               int(spec.notes["caster_id"]), 0).astype(np.uint16)
             stack["shadow_strength"] = strength
             stack["shadow_source_id"] = source
@@ -836,6 +871,34 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     ordered = [objs[b.name] for b in spec.bodies if b.name in objs]
     stack["segmentation"] = kb.adjust_segmentation_idxs(
         stack["segmentation"], scene.assets, ordered)
+
+    # The isolation render is a transport measurement, not a semantic mask:
+    # HDRI and occlusion can produce positive differences on distractors,
+    # backdrop, or the actor itself.  Shadow-track scenes declare floor/support
+    # bodies as the receivers, so reject all other pixels at the source.
+    if "shadow_strength" in stack and "shadow_source_id" in stack:
+        receiver_ids = [int(b.segmentation_id) for b in spec.bodies
+                        if b.role in ("floor", "support")]
+        if receiver_ids:
+            from physloc.loader import shadow_receiver_surface
+            seg = np.asarray(stack["segmentation"])
+            while seg.ndim > np.asarray(stack["shadow_strength"]).ndim \
+                    and seg.shape[-1] == 1:
+                seg = seg[..., 0]
+            receiver = shadow_receiver_surface(seg, receiver_ids,
+                                               stack.get("normal"))
+            if key_shadow_delta is not None and clear is not None:
+                rgba = np.asarray(clear["rgba"]).copy()
+                rgb = rgba[..., :3]
+                lit = rgb.astype(np.float32)
+                lit[receiver] = np.maximum(
+                    lit[receiver] - key_shadow_delta[receiver], 0.0)
+                rgba[..., :3] = lit.astype(rgb.dtype)
+                stack["rgba"] = rgba
+            stack["shadow_strength"] = np.where(
+                receiver, np.asarray(stack["shadow_strength"]), 0).astype(np.float16)
+            stack["shadow_source_id"] = np.where(
+                receiver, np.asarray(stack["shadow_source_id"]), 0).astype(np.uint16)
 
     # The hidden caster is an optical proxy for the *projected receiver
     # shadow*, not a second object allowed to shade the visible actor.  A
@@ -856,8 +919,42 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
             while actor_pixels.ndim > rgb.ndim - 1 and actor_pixels.shape[-1] == 1:
                 actor_pixels = actor_pixels[..., 0]
             if actor_pixels.shape == rgb.shape[:3]:
-                rgb[actor_pixels] = clear_rgb[actor_pixels]
+                # Segmentation covers opaque actor pixels, but the shadow-ray
+                # artifact also survives in antialiased edge pixels.  Replace
+                # a narrow edge ring from the matched clear render too.  The
+                # annotation uses the same two-pixel caster moat.
+                from physloc.loader import _dilate_mask, SHADOW_CASTER_GUARD_PX
+                actor_region = _dilate_mask(actor_pixels,
+                                            SHADOW_CASTER_GUARD_PX)
+                rgb[actor_region] = clear_rgb[actor_region]
                 rgba[..., :3] = rgb
+                stack["rgba"] = rgba
+
+    # Optical interventions move or reshape only the camera-hidden caster.
+    # Its changed geometry can still affect indirect light on the visible
+    # actor even with shadow rays disabled in the matched clear render.  The
+    # actor is identical in both twins, so restore its RGB and antialiased
+    # edge directly from the already-rendered valid twin.
+    if tag == "invalid" and os.path.basename(outdir).startswith("shadow_"):
+        valid_path = os.path.join(os.path.dirname(os.path.dirname(outdir)),
+                                  "passes_valid.npz")
+        if os.path.isfile(valid_path):
+            from physloc.loader import _dilate_mask, SHADOW_CASTER_GUARD_PX
+            with np.load(valid_path) as valid:
+                valid_seg = np.asarray(valid["segmentation"])
+                valid_rgb = np.asarray(valid["rgba"])[..., :3]
+            invalid_seg = np.asarray(stack["segmentation"])
+            while valid_seg.ndim > 3 and valid_seg.shape[-1] == 1:
+                valid_seg = valid_seg[..., 0]
+            while invalid_seg.ndim > 3 and invalid_seg.shape[-1] == 1:
+                invalid_seg = invalid_seg[..., 0]
+            actor_id = int(spec.notes.get("caster_id", 0))
+            if actor_id and valid_rgb.shape == np.asarray(stack["rgba"])[..., :3].shape:
+                actor_region = _dilate_mask(
+                    (valid_seg == actor_id) | (invalid_seg == actor_id),
+                    SHADOW_CASTER_GUARD_PX)
+                rgba = np.asarray(stack["rgba"]).copy()
+                rgba[..., :3][actor_region] = valid_rgb[actor_region]
                 stack["rgba"] = rgba
 
     declared = sorted({int(b.segmentation_id) for b in spec.bodies})
@@ -875,7 +972,7 @@ def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
     # No image files here: the container has no ffmpeg. All mp4s -- previews,
     # released rgb.mp4 and the annotation overlays -- are written host-side by
     # physloc.viz, which keeps a single encoder and one set of settings.
-    return dt, {k: list(v.shape) for k, v in arrays.items()}
+    return time.perf_counter() - t0, {k: list(v.shape) for k, v in arrays.items()}
 
 
 def _announce(kind: str, tag: str) -> None:

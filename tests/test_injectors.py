@@ -314,6 +314,82 @@ def test_a_violation_of_the_shadow_survives_rescripting(family):
                               actor_scale)
 
 
+def test_shadow_shape_severity_changes_hidden_caster_and_is_ordered():
+    sc = scenarios.get("shadow_track")
+    spec = sc.sample(777, TIERS["debug"], "L0")
+    traj = mockroll.roll(spec, sc)
+    sc.script(spec, traj)
+    inj = injectors.get("shadow_shape")
+    magnitudes = []
+    zi = spec.index_of("shadow_caster")
+    for severity in ("weak", "medium", "strong"):
+        plan = inj.plan(spec, traj, np.random.RandomState(0), severity)
+        assert plan is not None
+        out = inj.apply(spec, traj, plan)
+        assert out.scale_mul[-1, zi, 2] < 1.0
+        assert out.scale_mul[-1, zi, 0] > 1.0
+        magnitudes.append(plan.magnitude)
+    assert magnitudes[0] < magnitudes[1] < magnitudes[2]
+
+
+def test_l3_shadow_track_casts_the_scanned_actor_mesh():
+    sc = scenarios.get("shadow_track")
+    spec = sc.sample(91731, TIERS["debug"], "L3")
+    actor = next(b for b in spec.bodies if b.role == "actor")
+    shade = next(b for b in spec.bodies if b.role == "shadow_caster")
+    assert actor.kind == shade.kind == "gso"
+    assert actor.asset_id == shade.asset_id
+    assert actor.scale == shade.scale
+    assert actor.position == shade.position
+    assert actor.quaternion == shade.quaternion
+    assert not actor.visible_shadow and shade.visible_shadow
+    assert not shade.visible_camera
+
+    traj = mockroll.roll(spec, sc)
+    sc.script(spec, traj)
+    ai, si = spec.index_of(actor.name), spec.index_of(shade.name)
+    assert np.array_equal(traj.pos[:, ai], traj.pos[:, si])
+    assert np.array_equal(traj.quat[:, ai], traj.quat[:, si])
+
+
+def test_shadow_visibility_uses_receiver_projection():
+    from physloc.injectors import _geom
+
+    sc = scenarios.get("shadow_track")
+    spec = sc.sample(91731, TIERS["debug"], "L3")
+    traj = mockroll.roll(spec, sc)
+    sc.script(spec, traj)
+    inj = injectors.get("shadow_inverted")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    out = inj.apply(spec, traj, plan)
+    shade = next(b for b in spec.bodies if b.role == "shadow_caster")
+    j = out.index_of(int(shade.segmentation_id))
+    p = np.asarray(out.pos[:, j], np.float64)
+    L = np.asarray(spec.notes["light_dir"], np.float64)
+    top = float(spec.notes["surface_top"])
+    projected = p + ((p[:, 2] - top) / -L[2])[:, None] * L[None, :]
+    expected = _geom.in_frame(spec, projected, from_frame=0,
+                              num_frames=out.num_frames)
+    assert np.array_equal(_geom.violators_on_screen(spec, out, [shade]), expected)
+
+
+def test_l3_detached_shadow_uses_the_visible_side_at_full_strength():
+    from physloc.injectors import _geom
+
+    sc = scenarios.get("shadow_track")
+    spec = sc.sample(91731, TIERS["debug"], "L3")
+    traj = mockroll.roll(spec, sc)
+    sc.script(spec, traj)
+    inj = injectors.get("shadow")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    out = inj.apply(spec, traj, plan)
+    shade = next(b for b in spec.bodies if b.role == "shadow_caster")
+    assert _geom.violators_visible(spec, out, [shade], plan.t_event)
+    assert np.linalg.norm(plan.params["offset_m"]) == pytest.approx(
+        inj.OFFSET_RADII["strong"] *
+        next(b for b in spec.bodies if b.role == "actor").bounding_radius)
+
+
 def test_pendulum_rod_relaxes_at_dissolve_disappearance():
     sc = scenarios.get("pendulum_swing")
     spec = sc.sample(777, TIERS["debug"], "L0")

@@ -181,6 +181,59 @@ def test_shadow_receiver_mask_removes_the_two_pixel_caster_halo():
     assert mask[:, 1, 1].all()
 
 
+def test_shadow_receiver_mask_rejects_non_receiver_surfaces():
+    strength = np.ones((1, 3, 4), np.float32)
+    source = np.full((1, 3, 4), 2, np.uint16)
+    # 1 is the floor receiver; 500 is a distractor and 900 is the backdrop.
+    seg = np.array([[[1, 500, 900, 1],
+                     [1,   2, 900, 1],
+                     [1, 500,   1, 1]]], np.uint16)
+    mask = L.shadow_receiver_mask(strength, source, seg, [2],
+                                  guard_px=0, receiver_ids=[1])
+    expected = (seg == 1)
+    np.testing.assert_array_equal(mask, expected)
+
+
+def test_shadow_receiver_mask_rejects_weak_isolation_noise():
+    strength = np.array([[[0.01, 0.05]]], np.float32)
+    source = np.array([[[2, 2]]], np.uint16)
+    seg = np.array([[[1, 1]]], np.uint16)
+    mask = L.shadow_receiver_mask(strength, source, seg, [2],
+                                  guard_px=0, receiver_ids=[1])
+    assert mask.tolist() == [[[False, True]]]
+
+
+def test_hdri_receiver_is_only_the_flat_part_of_backdrop():
+    strength = np.full((1, 2, 3), 0.5, np.float32)
+    source = np.full((1, 2, 3), 2, np.uint16)
+    seg = np.array([[[900, 900, 500], [900, 2, 1]]], np.uint16)
+    normal = np.zeros((1, 2, 3, 3), np.uint16)
+    normal[:, 0, 0] = (32767, 32767, 65535)  # dome's ground
+    normal[:, 0, 1] = (32767, 10000, 45000)  # dome's scenery
+    mask = L.shadow_receiver_mask(strength, source, seg, [2], guard_px=0,
+                                  receiver_ids=[1], normal=normal)
+    assert mask.tolist() == [[[True, False, False], [False, False, True]]]
+
+
+def test_shadow_islands_remove_sparse_render_noise():
+    mask = np.zeros((1, 96, 96), bool)
+    mask[:, 30:40, 30:40] = True
+    mask[:, 2, 2] = True
+    mask[:, 70:72, 70:72] = True
+    clean = L.prune_shadow_islands(mask)
+    assert clean.sum() == 100
+    assert clean[:, 30:40, 30:40].all()
+
+
+def test_shadow_caster_moat_does_not_wrap_across_image_edge():
+    mask = np.zeros((1, 8, 8), bool)
+    mask[:, 0, 0] = True
+    grown = L._dilate_mask(mask, 2)
+    assert grown[:, :3, :3].all()
+    assert not grown[:, -1].any()
+    assert not grown[:, :, -1].any()
+
+
 def test_hdf5_handle_is_not_pickled(dataset_root):
     sample = L.PhysLocDataset(dataset_root)[0]
     _ = sample.observations.segmentation

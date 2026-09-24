@@ -106,6 +106,9 @@ PANELS: Dict[str, str] = {
 #: derived from it -- the same nine, in the same order, as the grid and sheet.
 DEFAULT_PANELS = ("rgb", "energy", "segmentation", "depth", "flow", "mask",
                   "severity", "causal", "divergence")
+# Keep generated overlays unobstructed: optional geometry layers (especially
+# bbox2d) can cross the cast-shadow evidence or make a growing actor look like
+# a detection box. They remain available when explicitly requested in the GUI.
 DEFAULT_LAYERS: Sequence[str] = ()
 
 #: Bodies too big to box: the floor and the HDRI dome would frame the whole shot.

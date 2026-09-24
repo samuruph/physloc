@@ -135,10 +135,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         else:
             source_v = source_v > 0
             source_i = source_i > 0
+        from ..loader import SHADOW_STRENGTH_THRESHOLD
         shadow_v = ((np.asarray(pv["shadow_strength"], np.float32)
-                     > (1.0 / 255.0)) & source_v)
+                     > SHADOW_STRENGTH_THRESHOLD) & source_v)
         shadow_i = ((np.asarray(pi["shadow_strength"], np.float32)
-                     > (1.0 / 255.0)) & source_i)
+                     > SHADOW_STRENGTH_THRESHOLD) & source_i)
         # The source object can contribute a dark contact/occlusion region to
         # the isolation difference when its projected shadow reaches its own
         # footprint.  A shadow violation is localized on the receiver, not on
@@ -153,6 +154,21 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                 masks_mod.footprint(seg_v, [source_id]), guard_px)
             shadow_i &= ~masks_mod.dilate(
                 masks_mod.footprint(seg_i, [source_id]), guard_px)
+        # Isolation can also report a shadow on visible distractors or the
+        # HDRI/backdrop.  The scenario's floor/support bodies are the only
+        # lawful receivers for this benchmark shadow.
+        from ..loader import shadow_receiver_surface
+        receiver_ids = [int(b["segmentation_id"])
+                        for b in spec_d.get("bodies", [])
+                        if b.get("role") in ("floor", "support")]
+        if receiver_ids:
+            shadow_v &= shadow_receiver_surface(seg_v, receiver_ids,
+                                                  pv.get("normal"))
+            shadow_i &= shadow_receiver_surface(seg_i, receiver_ids,
+                                                  pi.get("normal"))
+        from ..loader import prune_shadow_islands
+        shadow_v = prune_shadow_islands(shadow_v)
+        shadow_i = prune_shadow_islands(shadow_i)
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the
@@ -500,6 +516,25 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # differently because of the violation, the causal mask still says so.
     cmask = np.zeros(seg_i.shape, np.uint8)
     cids = np.zeros(seg_i.shape, np.uint16)
+    shadow_effect = None
+    if not shadow_component and scenario == "shadow_track" \
+            and all(key in pv and key in pi for key in
+                    ("shadow_strength", "shadow_source_id", "normal")):
+        from ..loader import shadow_receiver_mask
+        caster_id = int(spec_d.get("notes", {}).get("caster_id", 0))
+        receiver_ids = [int(b["segmentation_id"])
+                        for b in spec_d.get("bodies", [])
+                        if b.get("role") in ("floor", "support")]
+        if caster_id and receiver_ids:
+            valid_shadow = shadow_receiver_mask(
+                pv["shadow_strength"], pv["shadow_source_id"], seg_v,
+                [caster_id], receiver_ids=receiver_ids, normal=pv["normal"])
+            invalid_shadow = shadow_receiver_mask(
+                pi["shadow_strength"], pi["shadow_source_id"], seg_i,
+                [caster_id], receiver_ids=receiver_ids, normal=pi["normal"])
+            shadow_effect = masks_mod.changed_shadow(
+                pv["shadow_strength"], pi["shadow_strength"],
+                valid_shadow, invalid_shadow)
     for k, c in enumerate(violators):
         owned = [b for b in moving_affected if b in reach and reach[b][1] == k]
         c["disturbed"] = owned
@@ -515,6 +550,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                 seg_v, seg_i, [c["id"]], list(static_ids) + owned, gate,
                 static_ids=static_ids,
                 secondary_active={b: (frames >= reach[b][0]) & gate for b in owned})
+            if shadow_effect is not None and int(c["id"]) == caster_id:
+                part[shadow_effect & gate[:, None, None] & (part == 0)] = 2
         second = (part == 2) & (cmask != 1)
         cmask[second], cids[second] = 2, c["id"]
         first = part == 1

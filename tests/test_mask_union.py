@@ -103,6 +103,20 @@ def test_invalid_mask_is_a_subset_of_the_union():
     assert np.all(u[i]), "invalid-side pixels must all be inside the union"
 
 
+def test_changed_shadow_marks_projected_effect_but_rejects_edge_noise():
+    valid = np.zeros((2, 32, 32), np.float32)
+    invalid = valid.copy()
+    valid[:, 10:18, 10:18] = 0.5
+    invalid[0, 10:18, 14:22] = 0.5  # displaced shadow
+    invalid[1] = valid[1]
+    invalid[1, 9, 9] = 0.02  # one noisy edge pixel
+    changed = masks.changed_shadow(valid, invalid,
+                                   valid > 1/255, invalid > 1/255)
+    assert changed[0, 10:18, 18:22].all()
+    assert not changed[0, 10:18, 10:14].any()
+    assert not changed[1].any()
+
+
 @pytest.mark.parametrize("which", ["violation_mask"])
 def test_released_samples_have_nonempty_masks_while_active(which):
     root = find_release()

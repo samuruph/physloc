@@ -266,6 +266,10 @@ class ShadowShape(_Squash):
 
     family = "shadow_shape"
     magnitude_unit = "shadow_aspect_ratio"
+    # The hidden caster is a sphere above a horizontal receiver. Scaling its
+    # Z axis down broadens the cast patch; the smooth ramp is preserved but the
+    # visual difference is made much clearer than the generic squash ladder.
+    FACTOR_BY_BIN = {"weak": 0.75, "medium": 0.50, "strong": 0.25}
     #: NOT staged, unlike `deformation`. The thing changing shape here is a
     #: scripted body -- a flattened disc the scenario animates, pinned in the
     #: simulator so it neither falls nor collides -- so there is no collision
@@ -277,6 +281,67 @@ class ShadowShape(_Squash):
     def _targets(self, spec):
         shade = [b for b in spec.bodies if b.role == "shadow_caster"]
         return shade[:1]
+
+    def strong_residual_reference(self, spec) -> float:
+        # Compare against the strongest height compression, in the same
+        # aspect-ratio units used by the mask residual.
+        return 1.0 / float(self.FACTOR_BY_BIN["strong"])
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        targets = self._targets(spec)
+        if not targets:
+            return None
+        T = traj.num_frames
+        t0 = _geom.default_event_frame(spec, T)
+        if t0 is None:
+            return None
+        factor = float(self.FACTOR_BY_BIN[severity_bin])
+        ramp = max(2, min(self._frames_for(spec, self.RAMP_SECONDS), T - t0))
+        union, applied, after = self._split_windows(t0, T, ramp)
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
+            params={"type": "shadow_height_scale", "factor": factor,
+                    "ramp_frames": int(ramp)},
+            magnitude=float(1.0 / factor - 1.0),
+            magnitude_unit=self.magnitude_unit, severity_bin=severity_bin,
+            notes={"radius": float(targets[0].bounding_radius),
+                   "surface_top": _geom.surface_top(spec, targets[0]),
+                   "aspect": 1.0 / factor, "factor": factor,
+                   "ramp_frames": int(ramp),
+                   "r_strong": self.strong_residual_reference(spec)})
+
+    def _profile(self, plan, n: int) -> np.ndarray:
+        """Compress only the hidden caster's height; keep its volume neutral."""
+        k = float(plan.notes["factor"])
+        ramp = max(1, int(plan.notes["ramp_frames"]))
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
+        z = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+        xy = 1.0 / np.sqrt(z)
+        return np.stack((xy, xy, z), axis=1)
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan):
+        t0 = int(plan.t_event)
+        profile = self._profile(plan, traj_valid.num_frames - t0)
+        traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
+        for bid in plan.causal_body_ids:
+            bi = traj_valid.index_of(int(bid))
+            traj_invalid.scale_mul[t0:, bi, :] = profile.astype(np.float32)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
+    def _apply(self, spec, traj, plan):
+        out = self._clone(traj)
+        t0 = int(plan.t_event)
+        profile = self._profile(plan, traj.num_frames - t0)
+        for bid in plan.causal_body_ids:
+            bi = traj.index_of(int(bid))
+            out.scale_mul[t0:, bi, :] = profile.astype(np.float32)
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
 
 
 class ColourShift(Injector):

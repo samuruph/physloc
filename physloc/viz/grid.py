@@ -452,7 +452,10 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
                 source = c["clip"].observations.get("shadow_source_id")
                 if strength is not None and source is not None:
                     c["ref"] = loader.shadow_receiver_mask(
-                        strength, source, c["seg"], ids)
+                        strength, source, c["seg"], ids,
+                        receiver_ids=(c["clip"].violation.shadow or {}).get(
+                            "receiver_object_ids"),
+                        normal=c["normals"])
                 else:
                     c["ref"] = np.zeros(c["seg"].shape, bool)
             else:

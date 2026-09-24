@@ -68,6 +68,25 @@ def invalid_mask(seg_invalid: np.ndarray, dynamic_causal_ids: Sequence[int],
             & np.asarray(active, bool)[:, None, None])
 
 
+def changed_shadow(valid_strength: np.ndarray, invalid_strength: np.ndarray,
+                   valid_receiver: np.ndarray, invalid_receiver: np.ndarray,
+                   min_fraction: float = 0.001) -> np.ndarray:
+    """Visible invalid-side shadow change caused by a non-optical violation.
+
+    Count new shadow pixels and substantial strength changes.  A tiny number
+    of changed edge pixels can come from path-tracing noise; reject a frame
+    unless the changed patch occupies a measurable part of the image.
+    """
+    valid = np.asarray(valid_receiver, bool)
+    invalid = np.asarray(invalid_receiver, bool)
+    difference = np.abs(np.asarray(invalid_strength, np.float32)
+                        - np.asarray(valid_strength, np.float32))
+    changed = invalid & (~valid | (difference > 0.03))
+    min_pixels = max(8, int(np.ceil(min_fraction * changed.shape[1] * changed.shape[2])))
+    counts = changed.reshape(len(changed), -1).sum(axis=1)
+    return changed & (counts >= min_pixels)[:, None, None]
+
+
 def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                 primary_ids: Sequence[int], secondary_ids: Sequence[int],
                 active: np.ndarray, neighbourhood: int = 3,
@@ -153,12 +172,17 @@ def divergence_map(rgb_valid: np.ndarray, rgb_invalid: np.ndarray) -> np.ndarray
 
 def dilate(mask: np.ndarray, k: int) -> np.ndarray:
     """Square dilation by `k` px, per frame, without a SciPy dependency."""
-    out = mask.copy()
+    out = np.asarray(mask, bool).copy()
+    if k <= 0:
+        return out
+    height, width = out.shape[1:]
+    padded = np.pad(out, ((0, 0), (k, k), (k, k)))
     for dy in range(-k, k + 1):
         for dx in range(-k, k + 1):
             if dy == 0 and dx == 0:
                 continue
-            out |= np.roll(np.roll(mask, dy, axis=1), dx, axis=2)
+            out |= padded[:, k + dy:k + dy + height,
+                          k + dx:k + dx + width]
     return out
 
 

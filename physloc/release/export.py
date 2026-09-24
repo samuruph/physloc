@@ -224,7 +224,7 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
             "storage": {"metadata": loader.SAMPLE_METADATA, "rgb": loader.RGB,
                         "dense": loader.DATA, "format": "HDF5",
                         "compression": "gzip-4", "checksum": "fletcher32"},
-            "shadow_strength_threshold": 1.0 / 255.0,
+            "shadow_strength_threshold": loader.SHADOW_STRENGTH_THRESHOLD,
             "violation_components": {"0": "none", "1": "body", "2": "shadow",
                                      "3": "trajectory", "4": "interaction", "5": "energy"},
             "analysis_groups": ["subject", "context", "support", "background"],

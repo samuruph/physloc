@@ -185,7 +185,7 @@ camera-hidden Cycles caster is excluded from public objects, segmentation,
 boxes, physics and energy, and its id is remapped to the real actor everywhere
 (violator records, causal ids, collisions). For a shadow family
 `violation.component` is `"shadow"` and `violation.shadow` records the caster,
-light, receivers, render method and the `shadow_strength > 1/255` threshold.
+light, receivers, render method and the `shadow_strength > 4/255` threshold.
 
 ## Loader
 

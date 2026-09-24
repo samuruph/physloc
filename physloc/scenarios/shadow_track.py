@@ -140,6 +140,7 @@ class ShadowTrack(Scenario):
         ja, js = _index(spec, self.SEG_ACTOR), _index(spec, self.SEG_SHADOW)
         p = np.asarray(traj.pos[:, ja, :], np.float64)
         traj.pos[:, js, :] = p.astype(np.float32)
+        traj.quat[:, js, :] = np.asarray(traj.quat[:, ja, :], np.float32)
         if traj.num_frames > 1:
             traj.lin_vel[1:, js, :] = ((traj.pos[1:, js, :]
                                         - traj.pos[:-1, js, :]) / traj.dt)

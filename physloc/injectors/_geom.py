@@ -525,14 +525,28 @@ def violators_on_screen(spec, traj, bodies,
         share = visible_share(spec)
     T = int(traj.num_frames)
     idx = []
+    found = []
     for b in bodies:
         try:
             idx.append(traj.index_of(int(b.segmentation_id)))
+            found.append(b)
         except Exception:                                     # noqa: BLE001
             continue
     if not idx:
         return np.zeros((T,), bool)
-    pts = np.asarray(traj.pos[:, idx, :], np.float64)
+    pts = np.asarray(traj.pos[:, idx, :], np.float64).copy()
+    # A shadow_track violator is a camera-hidden mesh. Its world position may
+    # be outside the frustum even while its cast patch is on the floor. Frame
+    # the actual projected observation, not the invisible caster's centre.
+    if spec.scenario == "shadow_track" and "light_dir" in spec.notes:
+        L = np.asarray(spec.notes["light_dir"], np.float64)
+        top = float(spec.notes.get("surface_top", 0.0))
+        if abs(float(L[2])) > 1e-6:
+            for j, body in enumerate(found):
+                if body.role == "shadow_caster":
+                    travel = (pts[:, j, 2] - top) / -L[2]
+                    pts[:, j, :2] += travel[:, None] * L[None, :2]
+                    pts[:, j, 2] = top
     vis = np.asarray(in_frame(spec, pts, from_frame=0, num_frames=T), bool)
     vis = vis.reshape(T, len(idx))
     here = np.asarray(traj.present[:, idx], bool)

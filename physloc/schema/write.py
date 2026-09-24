@@ -242,7 +242,7 @@ def _violation(meta: Dict, objects: List[Dict], remap: Dict[int, int],
             "receiver_object_ids": [o["id"] for o in objects
                                     if o["analysis_group"] == "support"],
             "rendering_method": "Cycles matched shadow-isolation render",
-            "strength_threshold": 1.0 / 255.0,
+            "strength_threshold": loader.SHADOW_STRENGTH_THRESHOLD,
         }
     return out
 

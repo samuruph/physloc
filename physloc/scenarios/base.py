@@ -1043,6 +1043,19 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
             twin.name = new + "_split"
     spec.notes["gso_assets"] = sorted(
         {b.asset_id for b in spec.bodies if b.kind == "gso" and b.asset_id})
+    # The visible actor was swapped to a scan above. Its hidden shadow-ray
+    # caster is excluded from the generic swap because it does not collide.
+    # Use the same mesh and transform so Cycles projects the real silhouette.
+    if spec.scenario == "shadow_track":
+        actor = next((b for b in spec.bodies if b.role == "actor"), None)
+        shade = next((b for b in spec.bodies if b.role == "shadow_caster"), None)
+        if actor is not None and shade is not None and actor.kind == "gso":
+            shade.kind = actor.kind
+            shade.asset_id = actor.asset_id
+            shade.scale = actor.scale
+            shade.render_scale = actor.render_scale
+            shade.position = actor.position
+            shade.quaternion = actor.quaternion
 
 
 def _gso_name(asset_id: str) -> str:

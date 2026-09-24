@@ -477,7 +477,11 @@ def shadow_seen(sample) -> Optional[np.ndarray]:
         return None
     mask = loader.shadow_receiver_mask(observations.shadow_strength,
                                        observations.shadow_source_id,
-                                       observations.segmentation, v.ids)
+                                       observations.segmentation, v.ids,
+                                       receiver_ids=(v.shadow or {}).get(
+                                           "receiver_object_ids"),
+                                       normal=(observations.normal if "normal" in observations
+                                               else None))
     return mask.reshape(len(mask), -1).any(axis=1)
 
 

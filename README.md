@@ -139,6 +139,10 @@ Shadows are optical observations, not physical objects. Cycles renders them
 from an internal camera-hidden caster; only the real actor is exported.
 `shadow_strength` and `shadow_source_id` support soft shadow localisation,
 and shadow violations map to the actor with component `shadow`.
+In `shadow_track`, the directional key provides a legible main shadow bearing;
+L2/L3 also receive HDRI illumination and show the HDRI backdrop. At L3 the
+camera-hidden caster uses the same scanned mesh as the visible actor, so its
+cast shadow follows the object's silhouette rather than a primitive proxy.
 
 The complete field, dtype, axis and unit reference -- and a table of every v3
 field v4 stopped storing, with the loader derivation that replaced it -- is

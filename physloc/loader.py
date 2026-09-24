@@ -49,6 +49,7 @@ SELECTIONS = ("subjects", "violators", "affected", "context", "support",
               "background", "all")
 DEPTH_BACKGROUND = 1e6
 SHADOW_CASTER_GUARD_PX = 2
+SHADOW_STRENGTH_THRESHOLD = 4.0 / 255.0
 
 #: Every selector `PhysLocDataset(fields=...)` and `Sample.to_dict` accept, with
 #: its axes. A selector names a namespace attribute; `to_dict` returns it nested
@@ -156,7 +157,7 @@ def reference_mask(valid_segmentation: np.ndarray, ids: Sequence[int]) -> np.nda
 def shadow_reference_mask(shadow_strength: np.ndarray,
                           shadow_source_id: np.ndarray,
                           ids: Sequence[int],
-                          threshold: float = 1.0 / 255.0) -> np.ndarray:
+                          threshold: float = SHADOW_STRENGTH_THRESHOLD) -> np.ndarray:
     """Return the lawful cast-shadow footprint for public caster IDs.
 
     A Cycles shadow has no segmentation pixels of its own.  The source pass
@@ -175,12 +176,80 @@ def shadow_receiver_mask(shadow_strength: np.ndarray,
                          shadow_source_id: np.ndarray,
                          segmentation: np.ndarray,
                          ids: Sequence[int],
-                         guard_px: int = SHADOW_CASTER_GUARD_PX) -> np.ndarray:
-    """Projected shadow pixels, excluding the caster and its local halo."""
+                         guard_px: int = SHADOW_CASTER_GUARD_PX,
+                         receiver_ids: Optional[Sequence[int]] = None,
+                         normal: Optional[np.ndarray] = None) -> np.ndarray:
+    """Projected shadow pixels on declared receivers only.
+
+    The matched Cycles isolation pass can contain real darkening on any
+    visible surface (distractors, the backdrop, and the caster's own pixels),
+    especially with HDRI lighting.  A scene's shadow metadata declares the
+    surfaces that can receive the benchmark shadow; keep those surfaces as a
+    hard spatial boundary before applying the caster moat.
+    """
     projected = shadow_reference_mask(shadow_strength, shadow_source_id, ids)
+    if receiver_ids is not None:
+        projected &= shadow_receiver_surface(segmentation, receiver_ids, normal)
     caster = np.isin(np.asarray(segmentation),
                      np.asarray(list(ids), dtype=np.asarray(segmentation).dtype))
-    return projected & ~_dilate_mask(caster, int(guard_px))
+    return prune_shadow_islands(projected & ~_dilate_mask(caster, int(guard_px)))
+
+
+def prune_shadow_islands(mask: np.ndarray) -> np.ndarray:
+    """Keep coherent projected patches, dropping isolated path-tracing noise.
+
+    The threshold scales with render size but is capped so weak, small shadows
+    survive at release resolution.  Tiny synthetic fixtures are left intact.
+    """
+    source = np.asarray(mask, bool)
+    if source.ndim != 3:
+        raise ValueError("shadow mask must have T,H,W axes")
+    _, height, width = source.shape
+    if min(height, width) < 32:
+        return source.copy()
+    minimum = min(32, max(8, int(np.ceil(0.0015 * height * width))))
+    out = np.zeros_like(source)
+    for t, frame in enumerate(source):
+        visited = np.zeros((height, width), bool)
+        for y0, x0 in np.argwhere(frame):
+            if visited[y0, x0]:
+                continue
+            visited[y0, x0] = True
+            region = [(int(y0), int(x0))]
+            index = 0
+            while index < len(region):
+                y, x = region[index]
+                index += 1
+                for yy in range(max(0, y - 1), min(height, y + 2)):
+                    for xx in range(max(0, x - 1), min(width, x + 2)):
+                        if frame[yy, xx] and not visited[yy, xx]:
+                            visited[yy, xx] = True
+                            region.append((yy, xx))
+            if len(region) >= minimum:
+                ys, xs = zip(*region)
+                out[t, ys, xs] = True
+    return out
+
+
+def shadow_receiver_surface(segmentation: np.ndarray,
+                            receiver_ids: Sequence[int],
+                            normal: Optional[np.ndarray] = None) -> np.ndarray:
+    """Visible receiver, including only the level HDRI dome's flat ground.
+
+    Kubric's HDRI dome is both ground and scenery under segmentation ID 900.
+    Its ground has the encoded world normal (0, 0, 1), exactly
+    (32767, 32767, 65535) in the uint16 normal pass.  Using ID 900 alone
+    includes scenery and produces the reported spurious HDRI mask pixels.
+    """
+    seg = np.asarray(segmentation)
+    receiver = np.isin(seg, np.asarray(list(receiver_ids), dtype=seg.dtype))
+    if normal is not None:
+        n = np.asarray(normal)
+        if n.shape == seg.shape + (3,):
+            ground = ((seg == 900) & (n[..., 0] == 32767)
+                      & (n[..., 1] == 32767) & (n[..., 2] == 65535))
+            receiver |= ground
+    return receiver
 
 
 def _dilate_mask(mask: np.ndarray, radius: int) -> np.ndarray:
@@ -188,12 +257,14 @@ def _dilate_mask(mask: np.ndarray, radius: int) -> np.ndarray:
     out = np.asarray(mask, bool).copy()
     if radius <= 0:
         return out
-    source = out.copy()
+    height, width = out.shape[1:]
+    padded = np.pad(out, ((0, 0), (radius, radius), (radius, radius)))
     for dy in range(-radius, radius + 1):
         for dx in range(-radius, radius + 1):
             if dy == 0 and dx == 0:
                 continue
-            out |= np.roll(np.roll(source, dy, axis=1), dx, axis=2)
+            out |= padded[:, radius + dy:radius + dy + height,
+                          radius + dx:radius + dx + width]
     return out
 
 
@@ -748,11 +819,46 @@ class Violation(_Namespace):
             return self._sample._h5_read(path)
         return np.zeros(self._sample.observations.segmentation.shape, dtype)
 
-    object_id = _lazy(lambda self: self._map("object_id", np.uint16))
     component_map = _lazy(lambda self: self._map("component", np.uint8))
-    causal = _lazy(lambda self: self._map("causal_level", np.uint8))
-    causal_source = _lazy(lambda self: self._map("causal_source_id", np.uint16))
-    mask = _lazy(lambda self: self.object_id > 0)
+
+    def _shadow_gate(self) -> np.ndarray:
+        if not np.any(self.component_map == 2):
+            return np.ones(self._sample.observations.segmentation.shape, bool)
+        obs = self._sample.observations
+        receiver_ids = (self.shadow or {}).get("receiver_object_ids")
+        if receiver_ids is None:
+            return np.ones(obs.segmentation.shape, bool)
+        receiver = shadow_receiver_surface(
+            obs.segmentation, receiver_ids,
+            obs.normal if "normal" in obs else None)
+        caster = np.isin(obs.segmentation,
+                             np.asarray(self.ids, dtype=obs.segmentation.dtype))
+        shadow = prune_shadow_islands(
+            receiver & ~_dilate_mask(caster, SHADOW_CASTER_GUARD_PX)
+            & (self._map("object_id", np.uint16) > 0))
+        return (self.component_map != 2) | shadow
+
+    @_lazy
+    def object_id(self) -> np.ndarray:
+        out = np.asarray(self._map("object_id", np.uint16)).copy()
+        out[~self._shadow_gate()] = 0
+        return out
+
+    @ _lazy
+    def mask(self) -> np.ndarray:
+        return (self.object_id > 0) & self._shadow_gate()
+
+    @ _lazy
+    def causal(self) -> np.ndarray:
+        out = np.asarray(self._map("causal_level", np.uint8)).copy()
+        out[~self._shadow_gate()] = 0
+        return out
+
+    @ _lazy
+    def causal_source(self) -> np.ndarray:
+        out = np.asarray(self._map("causal_source_id", np.uint16)).copy()
+        out[~self._shadow_gate()] = 0
+        return out
 
     @_lazy
     def visible(self) -> np.ndarray:
@@ -768,7 +874,10 @@ class Violation(_Namespace):
         """float [T,H,W]. Painted from the per-object severity; stored only
         where painting cannot reproduce it (a shadow component)."""
         if self._sample._h5_has("/violation/maps/severity"):
-            return np.asarray(self._sample._h5_read("/violation/maps/severity"), np.float32)
+            out = np.asarray(self._sample._h5_read("/violation/maps/severity"),
+                             np.float32).copy()
+            out[~self._shadow_gate()] = 0
+            return out
         return paint_severity(self.object_id, self._sample.observations.segmentation,
                               self._sample.objects.ids, self.severity, self.component_map)
 
@@ -787,9 +896,13 @@ class Violation(_Namespace):
         if np.any(self.component_map == 2):
             observations = twin.observations
             if "shadow_strength" in observations and "shadow_source_id" in observations:
+                receiver_ids = (self.shadow or {}).get("receiver_object_ids")
                 return shadow_receiver_mask(observations.shadow_strength,
                                             observations.shadow_source_id,
-                                            observations.segmentation, ids)
+                                            observations.segmentation, ids,
+                                            receiver_ids=receiver_ids,
+                                            normal=(observations.normal if "normal"
+                                                    in observations else None))
             return np.zeros(shape, bool)
         return reference_mask(twin.observations.segmentation, ids)
 

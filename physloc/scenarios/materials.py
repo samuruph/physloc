@@ -174,6 +174,13 @@ ACTOR_MATERIALS: Tuple[str, ...] = tuple(MATERIALS)
 SCENERY_MATERIALS: Tuple[str, ...] = ("wood", "stone", "marble", "ceramic",
                                       "plastic", "steel")
 
+# The ground is visible over most of the image at L1, where there is no HDRI
+# for a metal to reflect. A metallic floor under the key light alone reads as
+# nearly black (the material's dark base colour), so floors use diffuse and
+# dielectric finishes only. Steel remains available for raised scenery.
+FLOOR_MATERIALS: Tuple[str, ...] = ("wood", "stone", "marble", "ceramic",
+                                    "plastic")
+
 
 def get(name: str) -> Material:
     return MATERIALS[name]

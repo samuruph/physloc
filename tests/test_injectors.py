@@ -314,7 +314,7 @@ def test_a_violation_of_the_shadow_survives_rescripting(family):
                               actor_scale)
 
 
-def test_pendulum_rod_relaxes_at_dissolve_onset():
+def test_pendulum_rod_relaxes_at_dissolve_disappearance():
     sc = scenarios.get("pendulum_swing")
     spec = sc.sample(777, TIERS["debug"], "L0")
     traj = mockroll.roll(spec, sc)
@@ -322,12 +322,16 @@ def test_pendulum_rod_relaxes_at_dissolve_onset():
     plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
     assert plan is not None
     out = inj.apply(spec, traj, plan)
-    # The first fade frame is still optically present; this distinguishes
-    # immediate unloading from merely noticing final disappearance.
+    # The first fade frame is still optically present and must retain the
+    # pendulum load; unloading there creates an unrelated rod violation.
     jb, jr = out.index_of(2), out.index_of(4)
     assert out.present[plan.t_event, jb]
+    lawful_rod = np.array(out.pos[:, jr], copy=True)
     sc.rescript(spec, out, plan)
+    gone = plan.t_event + plan.notes["fade_frames"] - 1
     pivot = np.asarray(spec.notes["pivot"], np.float64)
-    expected = pivot + np.array([0.0, 0.0, -0.5 * spec.notes["arm"]])
-    assert np.allclose(out.pos[plan.t_event, jr], expected)
-    assert np.allclose(out.lin_vel[plan.t_event:, jr], 0.0)
+    assert np.array_equal(out.pos[plan.t_event:gone, jr],
+                          lawful_rod[plan.t_event:gone])
+    assert np.allclose(out.pos[gone, jr],
+                       pivot + np.array([0.0, 0.0, -0.5 * spec.notes["arm"]]))
+    assert np.allclose(out.lin_vel[gone:, jr], 0.0)

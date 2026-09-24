@@ -115,6 +115,19 @@ def test_scenery_draws_from_a_narrower_set():
         assert not M.MATERIALS[name].transmission, name
 
 
+def test_floor_finishes_are_lit_without_an_environment():
+    """A metallic floor under L1's single sun reflects a nearly black world.
+
+    It dominated the camera view in `pour` L1 seed 1000777 even though the
+    recorded background was mid-grey. Keep metal available for props, where it
+    occupies less of the image, but give the broad floor a diffuse finish.
+    """
+    assert set(M.FLOOR_MATERIALS) <= set(M.SCENERY_MATERIALS)
+    assert M.FLOOR_MATERIALS
+    assert all(not M.MATERIALS[name].metallic for name in M.FLOOR_MATERIALS)
+    assert all(not M.MATERIALS[name].transmission for name in M.FLOOR_MATERIALS)
+
+
 @pytest.mark.parametrize("name", sorted(M.MATERIALS))
 def test_a_material_is_self_consistent(name):
     m = M.MATERIALS[name]

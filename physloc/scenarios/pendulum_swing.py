@@ -227,7 +227,15 @@ class PendulumSwing(Scenario):
         # still optically present while fading, but the rope must already act
         # like an unloaded rope rather than following a translucent weight.
         if getattr(plan, "family", "") == "dissolve":
-            detached[max(0, int(plan.t_event)):] = True
+            # The bob remains visible, and therefore still physically present,
+            # throughout the optical fade. Unloading the rod at t_event makes
+            # it jump or swing independently before the bob disappears, adding
+            # a second violation to the dissolve clip. The injector hides the
+            # bob on this same final fade frame, so this is the first honest
+            # moment to release the pendulum load.
+            gone = (int(plan.t_event)
+                    + int(plan.notes["fade_frames"]) - 1)
+            detached[max(0, gone):] = True
         if not detached.any():
             return
         start = int(np.flatnonzero(detached)[0])

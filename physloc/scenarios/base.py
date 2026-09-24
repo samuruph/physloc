@@ -844,7 +844,9 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
         # The camera-hidden shadow caster must keep the visible actor's surface.
         if body.role == "shadow_caster":
             continue
-        name = M.pick(rng, M.SCENERY_MATERIALS)
+        palette = (M.FLOOR_MATERIALS if body.role == "floor"
+                   else M.SCENERY_MATERIALS)
+        name = M.pick(rng, palette)
         m = M.get(name)
         rgb, rough, metal, spec_, trans, ior = M.appearance(name, rng)
         keep = body.role == "floor"

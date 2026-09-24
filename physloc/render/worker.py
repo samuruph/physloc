@@ -357,36 +357,55 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
     return scene, simulator, renderer, objs
 
 
-def _fade_control(renderer, obj):
-    """Mix the body's shaded surface with a Transparent BSDF; return the blend.
+def _fade_controls(renderer, obj):
+    """Mix every body material with a Transparent BSDF; return the blends.
 
     Cycles renders the Principled BSDF's own `Alpha` input as opaque here --
     measured, see `probe_opacity.py` -- so fading has to be done by mixing in a
-    transparent shader. The returned socket is 1 for solid and 0 for invisible,
-    and it keyframes like anything else.
+    transparent shader. The returned sockets are 1 for solid and 0 for
+    invisible, and they keyframe like anything else.
 
-    Built once per body and reused -- the node is looked up by name on repeat
-    calls, so re-rendering the same scene for the next family does not stack up
-    mix shaders.
+    Primitive bodies expose one Kubric material, while L3 scanned objects
+    expose their Blender material slots directly. Fading only the former made
+    every L3 dissolve jump from opaque to absent with no gradient. Build once
+    per material and reuse -- the node is looked up by name on repeat calls, so
+    re-rendering the same scene for the next family does not stack up mix
+    shaders.
     """
-    bmat = obj.material.linked_objects.get(renderer)
-    if bmat is None or getattr(bmat, "node_tree", None) is None:
-        return None
-    nt = bmat.node_tree
-    existing = nt.nodes.get("physloc_fade")
-    if existing is not None:
-        return existing.inputs[0]
-    principled = nt.nodes.get("Principled BSDF")
-    out_node = next((n for n in nt.nodes if n.type == "OUTPUT_MATERIAL"), None)
-    if principled is None or out_node is None:
-        return None
-    transp = nt.nodes.new("ShaderNodeBsdfTransparent")
-    mix = nt.nodes.new("ShaderNodeMixShader")
-    mix.name = "physloc_fade"
-    nt.links.new(transp.outputs[0], mix.inputs[1])
-    nt.links.new(principled.outputs["BSDF"], mix.inputs[2])
-    nt.links.new(mix.outputs[0], out_node.inputs["Surface"])
-    return mix.inputs[0]
+    bobj = obj.linked_objects.get(renderer)
+    materials = []
+    data = getattr(bobj, "data", None)
+    if data is not None:
+        materials.extend(m for m in getattr(data, "materials", ()) if m is not None)
+    if not materials:
+        material = getattr(obj, "material", None)
+        bmat = (None if material is None else
+                material.linked_objects.get(renderer))
+        if bmat is not None:
+            materials.append(bmat)
+
+    controls = []
+    for bmat in materials:
+        nt = getattr(bmat, "node_tree", None)
+        if nt is None:
+            continue
+        existing = nt.nodes.get("physloc_fade")
+        if existing is not None:
+            controls.append(existing.inputs[0])
+            continue
+        out_node = next((n for n in nt.nodes
+                         if n.type == "OUTPUT_MATERIAL"), None)
+        if out_node is None or not out_node.inputs["Surface"].is_linked:
+            continue
+        surface = out_node.inputs["Surface"].links[0].from_socket
+        transp = nt.nodes.new("ShaderNodeBsdfTransparent")
+        mix = nt.nodes.new("ShaderNodeMixShader")
+        mix.name = "physloc_fade"
+        nt.links.new(transp.outputs[0], mix.inputs[1])
+        nt.links.new(surface, mix.inputs[2])
+        nt.links.new(mix.outputs[0], out_node.inputs["Surface"])
+        controls.append(mix.inputs[0])
+    return controls
 
 
 def _clear_animation(renderer, obj) -> None:
@@ -752,7 +771,8 @@ def replay(spec, objs, traj: Trajectory, renderer=None, scene=None) -> None:
         # that has no colour, so no family can contaminate the next one through
         # a channel that does not exist.
         recolour = b.kind not in ("dome", "gso")
-        fade_socket = _fade_control(renderer, obj) if b.kind != "dome" else None
+        fade_sockets = (_fade_controls(renderer, obj)
+                        if b.kind != "dome" else ())
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)
@@ -768,7 +788,7 @@ def replay(spec, objs, traj: Trajectory, renderer=None, scene=None) -> None:
             if recolour:
                 obj.material.color = kb.Color(*(float(x) for x in colour[f, j]))
                 obj.material.keyframe_insert("color", f)
-            if fade_socket is not None:
+            for fade_socket in fade_sockets:
                 fade_socket.default_value = float(opacity[f, j])
                 fade_socket.keyframe_insert("default_value", frame=f)
 

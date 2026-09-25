@@ -60,3 +60,17 @@ def test_grid_and_sheet_read_a_pair_directory(tmp_path):
     assert out["frames"] == 5
     sheet = grid.sheet(pair_dir, out_path=str(tmp_path / "sheet.mp4"), cell=48)
     assert sheet["columns"] == ["valid", "solidity"]
+
+
+def test_build_releases_cached_video_and_twin_arrays(tmp_path, monkeypatch):
+    _valid, invalid = make_pair(tmp_path)
+    sample = loader.Sample.from_dir(invalid)
+    monkeypatch.setattr(loader.Sample, "from_dir",
+                        classmethod(lambda cls, path: sample))
+    monkeypatch.setattr(overlay.vid, "write", lambda *a, **k: None)
+
+    overlay.build(invalid, panel=64, panels=("rgb", "divergence"))
+
+    assert sample._cache == {}
+    assert sample.twin is not None and sample.twin._cache == {}
+    assert sample._h5 is None and sample.twin._h5 is None

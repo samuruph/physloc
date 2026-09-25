@@ -130,11 +130,16 @@ def build(sample_dir: str, out_path: Optional[str] = None, panel: int = PANEL,
           panels: Sequence[str] = DEFAULT_PANELS, **_ignored) -> Dict[str, object]:
     """Render a sample to mp4 (default: `<sample_dir>/overlay.mp4`)."""
     sample = loader.Sample.from_dir(sample_dir)
-    r = Renderer(sample, layers, panels, panel)
-    out_path = out_path or os.path.join(sample_dir, layout.OVERLAY)
-    vid.write(r.render(), out_path, fps=sample.video.fps)
-    return {"path": out_path, "frames": sample.video.num_frames,
-            "panels": list(r.panels), "layers": list(r.layers)}
+    try:
+        r = Renderer(sample, layers, panels, panel)
+        out_path = out_path or os.path.join(sample_dir, layout.OVERLAY)
+        vid.write(r.render(), out_path, fps=sample.video.fps)
+        return {"path": out_path, "frames": sample.video.num_frames,
+                "panels": list(r.panels), "layers": list(r.layers)}
+    finally:
+        if sample.twin is not None:
+            sample.twin.release()
+        sample.release()
 
 
 class Renderer:

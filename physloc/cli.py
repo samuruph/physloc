@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import List, Optional
 
@@ -867,7 +868,8 @@ def cmd_generate(a) -> int:
                                               "fps": a.fps,
                                               "frames": a.frames,
                                               "spp": a.spp},
-                                       env=dict(launch_env, **container_cap),
+                                       env=dict(launch_env, **container_cap,
+                                                PHYSLOC_MEMORY="%dg" % int(held)),
                                        on_line=on_line)
         finally:
             with frame_watch_lock:
@@ -981,6 +983,7 @@ def cmd_generate(a) -> int:
         if getattr(a, "resume", False):
             cached = _ledger_load(job)
             if cached is not None:
+                _failure_clear(job)
                 progress.skip(label(cached), index=index)
                 return cached
         progress.job_waiting(index)
@@ -988,10 +991,23 @@ def cmd_generate(a) -> int:
         _ledger_save(job, out)
         if out["rc"] != 0:
             out["failure_log"] = _failure_save(job, out)
+        else:
+            _failure_clear(job)
         progress.update(label(out), ok=out["rc"] == 0, index=index)
         return out
 
     failure_dir = os.path.join(rel, "failures")
+
+    def _failure_path(job):
+        seed, scenario, _families, variant, level, _n = job
+        return os.path.join(failure_dir, "%s_%s_%d_v%d.log"
+                            % (level, scenario, seed, variant))
+
+    def _failure_clear(job):
+        try:
+            os.unlink(_failure_path(job))
+        except FileNotFoundError:
+            pass
 
     def _failure_save(job, outcome):
         """Write why a job failed next to the release, and return the path.
@@ -1005,8 +1021,7 @@ def cmd_generate(a) -> int:
         its ledger entry, so a rerun of the same job overwrites it.
         """
         seed, scenario, families, variant, level, _n = job
-        path = os.path.join(failure_dir, "%s_%s_%d_v%d.log"
-                            % (level, scenario, seed, variant))
+        path = _failure_path(job)
         info = outcome.get("info")
         body = (info.get("stderr") if isinstance(info, dict) and "stderr" in info
                 else json.dumps(info, indent=2, default=str))
@@ -1027,13 +1042,13 @@ def cmd_generate(a) -> int:
         n_cores = len(os.sched_getaffinity(0))
     except AttributeError:
         n_cores = os.cpu_count() or 1
-    # The whole budget is also every container's hard cap: a job that blows
-    # past its estimate is then killed by docker on its own, instead of the
-    # host OOM killer choosing a victim -- which, measured, was a system
-    # service before it was the worker.
-    budget_gb = max(4.0, _host_memory_gb() - HOST_RESERVE_GB)
+    # The sum of admitted jobs' hard limits must fit below host RAM. A single
+    # limit equal to the whole budget lets many containers exhaust the host.
+    host_gb = _host_memory_gb()
+    reserve_gb = min(HOST_RESERVE_GB, max(2.0, host_gb * 0.25))
+    budget_gb = max(1.0, host_gb - reserve_gb)
     memory = MemoryBudget(budget_gb, backfill_seconds=BACKFILL_SECONDS)
-    container_cap = {"PHYSLOC_MEMORY": "%dg" % int(budget_gb)}
+    container_cap = {}
 
     # STOPPING. A render container does not die with the process that started
     # it, so Ctrl-C used to stop only this front-end while dozens of containers
@@ -1351,7 +1366,7 @@ def _threads_for(running: int, cores: int) -> int:
 #: The release-tier L2 and L3 `pour` values are ESTIMATES, deliberately high:
 #: the measured debug value scaled by the grain count (212 against 96). A job
 #: that overruns its estimate is still capped per container (`PHYSLOC_MEMORY`),
-#: so a low guess costs one retried job, never the host.
+#: so a low guess fails that job without exhausting the host.
 #:
 #: RELEASE VALUES ARE FROM A LIVE RUN: 96 vCPU / 185 GB, 61 frames, all
 #: containers at once, mid-render --
@@ -1359,34 +1374,29 @@ def _threads_for(running: int, cores: int) -> int:
 #:      pour     L0 4.5-4.9   L2 3.7-4.0   L3 39-47
 #:      others   L2 ~1.1      L3 1.8-3.7   (collision, rolling_ramp)
 #:
-#: -- charged with a margin. Over-charging is not free: the first release run
-#: charged pour L3 at 60 GB and pour L2 at 8, filled the budget with 18 jobs
-#: while 78 waited, and left 64% of the CPU idle.
+#: -- charged with a margin. Lower charges once admitted too many workers and
+#: the host OOM killer terminated twelve `pour` jobs and the coordinator.
 #:
 #: A `None` scenario is the charge for every other scenario at that level.
 JOB_MEMORY_GB = {
     ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
     ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
-    ("pour", "release", "L0"): 6.0, ("pour", "release", "L1"): 6.0,
-    ("pour", "release", "L2"): 5.0, ("pour", "release", "L3"): 55.0,
-    (None, "release", "L2"): 1.5, (None, "release", "L3"): 3.0,
+    ("pour", "release", "L0"): 10.0, ("pour", "release", "L1"): 10.0,
+    ("pour", "release", "L2"): 10.0, ("pour", "release", "L3"): 65.0,
+    (None, "release", "L2"): 5.0, (None, "release", "L3"): 8.0,
 }
 
 #: How long the head of the memory queue may be passed by smaller jobs that fit.
 #: See `MemoryBudget`.
 BACKFILL_SECONDS = 1800.0
 
-#: Anything not in the table is charged what a job TYPICALLY holds, not its
-#: peak. Every other scenario peaked at 0.3-2.6 GB, but peaks are brief and
-#: rarely coincide: 32 release-geometry containers rendering at once held ~0.6
-#: GB each above the host baseline. Charging peaks instead left most of the pool
-#: idle -- replaying the v0_release queue, 32 workers on 55 GB ran 8 of 32 busy
-#: at a 4 GB charge against 12 at 1 GB, and 96 workers on 186 GB went from 32.4
-#: to 22.1 h. Only the cells in the table are charged their measured peak.
-DEFAULT_JOB_MEMORY_GB = {"debug": 1.0, "release": 1.0}
+#: Hard limits require a safe peak allowance, even when average usage is lower.
+#: The earlier 1 GB release charge admitted too many jobs at once and caused
+#: host OOM kills; a release L0 `drop` alone has been measured at 2.6 GB.
+DEFAULT_JOB_MEMORY_GB = {"debug": 3.0, "release": 4.0}
 
 #: Left for the host itself -- the annotator, an editor, the docker daemon.
-HOST_RESERVE_GB = 6.0
+HOST_RESERVE_GB = 48.0
 
 
 def job_memory_gb(scenario: str, tier: str, level: str = "L0") -> float:
@@ -1512,18 +1522,30 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
     return (proc.returncode or 4, {"stderr": "".join(err)[-40000:]})
 
 
+# Each annotation opens two 512px render passes and builds a nine-panel video.
+# The render containers have independent memory limits; these host-side jobs do
+# not, so their concurrency must be bounded separately.
+_ANNOTATION_SLOTS = threading.BoundedSemaphore(2)
+
+
 def _annotate(workdir, outroot, overlay=True, only=None):
+    import gc
     from .annotate.pipeline import annotate_work
-    # The release NAME comes from where the release is being written. It
-    # It once defaulted to a literal release name, so a new output root could
-    # be stamped and nested under the previous release's identity.
-    release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
-    results = annotate_work(workdir, outroot, release=release, only=only)
-    if overlay:
-        from .viz.overlay import build
-        for r in results:
-            r["overlay"] = build(r["samples"]["invalid"])["path"]
-    return results
+
+    with _ANNOTATION_SLOTS:
+        try:
+            # The release name comes from the output directory.
+            release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
+            results = annotate_work(workdir, outroot, release=release, only=only)
+            if overlay:
+                from .viz.overlay import build
+                for r in results:
+                    r["overlay"] = build(r["samples"]["invalid"])["path"]
+            return results
+        finally:
+            # Sample namespaces form cycles containing large native arrays.
+            # Native allocations do not trigger Python's GC by their byte size.
+            gc.collect()
 
 
 class _SampleAnnotator:

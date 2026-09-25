@@ -104,10 +104,10 @@ def test_pour_is_the_outlier_only_at_the_scanned_level():
     assert cli.job_memory_gb("pour", "debug", "L3") > 5 * cli.job_memory_gb("drop", "debug", "L3")
 
 
-def test_ordinary_jobs_are_charged_typical_not_peak_memory():
-    """Charging every job its peak left most of the pool idle; see DEFAULT_JOB_MEMORY_GB."""
-    for tier in ("debug", "release"):
-        assert cli.job_memory_gb("drop", tier, "L0") <= 1.0
+def test_ordinary_jobs_have_room_for_their_peak_memory():
+    assert cli.job_memory_gb("drop", "debug", "L0") >= 3.0
+    assert cli.job_memory_gb("drop", "release", "L0") >= 4.0
+    assert cli.job_memory_gb("pour", "release", "L0") >= 10.0
 
 
 def test_release_is_never_priced_below_debug():

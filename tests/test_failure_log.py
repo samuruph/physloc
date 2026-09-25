@@ -15,15 +15,15 @@ import tempfile
 from physloc import cli
 
 
-def _generate(monkeypatch, fake_worker):
+def _generate(monkeypatch, fake_worker, extra_args=(), base_dir=None):
     monkeypatch.setattr(cli, "_run_worker", fake_worker)
     monkeypatch.setattr(cli, "_annotate", lambda *a, **k: iter(()))
     ap, _ = cli._build()
-    tmp = tempfile.mkdtemp()
+    tmp = base_dir or tempfile.mkdtemp()
     a = ap.parse_args(["generate", "--scenario", "drop", "--family", "solidity",
                        "--seed", "777", "--workdir", os.path.join(tmp, "work"),
                        "--outdir", os.path.join(tmp, "release"),
-                       "--no-overlay", "--keep-going"])
+                       "--no-overlay", "--keep-going", *extra_args])
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         a.fn(a)
@@ -62,3 +62,27 @@ def test_a_clean_run_writes_no_failures(monkeypatch):
 
     rel, _ = _generate(monkeypatch, fine)
     assert not glob.glob(os.path.join(rel, "failures", "*.log"))
+
+
+def test_worker_limit_matches_its_memory_reservation(monkeypatch):
+    limits = []
+
+    def worker(*args, **kwargs):
+        limits.append(kwargs["env"]["PHYSLOC_MEMORY"])
+        return 137, {"stderr": "simulated worker failure"}
+
+    _generate(monkeypatch, worker, ("--tier", "release"))
+    assert limits == ["4g"]
+
+
+def test_successful_resume_clears_the_previous_failure(monkeypatch, tmp_path):
+    base = str(tmp_path)
+    _generate(monkeypatch, lambda *a, **k: (137, {"stderr": "OOM"}),
+              base_dir=base)
+    assert glob.glob(os.path.join(base, "release", "failures", "*.log"))
+
+    def success(*args, **kwargs):
+        return 0, {"outdir": args[5], "ok": True, "variants": []}
+
+    _generate(monkeypatch, success, ("--resume",), base_dir=base)
+    assert not glob.glob(os.path.join(base, "release", "failures", "*.log"))

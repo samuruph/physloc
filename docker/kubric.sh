@@ -83,6 +83,7 @@ exec docker run --rm --interactive \
   --env PHYSLOC_GPU_BACKEND \
   --env PHYSLOC_THREADS \
   --volume "$REPO_ROOT:/kubric" \
+  --volume "/mnt/physloc:/mnt/physloc" \
   --workdir /kubric \
   "$IMAGE" \
   python3 "$@"

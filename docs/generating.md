@@ -305,7 +305,7 @@ are kept either way, and running the same command again resumes.
 - **Memory.** A job starts only when its memory fits in host RAM, and every container is capped,
   so a crowded machine cannot OOM-kill its own jobs; smaller jobs may start ahead of a big one
   that does not fit yet. One job type is heavy: release-size L3 `pour`, which measured 39–47 GB
-  in a live run and is charged 55 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). On a machine with much
+  in a live run and is charged 65 GB in `JOB_MEMORY_GB` (`physloc/cli.py`). On a machine with much
   less memory, check it once — run this and watch `docker stats` in a second terminal:
 
   ```bash

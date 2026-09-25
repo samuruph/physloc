@@ -133,10 +133,12 @@ Peak memory of one worker job (valid plus invalid renders), measured with `docke
   `pour` jobs among 32 workers on the 61 GB box got one OOM-killed. The difficulty condition does
   not change it (25.0–26.4 GB across `standard`, `camera` and `camera+multi`).
 
-**How admission charges a job.** Only the cells in `JOB_MEMORY_GB` (`physloc/cli.py`) are charged
-their measured peak; every other job is charged 1 GB, what one typically holds — 32 release
-containers rendering together averaged ~0.6 GB each. Charging every job its peak left most of the
-pool idle: replaying the release queue on 96 workers and 186 GB, 32.4 h against 22.1 h.
+**How admission charges a job.** Each job reserves its container memory limit from the host
+budget before it starts. The default allowance is 3 GB at debug and 4 GB at release; heavy
+scenarios reserve more through `JOB_MEMORY_GB` (`physloc/cli.py`). The sum of container limits
+stays below host RAM with up to 48 GB reserved for the host. Host-side annotation is
+limited to two clips at once. This reduces concurrency but prevents
+a busy release from triggering the host OOM killer.
 
 **The release L3 `pour` figure is an estimate** — the debug value scaled by grain count (212
 against 96), set high on purpose. It drives most of the remaining queueing, so measure it once on

@@ -93,6 +93,19 @@ def observable_frames(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     return diff | (changed.reshape(T, -1).sum(axis=1) >= min_pixels)
 
 
+def violator_observable(own, active, clip_active, visible, visible_invalid,
+                        independent=False):
+    """Object evidence, also used when deriving the clip's observable union.
+
+    On independently timed active frames, another body's twin difference is
+    not evidence for this body. Keep severity carried to later visible frames.
+    Shared clocks retain their per-body pixel threshold.
+    """
+    if independent:
+        return (own & (active | ~clip_active)) | visible | visible_invalid
+    return own
+
+
 def occluded_frames(seg: np.ndarray, body_id: int) -> np.ndarray:
     """Frames where `body_id` contributes no pixels at all -- fully hidden
     (behind an occluder, off-screen, or absent)."""

@@ -402,11 +402,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # note in windows.observable_frames -- and it gates the *spatial*
     # annotations, which answer "where can this be seen" rather than "when is
     # it happening". `active` remains the ground-truth timeline.
+    # NPZ access decompresses anew each time; reuse RGB across all grains.
+    rgb_valid, rgb_invalid = pv["rgba"], pi["rgba"]
     observable_all = ((shadow_v ^ shadow_i).reshape(T, -1).any(axis=1)
                       if shadow_component else
                       win_mod.observable_frames(
                           seg_v, seg_i, dynamic_ids or causal_ids,
-                          rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"]))
+                          rgb_valid=rgb_valid, rgb_invalid=rgb_invalid))
     # A SECOND gate, for the annotations that are invalid-side only.
     # `observable` is a disagreement between the twins, so it is true on frames
     # where the violator is seen in the VALID render and not in the invalid one
@@ -428,8 +430,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             [tuple(w) for w in clock.get("consequence_windows", wins)], T)
         own_obs = (observable_all if shadow_component else
                    win_mod.observable_frames(seg_v, seg_i, [bid],
-                                             rgb_valid=pv["rgba"],
-                                             rgb_invalid=pi["rgba"]))
+                                             rgb_valid=rgb_valid,
+                                             rgb_invalid=rgb_invalid))
         # A shared clock means the violators act at the same time; it does not
         # mean they have the same residual. Score every body against its own
         # valid twin and paint that body's evidence onto its own pixels. Using
@@ -444,6 +446,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             scored_on["s_invalid"], scored, obs)
         visible_inv, s_inv_visible = sev_mod.attribute_to_evidence(
             scored_on["s_invalid"], scored, obs & seen)
+        own_obs = win_mod.violator_observable(
+            own_obs, c_active, active, visible, visible_inv, independent)
         violators.append({
             "id": int(bid), "t_event": int(clock.get("t_event_frame", t_ev)),
             "windows": wins,
@@ -459,6 +463,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "visible_inv": visible_inv, "s_inv_visible": s_inv_visible,
         })
 
+    del rgb_valid, rgb_invalid
+
     # ---- 3.3 masks (the union rule) --------------------------------------
     #
     # Per violator, then combined. The union mask is gated on BOTH gates, not
@@ -468,22 +474,28 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     vmask = np.zeros(seg_i.shape, bool)
     imask = np.zeros(seg_i.shape, bool)
     vids = np.zeros(seg_i.shape, np.uint16)
+
+    def invalid_mask(c):
+        if shadow_component:
+            return shadow_i & np.asarray(c["visible_inv"], bool)[:, None, None]
+        return masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
+
+    # Keep only timelines per body. Three video-sized masks per grain cost
+    # over 9 GiB for 212 grains at 61 x 512 x 512, before any render passes.
     for c in violators:
         if shadow_component:
             gate = np.asarray(c["visible"] | c["visible_inv"], bool)[:, None, None]
-            c["vmask"] = (shadow_v | shadow_i) & gate
-            c["imask"] = shadow_i & np.asarray(c["visible_inv"], bool)[:, None, None]
+            own_mask = (shadow_v | shadow_i) & gate
         else:
-            c["vmask"] = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
+            own_mask = masks_mod.violation_mask(seg_v, seg_i, [c["id"]],
                                                   c["visible"] | c["visible_inv"])
-            c["imask"] = masks_mod.invalid_mask(seg_i, [c["id"]], c["visible_inv"])
-        vmask |= c["vmask"]
-        imask |= c["imask"]
-        vids[c["vmask"]] = c["id"]
+        vmask |= own_mask
+        imask |= invalid_mask(c)
+        vids[own_mask] = c["id"]
     # Where two violators' footprints overlap, the body actually rendered there
     # in the invalid clip owns the pixel.
     for c in violators:
-        vids[c["imask"]] = c["id"]
+        vids[invalid_mask(c)] = c["id"]
 
     # Level 2 is MEASURED, not declared. `static_ids` are the participants the
     # plan named -- the floor a ball sinks through -- and to those we add every
@@ -546,7 +558,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         gate = (c["consequence"] | diverged) & c["obs"]
         if shadow_component:
             part = np.zeros(seg_i.shape, np.uint8)
-            part[c["imask"] & gate[:, None, None]] = 1
+            part[invalid_mask(c) & gate[:, None, None]] = 1
         else:
             part = masks_mod.causal_mask(
                 seg_v, seg_i, [c["id"]], list(static_ids) + owned, gate,
@@ -568,7 +580,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     if shadow_component:
         smap = np.zeros(seg_i.shape, np.float32)
         for c in violators:
-            smap = np.where(c["imask"],
+            smap = np.where(invalid_mask(c),
                             np.asarray(c["s_inv_visible"], np.float32)[:, None, None],
                             smap)
     else:
@@ -582,7 +594,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # trajectory knows which case it is, so ask it rather than the pixels.
     smap = smap.astype(np.float32)
     for c in violators:
-        c["fallback"] = np.zeros(seg_i.shape, bool)
+        c["gone"] = np.zeros(T, bool)
         try:
             j = traj_i.index_of(c["id"])
         except Exception:                                     # noqa: BLE001
@@ -591,40 +603,18 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         absent = np.zeros((T,), bool)
         n = min(T, present.shape[0])
         absent[:n] = ~present[:n]
-        gone = c["visible"] & absent & ~c["imask"].any(axis=(1, 2))
+        gone = c["visible"] & absent & ~invalid_mask(c).any(axis=(1, 2))
+        c["gone"] = gone
         if gone.any():
-            c["fallback"] = masks_mod.footprint(seg_v, [c["id"]]) & gone[:, None, None]
-            smap = np.where(c["fallback"] & (smap == 0),
+            fallback = masks_mod.footprint(seg_v, [c["id"]]) & gone[:, None, None]
+            smap = np.where(fallback & (smap == 0),
                             np.asarray(c["s_visible"], np.float32)[:, None, None],
                             smap)
     smap = smap.astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)
 
-    # The clip's observable timeline. With one clock it is the twins'
-    # disagreement about the violators, as it always was. With several, a frame
-    # where violator A is active but hidden and violator B -- not active -- is
-    # merely moving is NOT evidence of anything, so on active frames only a
-    # violator's own active, observable frames count, plus wherever a violator's
-    # severity was carried to.
-    if independent:
-        observable = np.zeros((T,), bool)
-        for c in violators:
-            observable |= c["own_obs"] & (c["active"] | ~active)
-            observable |= c["visible"] | c["visible_inv"]
-    else:
-        # THE CLIP IS OBSERVABLE WHEN ONE OF ITS VIOLATORS IS, which is the
-        # union of what they each report and not a second measurement over all
-        # of them at once. `observable_frames` rejects anything under
-        # `min_pixels` changed pixels as path-tracing noise, and that floor is
-        # meant per BODY: measured on the aggregate it is divided by however
-        # many bodies share the clock. An L2 `pour` spreads one `colour_shift`
-        # over 96 grains, and on the frame the ramp begins no grain had changed
-        # by more than two pixels while the 96 of them summed to ten -- so the
-        # clip called itself observable a frame before every violator it is the
-        # union of, and `schema.write` rejected the sample outright.
-        observable = np.zeros((T,), bool)
-        for c in violators:
-            observable |= c["own_obs"]
+    # The schema derives the clip clock from its per-object windows.
+    observable = np.logical_or.reduce([c["own_obs"] for c in violators])
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
                           primary_id, severity_t=sev_t, observable=observable)
@@ -657,8 +647,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         t_obs = int(after[0]) if after.size else t
         rendered = (shadow_i.reshape(T, -1).any(axis=1) if shadow_component else
                     masks_mod.footprint(seg_i, [c["id"]]).any(axis=(1, 2)))
-        where = (c["imask"] if shadow_component else
-                 masks_mod.footprint(seg_i, [c["id"]]) | c["fallback"])
+        where = (invalid_mask(c) if shadow_component else
+                 masks_mod.footprint(seg_i, [c["id"]]) |
+                 (masks_mod.footprint(seg_v, [c["id"]]) & c["gone"][:, None, None]))
         c["severity_t"] = np.where(where, smap32, 0.0).reshape(T, -1).max(axis=1)
         # THIS VIOLATOR'S OWN DIFFICULTY, on its own evidence: its mask at its
         # biggest, how much of its own window it spends fully hidden, how long

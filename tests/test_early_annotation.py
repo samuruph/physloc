@@ -102,3 +102,42 @@ def test_a_clip_that_fails_twice_is_reported_and_the_run_continues(monkeypatch):
     for family in FAMILIES:
         assert family in text
     assert "annotate failed" in text
+
+
+def test_annotation_child_runs_in_a_fresh_process(tmp_path, monkeypatch):
+    """Native allocator caches cannot survive from one annotation to the next."""
+    import json
+    package = tmp_path / "physloc" / "annotate"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").write_text("")
+    (package / "__init__.py").write_text("")
+    (package / "worker.py").write_text(
+        "import json, os, sys\n"
+        "request = json.load(sys.stdin)\n"
+        "json.dump([dict(request, pid=os.getpid())], sys.stdout)\n")
+    monkeypatch.setattr(cli, "REPO", str(tmp_path))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    a = cli._annotate("work", "out", overlay=False, only=["one"])[0]
+    b = cli._annotate("work", "out", overlay=False, only=["two"])[0]
+    assert a["pid"] != b["pid"] and a["pid"] != os.getpid()
+    assert a["only"] == [os.path.abspath("one")]
+    assert b["only"] == [os.path.abspath("two")]
+    from physloc import params
+    assert a["params"] == params.CURRENT
+    assert a["overlay"] is False
+
+
+def test_annotation_child_failure_keeps_traceback_and_releases_slot(tmp_path):
+    import pytest
+    with pytest.raises(RuntimeError, match="FileNotFoundError"):
+        cli._annotate(str(tmp_path / "missing"), str(tmp_path / "out"))
+    # Both slots must still be available after a child failure.
+    acquired = []
+    try:
+        for _ in range(2):
+            acquired.append(cli._ANNOTATION_SLOTS.acquire(blocking=False))
+        assert all(acquired)
+    finally:
+        for held in acquired:
+            if held:
+                cli._ANNOTATION_SLOTS.release()

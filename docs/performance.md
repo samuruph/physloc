@@ -125,8 +125,9 @@ Peak memory of one worker job (valid plus invalid renders), measured with `docke
 | `pour`, release | 5.9 GB | – | 3.7–4.0 GB (live run) | 39–47 GB (live run, mid-job) |
 | `drop`, release | 2.6 GB | – | – | – |
 
-- **Memory is flat in the number of renders**: one `drop` job rendering 43 clips stayed between
-  0.79 and 0.82 GB.
+- One small `drop` measurement stayed between 0.79 and 0.82 GB over 43 clips.
+  This does not bound full-release peaks: the September 25 run exceeded 10 GiB
+  in pour containers at L0–L2. Their allowance is now 20 GiB, reserved before launch.
 - **Every other scenario peaked at 0.3–2.6 GB**, at any level.
 - **L3 `pour` is the outlier.** From L3 up every moving body becomes a scanned GSO mesh, and in
   `pour` every grain moves — 96 textured meshes and 96 mesh colliders at the debug tier. Three
@@ -137,8 +138,12 @@ Peak memory of one worker job (valid plus invalid renders), measured with `docke
 budget before it starts. The default allowance is 3 GB at debug and 4 GB at release; heavy
 scenarios reserve more through `JOB_MEMORY_GB` (`physloc/cli.py`). The sum of container limits
 stays below host RAM with up to 48 GB reserved for the host. Host-side annotation is
-limited to two clips at once. This reduces concurrency but prevents
-a busy release from triggering the host OOM killer.
+limited to two subprocesses at once. Each request exits after annotation and overlays,
+releasing native allocator caches instead of retaining them across coordinator threads.
+Per-violator annotation retains timelines and recomputes masks as needed, avoiding
+three full-video masks per grain. The coordinator previously reached 109 GiB RSS
+and was killed by the host OOM killer. The 20 GiB pour allowance is conservative;
+a complete multi-family render still needs peak-memory measurement.
 
 **The release L3 `pour` figure is an estimate** — the debug value scaled by grain count (212
 against 96), set high on purpose. It drives most of the remaining queueing, so measure it once on

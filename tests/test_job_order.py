@@ -8,7 +8,8 @@ def _job(scenario, level, n_families=10, seed=1, variant=0):
 
 
 def test_expensive_jobs_come_first_among_the_light_ones():
-    jobs = [_job("drop", "L0"), _job("drop", "L2"), _job("pour", "L0")]
+    jobs = [_job("drop", "L0"), _job("drop", "L2"),
+            _job("drop", "L0", n_families=20)]
     order = [(j[1], j[4]) for j in cli._longest_first(jobs, "release", 3)]
     assert order[0] == ("drop", "L2")
     assert order[-1] == ("drop", "L0")
@@ -31,3 +32,9 @@ def test_the_same_jobs_come_out():
 def test_equal_cost_keeps_emission_order():
     jobs = [_job("drop", "L0", seed=s) for s in (7, 3, 9)]
     assert [j[0] for j in cli._longest_first(jobs, "release", 3)] == [7, 3, 9]
+
+
+def test_release_pour_reservations_are_scheduled_as_heavy():
+    for level in ("L0", "L1", "L2", "L3"):
+        jobs = [_job("pour", level), _job("drop", "L0")]
+        assert cli._longest_first(jobs, "release", 3)[-1][1] == "pour"

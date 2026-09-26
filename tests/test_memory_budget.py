@@ -107,7 +107,7 @@ def test_pour_is_the_outlier_only_at_the_scanned_level():
 def test_ordinary_jobs_have_room_for_their_peak_memory():
     assert cli.job_memory_gb("drop", "debug", "L0") >= 3.0
     assert cli.job_memory_gb("drop", "release", "L0") >= 4.0
-    assert cli.job_memory_gb("pour", "release", "L0") >= 10.0
+    assert cli.job_memory_gb("pour", "release", "L0") >= 20.0
 
 
 def test_release_is_never_priced_below_debug():

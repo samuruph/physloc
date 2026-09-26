@@ -79,3 +79,46 @@ def test_one_violator_is_unaffected():
     seg_v, seg_i, rgb_v, rgb_i = _twins([0, MIN_PIXELS, MIN_PIXELS])
     one = observable_frames(seg_v, seg_i, [1], rgb_valid=rgb_v, rgb_invalid=rgb_i)
     assert list(np.flatnonzero(one)) == [1, 2]
+
+
+def test_independent_clock_ignores_another_bodys_early_difference():
+    from physloc.annotate.windows import violator_observable, rasterise, build
+    from physloc.schema.write import document_from_generation
+    from sample_fixture import make_meta
+
+    # Body A is active but hidden from frame 1. B differs at frame 2 while
+    # inactive and becomes observable at its own intervention on frame 3.
+    T = 5
+    clip_active = rasterise([(1, 4)], T)
+    own = np.array([False, False, True, True, True])
+    later_active = rasterise([(3, 4)], T)
+    hidden = np.zeros(T, bool)
+    evidence = violator_observable(own, later_active, clip_active,
+                                   hidden, hidden, independent=True)
+    assert to_windows(evidence) == [(3, 4)]
+    seg = np.ones((T, 1, 1), np.uint16)
+    timing = build([(1, 4)], T, seg, seg, [1], 1, observable=evidence)
+    assert timing["t_observable_frame"] == 3
+    meta = make_meta("test/p/invalid", frames=T, n_objects=3)
+    v = meta["violation"]
+    a = dict(v["violators"][0], instance_id=2, observable_windows=[])
+    b = dict(v["violators"][0], instance_id=3, t_event_frame=3,
+             t_observable_frame=3, observability_lag_frames=0,
+             violation_windows=[[3, 4]], intervention_windows=[[3, 3]],
+             consequence_windows=[[3, 4]],
+             observable_windows=[list(w) for w in to_windows(evidence)])
+    v.update(t_observable_frame=3, observability_lag_frames=2,
+             t_intervention_end_frame=3, t_consequence_end_frame=4,
+             violators=[a, b], violator_timing="independent")
+    document_from_generation(meta)  # same consistency check that failed live
+
+
+def test_carried_evidence_is_stored_in_the_object_clock():
+    from physloc.annotate.windows import violator_observable, rasterise
+    own = rasterise([(4, 4)], 6)
+    visible = rasterise([(5, 5)], 6)
+    active = rasterise([(1, 2)], 6)
+    result = violator_observable(own, active, active, visible, visible, True)
+    assert to_windows(result) == [(4, 5)]
+    assert np.array_equal(violator_observable(
+        own, active, active, visible, visible, False), own)

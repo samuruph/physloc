@@ -1378,11 +1378,13 @@ def _threads_for(running: int, cores: int) -> int:
 #: the host OOM killer terminated twelve `pour` jobs and the coordinator.
 #:
 #: A `None` scenario is the charge for every other scenario at that level.
+# Full release pour jobs exceeded the old 10 GiB cap (kernel MEMCG OOM).
+# Mid-render RSS is not the peak during pass extraction or later variants.
 JOB_MEMORY_GB = {
     ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
     ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
-    ("pour", "release", "L0"): 10.0, ("pour", "release", "L1"): 10.0,
-    ("pour", "release", "L2"): 10.0, ("pour", "release", "L3"): 65.0,
+    ("pour", "release", "L0"): 20.0, ("pour", "release", "L1"): 20.0,
+    ("pour", "release", "L2"): 20.0, ("pour", "release", "L3"): 65.0,
     (None, "release", "L2"): 5.0, (None, "release", "L3"): 8.0,
 }
 
@@ -1529,23 +1531,24 @@ _ANNOTATION_SLOTS = threading.BoundedSemaphore(2)
 
 
 def _annotate(workdir, outroot, overlay=True, only=None):
-    import gc
-    from .annotate.pipeline import annotate_work
+    # A fresh interpreter releases NumPy/HDF5/native allocator arenas at exit.
+    # A semaphore bounds concurrent peaks, but cannot reclaim arenas retained
+    # by the many long-lived sample-annotator threads in the coordinator.
+    from . import params
 
     with _ANNOTATION_SLOTS:
-        try:
-            # The release name comes from the output directory.
-            release = os.path.basename(os.path.normpath(outroot)) or "physloc_v0"
-            results = annotate_work(workdir, outroot, release=release, only=only)
-            if overlay:
-                from .viz.overlay import build
-                for r in results:
-                    r["overlay"] = build(r["samples"]["invalid"])["path"]
-            return results
-        finally:
-            # Sample namespaces form cycles containing large native arrays.
-            # Native allocations do not trigger Python's GC by their byte size.
-            gc.collect()
+        request = {"workdir": os.path.abspath(workdir),
+                   "outroot": os.path.abspath(outroot), "overlay": overlay,
+                   "only": [os.path.abspath(p) for p in only] if only else only,
+                   "params": params.CURRENT}
+        proc = subprocess.run(
+            [sys.executable, "-m", "physloc.annotate.worker"],
+            input=json.dumps(request), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, cwd=REPO)
+        if proc.returncode:
+            raise RuntimeError("annotation worker exited %d: %s" %
+                               (proc.returncode, proc.stderr[-40000:]))
+        return json.loads(proc.stdout)
 
 
 class _SampleAnnotator:

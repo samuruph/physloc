@@ -93,15 +93,8 @@ class OccluderPass(Scenario):
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.8)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
-            # NO CAMERA MOTION, until `_occluded_frames` can account for it.
-            # That function intersects a camera->ball ray with the screen plane
-            # once, at sample time, and the frame list it returns is where
-            # every observability label in the dataset comes from -- this is
-            # the only scenario that supplies an occlusion interval at all. A
-            # camera that moves changes which frames are hidden, and the
-            # precomputed list would quietly describe a different clip.
-            camera_motion=False,
-            floor_level=0.0, complexity=complexity,            notes={"radius": radius, "speed": speed,
+            floor_level=0.0, complexity=complexity,
+            notes={"radius": radius, "speed": speed,
                    "occluded_frames": occ, "actor_kind": kind,
                    "occluder_id": self.SEG_SCREEN})
 
@@ -118,6 +111,9 @@ def _finalise_occlusion(spec, actor_id: int) -> None:
     shot. Measured on seed 3: the list was empty while the ball sat fully behind
     the screen for nine frames of the rendered clip.
 
+    The eye is taken per frame from `spec.camera_at`, the same path the
+    renderer keyframes, so a `camera` clip's list describes the moving shot.
+
     Read off the scene as it now stands, so it also holds at L3: the centre
     height and the silhouette are the swapped body's, and anything that is not
     a primitive sphere takes the conservative corner bound a cube does.
@@ -127,14 +123,18 @@ def _finalise_occlusion(spec, actor_id: int) -> None:
     height = float(ball.centre[2])
     round_ = ball.kind == "sphere"
     silhouette = float(ball.bounding_radius) * (1.0 if round_ else math.sqrt(3.0))
+    n = spec.tier.num_frames
     spec.notes["occluded_frames"] = _occluded_frames(
-        spec.camera_position, ball, screen, spec.tier, height,
+        lambda f: spec.camera_at(f, n)[0], ball, screen, spec.tier, height,
         float(ball.centre[1]), silhouette)
 
 
 def _occluded_frames(cam, ball, screen, tier, radius, y_path,
                      silhouette_radius=None) -> List[int]:
     """Frames where the ball is **fully** hidden behind the screen box.
+
+    `cam` is the eye: one fixed position, or a callable `frame -> position`
+    for a moving camera.
 
     Intersect the camera->ball ray with the screen's y plane and test the
     crossing against the screen's extents, shrunk by the ball's *projected*
@@ -152,9 +152,8 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path,
     sphere, where the two coincide.
     """
     if silhouette_radius is None:
-        ball = C.with_material(ball, M.pick(arng), arng)
         silhouette_radius = radius
-    cx, cy, cz = cam
+    eye_at = cam if callable(cam) else (lambda f: cam)
     sx, sy, sz = screen.position
     hw, _, hh = screen.scale
     out = []
@@ -164,6 +163,7 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path,
         by, bz = y_path, radius
         if by <= sy:                       # ball in front of the screen
             continue
+        cx, cy, cz = eye_at(f)
         s = (sy - cy) / (by - cy)          # ray parameter at the screen plane
         ix = cx + s * (bx - cx)
         iz = cz + s * (bz - cz)

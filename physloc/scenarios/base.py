@@ -552,10 +552,9 @@ class SceneSpec:
     #: reconstruct it without reading anything the container wrote.
     camera_end_position: Optional[Tuple[float, float, float]] = None
 
-    #: Set False by a scenario that cannot tolerate a moving camera. Only
-    #: `occluder_pass` does: it precomputes its occlusion interval from a
-    #: single camera pose, and that list is where every observability label in
-    #: the dataset comes from.
+    #: Set False by a scenario that cannot tolerate a moving camera. None does
+    #: today: `occluder_pass` used to, and now derives its occlusion interval
+    #: per frame from `camera_at` in `finalise`.
     camera_motion: bool = True
 
     #: Which motion this clip uses: "static", "track", "orbit" or "dolly".
@@ -746,9 +745,8 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
 def _honest_condition(spec: SceneSpec) -> None:
     """A clip may not claim a camera move it did not get.
 
-    `occluder_pass` refuses camera motion outright -- its occlusion interval is
-    computed once, from one eye, and a moving camera would make that list
-    describe a different clip -- and a level may switch motion off. The
+    A scenario may refuse camera motion (`SceneSpec.camera_motion`), and a
+    level may switch it off. The
     condition is drawn before any of that is known, so a `camera` clip of such
     a scene would have shipped labelled `camera` while standing perfectly
     still: the condition would have said one thing and every pixel another.

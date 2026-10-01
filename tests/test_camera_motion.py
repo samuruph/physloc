@@ -84,15 +84,30 @@ def test_a_short_run_is_entirely_static():
                 "%s moved the camera in a %d-variant run" % (name, n))
 
 
-def test_occluder_pass_never_moves_the_camera():
-    """Its occlusion interval is precomputed from one pose.
+def test_occluder_pass_occlusion_follows_the_moving_camera():
+    """Its occlusion interval is where every observability label comes from.
 
-    `_occluded_frames` intersects a camera->ball ray with the screen plane once,
-    at sample time, and the frame list it returns is where every observability
-    label in the dataset comes from. A camera that moved would change which
-    frames are hidden and the list would describe a different clip.
+    `finalise` derives it per frame from `camera_at`, so a `camera` clip's list
+    must equal one recomputed frame by frame from the camera path -- and must
+    still hold a fully hidden window, or the scenario loses the lag it exists
+    to produce.
     """
-    assert not any(sp.camera_moves for sp in _specs("occluder_pass"))
+    import math
+
+    from physloc.scenarios.occluder_pass import _occluded_frames
+
+    specs = [sp for sp in _specs("occluder_pass") if sp.camera_moves]
+    assert specs, "occluder_pass never moved the camera"
+    for sp in specs:
+        ball = next(b for b in sp.bodies if b.role == "actor")
+        sil = float(ball.bounding_radius) * (
+            1.0 if ball.kind == "sphere" else math.sqrt(3.0))
+        n = sp.tier.num_frames
+        expect = _occluded_frames(
+            lambda f: sp.camera_at(f, n)[0], ball, sp.body("screen"), sp.tier,
+            float(ball.centre[2]), float(ball.centre[1]), sil)
+        assert sp.notes["occluded_frames"] == expect
+        assert expect, "seed %d has no fully occluded frame" % sp.seed
 
 
 @pytest.mark.parametrize("name", NAMES)

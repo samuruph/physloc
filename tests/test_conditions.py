@@ -177,15 +177,7 @@ def test_each_condition_builds_what_it_claims(name):
         moving = spec.camera_motion_kind not in (None, "static")
         clutter = any(b.role == "distractor" for b in spec.bodies)
         peers = int(spec.notes.get("n_peers_placed") or 0)
-        # `occluder_pass` opts out of camera motion entirely -- its occlusion
-        # interval is computed from one pose at sample time, and a moving
-        # camera would change which frames are hidden, so the list would
-        # describe a different clip. It may decline; it may not move when the
-        # condition says static.
-        if name == "occluder_pass":
-            assert not moving, (name, v, cond)
-        else:
-            assert moving == has_moving_camera(condition_for(v)), (name, v, cond, "camera")
+        assert moving == has_moving_camera(condition_for(v)), (name, v, cond, "camera")
         assert clutter == has_distractors(condition_for(v)), (name, v, cond, "distractors")
         # A scenario that is ALREADY a crowd needs no peers -- `pour` stages
         # forty grains and declares its own `group_fraction`. What `multi`

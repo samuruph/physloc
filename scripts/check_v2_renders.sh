@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Check renders for branch fix/visibility (worktree ~/code/physloc-fixes):
+# Check renders of the v0 feedback fixes, from this checkout:
 # real-time physics, multi fixes, pendulum post/axle. Every family of each job.
 # 61 frames at 30 fps, 256 px / 32 spp for speed. One folder per job.
-cd /home/ec2-user/code/physloc-fixes
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=/home/ec2-user/code/physloc/out/check_v2
 run() {
   name=$1; job=$2
@@ -26,5 +26,10 @@ run 12_toss_camera_multi_L1       L1_toss_21260828_v4 &
 run 13_pendulum_standard          L0_pendulum_swing_20260824_v0 &
 run 14_pendulum_multi             L0_pendulum_swing_20260832_v8 &
 run 15_pendulum_camera_multi      L0_pendulum_swing_20260833_v9 &
+run 16_resting_table_standard     L0_resting_table_20260825_v1 &
+run 17_resting_table_camera_multi L0_resting_table_20260833_v9 &
+run 18_stack_topple_standard      L0_stack_topple_20260826_v2 &
+run 19_shadow_track_standard      L0_shadow_track_20260824_v0 &
+run 20_shadow_track_multi         L0_shadow_track_20260832_v8 &
 wait
 echo "$(date +%T) ALL DONE" >> $OUT/status.txt

@@ -416,6 +416,21 @@ def unit_hull(subdivisions: int = 2) -> np.ndarray:
     return _HULL
 
 
+def _shape_cache(simulator) -> Dict[tuple, int]:
+    """Collision shapes `ShapeSwap` has built in THIS simulator's world, by
+    (kind, half extents, mesh bounds). Kept on the simulator, because a shape
+    id means nothing in another world -- the worker builds and drops several
+    while it checks framing."""
+    cache = getattr(simulator, "_physloc_shape_cache", None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(simulator, "_physloc_shape_cache", cache)
+        except Exception:                                     # noqa: BLE001
+            pass
+    return cache
+
+
 class ShapeSwap:
     """Change a body's SIZE in the simulator while the simulation is running.
 
@@ -504,7 +519,23 @@ class ShapeSwap:
             vel, ang = velocity
 
         half = np.asarray(self.body.scale, np.float64) * scale
-        if self.body.kind == "cube":
+        bounds = getattr(self.obj, "bounds", None)
+        # SHAPES ARE CACHED, NOT REMADE. PyBullet never frees a collision
+        # shape before `resetSimulation`, and a resize ramp rebuilds the proxy
+        # several times a frame for every body it resizes: measured on `pour`
+        # x `deformation`, a dry run (no renderer) climbed from 7 to 19 GB in
+        # one family and was killed at its 24 GB cap -- the real job, with
+        # Blender on top, was among the OOM-killed `pour` jobs of the v0 run.
+        # Sizes are rounded to the millimetre, so a ramp reuses its shapes.
+        key = (self.body.kind,
+               tuple(round(float(h), 3) for h in half),
+               None if bounds is None else tuple(
+                   round(float(x), 4) for x in np.asarray(bounds).ravel()))
+        cache = _shape_cache(self.simulator)
+        shape = cache.get(key)
+        if shape is not None:
+            pass
+        elif self.body.kind == "cube":
             shape = pb.createCollisionShape(pb.GEOM_BOX,
                                             halfExtents=half.tolist())
         else:
@@ -524,6 +555,7 @@ class ShapeSwap:
                 vertices=(hull_for(self.body.kind,
                                    getattr(self.obj, "bounds", None))
                           * half[None, :]).tolist())
+        cache[key] = shape
 
         if self.proxy is None:
             self._park()

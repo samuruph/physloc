@@ -86,14 +86,19 @@ def test_independent_violators_get_their_own_moments(family):
         assert dict(spec.notes.get("family_targets") or {}) == before
         if plan is None or not subs:
             continue
-        split += 1
-        assert plan.notes["violator_timing"] == "independent"
+        # A `sync` clip is split too -- every violator carries its own plan --
+        # but draws its moments from one stream, so only `independent` clips
+        # are expected to spread them.
+        assert plan.notes["violator_timing"] in ("independent", "sync")
         assert [c.body_id for c in plan.violators] == [int(s.causal_body_ids[0])
                                                       for s in subs]
         assert plan.t_event == min(s.t_event for s in subs)
-        distinct += int(len({s.t_event for s in subs}) > 1)
         for s in subs:
             assert 1 <= s.t_event < traj.num_frames - 1
+        if plan.notes["violator_timing"] != "independent":
+            continue
+        split += 1
+        distinct += int(len({s.t_event for s in subs}) > 1)
     if split:
         # Independent draws do not all land on one frame.
         assert distinct >= max(1, split // 2)

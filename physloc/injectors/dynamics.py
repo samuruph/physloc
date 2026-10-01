@@ -419,6 +419,10 @@ class AngularMomentum(Injector):
                 return None
             lo, hi = free
             t0 = min(max((lo + hi) // 2, max(1, lo)), hi)
+            # Still inside the contact-free stretch, but where the camera can
+            # see it: mid-flight on `drop` is above the shot.
+            t0 = _geom.in_shot_moment(spec, t0, max(1, lo), hi,
+                                      body_ids=[int(actor.segmentation_id)])
         if not (1 <= t0 < T - 1):
             return None
 
@@ -435,7 +439,11 @@ class AngularMomentum(Injector):
             omega0 = float(np.linalg.norm(
                 np.cross(arm_vec, np.asarray(traj.lin_vel[t0 - 1, bi],
                                              np.float64)) / span))
-        targets = self._all_actors(spec) if self._pivot(spec) else [actor]
+        # THE BODY ON THE PIVOT, not every actor: "all actors" was the
+        # pendulum's bob alone until `multi` added peers, and then every peer
+        # was named a violator of a spin change only the bob receives -- 9
+        # violators, 8 with zero severity, all painted red in the causal mask.
+        targets = [actor]
         spinning = omega0 > self.SPINNING or self._pivot(spec)
 
         k = self.SPIN_BY_BIN[severity_bin] if spinning else 0.0

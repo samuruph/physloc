@@ -33,6 +33,7 @@ from physloc import taxonomy
 from physloc import scenarios
 from physloc.injectors import _geom, multi
 from physloc.injectors.base import InterventionPlan
+from physloc.scenarios.base import has_multi
 from physloc.render import stepper
 from physloc.scenarios.base import FRAMING_ATTEMPTS, SceneSpec
 from physloc.sim.trajectory import Contacts, Trajectory, prefix_identical
@@ -43,7 +44,7 @@ PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
 #: How many event moments a family is offered before a variant is given up
 #: because its violator will not stay on screen after the event. Simulation is
 #: free at this scale, so a retry costs a rollout and nothing else.
-EVENT_ATTEMPTS = 4
+EVENT_ATTEMPTS = 6
 
 #: Families whose violation is the violator going OUT OF SIGHT: it vanishes
 #: (`permanence`), fades (`dissolve`), sinks into the floor or through a wall
@@ -216,6 +217,14 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
         gravity=spec.gravity,
     )
     simulator = PyBullet(scene, scratch)
+    # ONE SUBSTEP IS 1/step_rate SECONDS. Kubric steps `step_rate / frame_rate`
+    # substeps per frame but never tells PyBullet how long a substep is, so the
+    # engine kept its default 1/240 s: right at the debug tier (12 fps, 240 Hz),
+    # and 2.5x too long at release (30 fps, 600 Hz) -- every release clip
+    # showed 5 s of physics in 2 s of video, things falling and rolling 2.5x
+    # too fast. Measured with `render/probe_timestep.py`.
+    import pybullet as _pb
+    _pb.setTimeStep(1.0 / float(scene.step_rate))
     renderer = None
     if render:
         renderer = Blender(scene, scratch, use_denoising=True,
@@ -1016,6 +1025,34 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
         return {"ok": False, "error": "plan raised: %r" % (exc,)}
     if plan is None:
         return {"ok": False, "error": "injector produced no plan"}
+    # A `multi` CLIP HAS SEVERAL VIOLATORS, or it is not one. `injectors.multi`
+    # gives every family a plan per member of the group; a family that finds
+    # only one body it can act on -- `newton2_mass` where the peers never
+    # collide, a shadow family with one shadow -- used to ship that single
+    # violator under a label promising several. Declined instead, and not as
+    # "no plan": a fresh seed would not change what the family needs.
+    if has_multi(spec.condition) and plan.notes.get("multi_shortfall"):
+        return {"ok": False, "error": "multi clip needs two or more violators "
+                "with the scenario's own actor among them; "
+                + str(plan.notes["multi_shortfall"])}
+    if has_multi(spec.condition):
+        # Real bodies only: `fission`'s understudy is a second NAME for the
+        # one body that splits, not a second violator.
+        moving = {int(b.segmentation_id) for b in spec.bodies
+                  if not b.static and not b.dormant and not b.scripted}
+        named = ([int(c.body_id) for c in plan.violators] if plan.violators
+                 else [int(i) for i in plan.causal_body_ids])
+        if len([i for i in named if i in moving]) < 2:
+            return {"ok": False,
+                    "error": "multi clip needs two or more violators; %s "
+                             "found one it can act on" % inj.family}
+        # ...and the scenario's own actor among them: a clip about a ball
+        # striking another is not one whose violators are all bystanders.
+        own = set(multi._main_ids(inj, spec))
+        if own and not own.intersection(named):
+            return {"ok": False,
+                    "error": "multi clip needs the scenario's own actor among "
+                             "its violators; %s cannot act on it" % inj.family}
     # A SCRIPTED body is pinned in the simulator -- `sim_static`, mass
     # zero -- and its motion arrives from the trajectory instead. So a
     # staged intervention on one cannot move it: the world is reset to
@@ -1034,59 +1071,139 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     # `Injector.revives`: `fission`'s understudy is scripted on purpose
     # and its `stage` stands a dynamic proxy in its place, so the guard
     # was disqualifying the one family built to pass it.
-    staged = is_staged(plan)
-    balanced_support_released = bool(
-        spec.notes.get("balanced_spherical_base") and (staged or subs))
-    if balanced_support_released:
-        # The spherical tabletop is held only while producing the lawful
-        # baseline. Release that initialization constraint for every staged
-        # intervention, not only permanence, so mass/shape/contact changes can
-        # causally tip the support in the simulator.
-        spec.notes["_release_balanced_support"] = True
+    # A split clip runs the way its MEMBERS run: `injectors.multi` keeps them
+    # all one kind, and that kind -- not the merged plan's -- is the truth.
+    def rollout(plan, subs):
+        staged = (any(is_staged(s) for s in subs) if subs else is_staged(plan))
+        balanced_support_released = bool(
+            spec.notes.get("balanced_spherical_base") and (staged or subs))
+        if balanced_support_released:
+            # The spherical tabletop is held only while producing the lawful
+            # baseline. Release that initialization constraint for every staged
+            # intervention, not only permanence, so mass/shape/contact changes can
+            # causally tip the support in the simulator.
+            spec.notes["_release_balanced_support"] = True
+        if subs:
+            # STAGED MEMBERS IN ONE SIMULATION, EDITED ONES ON TOP. A `multi`
+            # clip can mix the two: `shadow_track`'s own actor is scripted, so
+            # a family edits its trajectory, while the peers beside it are
+            # simulated. The staged members run first, each at its own frame
+            # (`run_segments`); the edits then rewrite their scripted bodies
+            # in the trajectory that produced, in time order. A scripted body
+            # is driven by the scene, not by contacts, so nothing the edit
+            # changes could have fed back into the simulation.
+            T = spec.tier.num_frames
+            ordered = [s for s in multi.by_moment(subs) if is_staged(s)]
+            edited = [s for s in multi.by_moment(subs) if not is_staged(s)]
+            traj_invalid = traj_valid
+            if ordered:
+                try:
+                    first, tail = stepper.run_segments(
+                        simulator, scene, spec, objs, traj_valid,
+                        [(s.t_event,
+                          (lambda s=s: inj.stage(spec, simulator, objs, s)))
+                         for s in ordered],
+                        T - 1, scen_hooks)
+                    traj_invalid = stepper.splice(traj_valid, tail, first)
+                finally:
+                    for s in reversed(ordered):
+                        inj.unstage(spec, simulator, objs, s)
+                    stepper.reset_to(spec, objs, traj_valid, T - 1)
+                    if balanced_support_released:
+                        spec.notes.pop("_release_balanced_support", None)
+                for s in ordered:
+                    traj_invalid = inj.post_simulate(spec, traj_valid,
+                                                     traj_invalid, s)
+            for s in edited:
+                traj_invalid = inj.apply(spec, traj_invalid, s)
+        elif staged:
+            # Real physics from t_event: reset the world to the valid state,
+            # stage the intervention as something PyBullet honours, run
+            # forward, then undo the staging so the next variant starts
+            # clean. Frames before t_event come from the valid rollout
+            # verbatim, so prefix identity holds by construction.
+            try:
+                stepper.reset_to(spec, objs, traj_valid, plan.t_event)
+                hooks = tuple(inj.stage(spec, simulator, objs, plan)
+                              or ()) + scen_hooks
+                tail = stepper.run_from(simulator, scene, spec, objs,
+                                        plan.t_event, spec.tier.num_frames - 1,
+                                        hooks)
+                traj_invalid = stepper.splice(traj_valid, tail, plan.t_event)
+            finally:
+                inj.unstage(spec, simulator, objs, plan)
+                stepper.reset_to(spec, objs, traj_valid,
+                                 spec.tier.num_frames - 1)
+                if balanced_support_released:
+                    spec.notes.pop("_release_balanced_support", None)
+            traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, plan)
+        else:
+            traj_invalid = inj.apply(spec, traj_valid, plan)
+
+        return traj_invalid
+
+    traj_invalid = rollout(plan, subs)
     if subs:
-        # EACH VIOLATOR AT ITS OWN FRAME, in one simulation: the world is reset
-        # to the valid state at the earliest moment, and every later violator's
-        # intervention is staged on the world as the earlier ones left it.
-        ordered = multi.by_moment(subs)
-        T = spec.tier.num_frames
-        try:
-            first, tail = stepper.run_segments(
-                simulator, scene, spec, objs, traj_valid,
-                [(s.t_event, (lambda s=s: inj.stage(spec, simulator, objs, s)))
-                 for s in ordered],
-                T - 1, scen_hooks)
-            traj_invalid = stepper.splice(traj_valid, tail, first)
-        finally:
-            for s in reversed(ordered):
-                inj.unstage(spec, simulator, objs, s)
-            stepper.reset_to(spec, objs, traj_valid, T - 1)
-            if balanced_support_released:
-                spec.notes.pop("_release_balanced_support", None)
-        for s in ordered:
-            traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, s)
-    elif staged:
-        # Real physics from t_event: reset the world to the valid state,
-        # stage the intervention as something PyBullet honours, run
-        # forward, then undo the staging so the next variant starts
-        # clean. Frames before t_event come from the valid rollout
-        # verbatim, so prefix identity holds by construction.
-        try:
-            stepper.reset_to(spec, objs, traj_valid, plan.t_event)
-            hooks = tuple(inj.stage(spec, simulator, objs, plan)
-                          or ()) + scen_hooks
-            tail = stepper.run_from(simulator, scene, spec, objs,
-                                    plan.t_event, spec.tier.num_frames - 1,
-                                    hooks)
-            traj_invalid = stepper.splice(traj_valid, tail, plan.t_event)
-        finally:
-            inj.unstage(spec, simulator, objs, plan)
-            stepper.reset_to(spec, objs, traj_valid,
-                             spec.tier.num_frames - 1)
-            if balanced_support_released:
-                spec.notes.pop("_release_balanced_support", None)
-        traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid, plan)
+        # EVERY NAMED VIOLATOR VISIBLY BREAKS THE LAW, or it is not named. A
+        # member the family planned on can still come out inert -- two resting
+        # balls "passing through" each other, a block sunk through a floor it
+        # was not standing on, friction on a body that never slides -- and the
+        # clip then labelled a lawful body as a violator. Measured on the
+        # rollout, dropped, and the clip simulated again without it.
+        # One owner per member, in order; bodies a member's plan also acts on
+        # are appended after them (`multi._name_every_body`).
+        owners = [int(c.body_id) for c in plan.violators][:len(subs)]
+        live = [(o, s) for o, s in zip(owners, subs)
+                if shows_effect(traj_valid, traj_invalid, o, s.t_event)]
+        if len(live) < len(subs):
+            own = set(multi._main_ids(inj, spec))
+            if len(live) < 2 or (own and not own.intersection(
+                    o for o, _ in live)):
+                return {"ok": False,
+                        "error": "multi clip needs two or more violators "
+                                 "with a visible effect, the scenario's own "
+                                 "actor among them; %s had %d"
+                                 % (inj.family, len(live))}
+            timing = plan.notes.get("violator_timing")
+            subs = [s for _, s in live]
+            owners = [o for o, _ in live]
+            plan = InterventionPlan.merge(subs, owners)
+            plan.notes["violator_timing"] = timing
+            multi._name_every_body(spec, plan, subs, owners)
+            traj_invalid = rollout(plan, subs)
     else:
-        traj_invalid = inj.apply(spec, traj_valid, plan)
+        # THE SAME RULE FOR ONE PLAN NAMING SEVERAL BODIES. A family that acts
+        # on a group in one plan can name bodies its intervention never
+        # visibly reaches -- `angular_momentum` on `pendulum_swing` multi named
+        # all nine actors and changed only the bob, so eight peers carried a
+        # violator label, zero severity and a red causal mask. Such a body is
+        # not a violator: it is dropped from the labels (the rollout is the
+        # same either way). A multi clip left with fewer than two, or without
+        # the scenario's own actor, is declined.
+        dormant = {int(b.segmentation_id) for b in spec.bodies if b.dormant}
+        moving = {int(b.segmentation_id) for b in spec.bodies
+                  if not b.static and not b.scripted}
+        named = [int(i) for i in plan.causal_body_ids
+                 if int(i) in moving and int(i) not in dormant]
+        if len(named) >= 2:
+            inert = {i for i in named if not shows_effect(
+                traj_valid, traj_invalid, i, plan.t_event)}
+            if inert:
+                kept = [i for i in named if i not in inert]
+                own = set(multi._main_ids(inj, spec))
+                if has_multi(spec.condition) and (
+                        len(kept) < 2 or (own and not own.intersection(kept))):
+                    return {"ok": False,
+                            "error": "multi clip needs two or more violators "
+                                     "with a visible effect, the scenario's "
+                                     "own actor among them; %s had %d"
+                                     % (inj.family, len(kept))}
+                if not kept:
+                    return {"ok": False,
+                            "error": "no named violator visibly changes"}
+                plan.causal_body_ids = [int(i) for i in plan.causal_body_ids
+                                        if int(i) not in inert]
+                plan.notes["dropped_inert"] = sorted(inert)
 
     # The scenario's own driven bodies, re-derived from the trajectory
     # the intervention actually produced. `shadow_track`'s cast shadow
@@ -1106,13 +1223,111 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
         for s in subs:
             inj.refine_windows(spec, traj_valid, traj_invalid, s)
         timing = plan.notes.get("violator_timing")
-        plan = InterventionPlan.merge(subs, [c.body_id for c in plan.violators])
+        owners = [int(c.body_id) for c in plan.violators][:len(subs)]
+        plan = InterventionPlan.merge(subs, owners)
         plan.notes["violator_timing"] = timing
+        multi._name_every_body(spec, plan, subs, owners)
     else:
         inj.refine_windows(spec, traj_valid, traj_invalid, plan)
     return {"ok": True, "plan": plan, "traj": traj_invalid,
-            "visible": violators_stay_visible(spec, inj.family, plan,
-                                             traj_valid, traj_invalid)}
+            "visible": (violators_stay_visible(spec, inj.family, plan,
+                                               traj_valid, traj_invalid)
+                        and not falls_out_of_world(spec, inj.family, plan,
+                                                   traj_valid, traj_invalid))}
+
+
+def shows_effect(traj_valid, traj_invalid, body_id: int, t0: int) -> bool:
+    """Does `body_id` visibly differ from its lawful twin after `t0`?
+
+    Anything the renderer draws: where it is (a tenth of its radius), how it
+    is turned (10 degrees), its size, colour or opacity, or whether it is
+    there at all.
+    """
+    j = traj_valid.index_of(int(body_id))
+    t0 = int(np.clip(t0, 0, traj_valid.num_frames - 1))
+    r = max(float(traj_valid.radius[j]), 1e-3)
+    dp = np.linalg.norm(np.asarray(traj_invalid.pos[t0:, j], np.float64)
+                        - np.asarray(traj_valid.pos[t0:, j], np.float64), axis=1)
+    if dp.size and float(dp.max()) > 0.1 * r:
+        return True
+    qa = np.asarray(traj_valid.quat[t0:, j], np.float64)
+    qb = np.asarray(traj_invalid.quat[t0:, j], np.float64)
+    dot = np.abs(np.sum(qa * qb, axis=1)).clip(0.0, 1.0)
+    if dot.size and float(np.degrees(2.0 * np.arccos(dot.min()))) > 10.0:
+        return True
+    for key, tol in (("scale_mul", 0.05), ("colour", 0.05), ("opacity", 0.05)):
+        va = np.asarray(getattr(traj_valid, key)[t0:, j], np.float64)
+        vb = np.asarray(getattr(traj_invalid, key)[t0:, j], np.float64)
+        if va.size and float(np.abs(va - vb).max()) > tol:
+            return True
+    return bool((np.asarray(traj_valid.present[t0:, j])
+                 != np.asarray(traj_invalid.present[t0:, j])).any())
+
+
+#: Families whose claim is a body going THROUGH a surface. Every other family
+#: that sends a body below the floor has broken the scene, not a law.
+THROUGH_FLOOR_FAMILIES = frozenset({"solidity"})
+
+
+def falls_out_of_world(spec, family, plan, traj_valid, traj_invalid) -> bool:
+    """Does the invalid rollout drop any body clean through the floor?
+
+    The floor is a finite slab. A `phantom_impulse` strong enough to clear its
+    edge sent a peer off it and falling for the rest of the clip -- measured on
+    `collision` 20260833 camera+multi, z = -3.7 m and still accelerating --
+    which renders as an object sinking out of sight. Judged per body against
+    its own lawful lowest point, so a body the lawful clip already lowers (a
+    pendulum, a ramp) is not mistaken for one falling out.
+    """
+    T = int(traj_valid.num_frames)
+    t0 = int(plan.t_event)
+    floors = {int(b.segmentation_id) for b in spec.bodies if b.role == "floor"}
+    through = set()
+    if family in THROUGH_FLOOR_FAMILIES:
+        # Only the bodies the plan sends through the FLOOR. A ball passed
+        # through a WALL must still stay on the floor: on `barrier_pass`
+        # 20260832 multi it rolled on past the slab's edge at x = 6 and fell.
+        # PER VIOLATOR in a merged plan: on `barrier_pass` multi the peers sink
+        # through the floor while the ball passes through the wall, and the
+        # ball must not inherit their exemption.
+        params = dict(plan.params or {})
+        per = list(params.get("per_violator") or [])
+        if plan.violators and len(per) == len(plan.violators):
+            entries = [(p, [int(c.body_id)]) for p, c in zip(per, plan.violators)]
+        else:
+            entries = [(params, [int(i) for i in plan.causal_body_ids])]
+        for p, owners in entries:
+            pair = [int(i) for i in (p.get("pair") or [])]
+            if floors.intersection(pair) or p.get("mode") == "sink_group":
+                through.update(owners)
+                through.update(i for i in pair if i not in floors)
+    for j, b in enumerate(spec.bodies):
+        if b.static or b.dormant or int(b.segmentation_id) in through:
+            continue
+        try:
+            bi = traj_valid.index_of(int(b.segmentation_id))
+        except Exception:                                     # noqa: BLE001
+            continue
+        # Only where the camera SEES it: a ball that rolls out of shot and
+        # off the slab's far edge afterwards never shows anything wrong.
+        shown = _geom.violators_on_screen(spec, traj_invalid, [b], share=1.0)
+        here = (np.asarray(traj_invalid.present[t0:T, bi], bool)
+                & np.asarray(shown[t0:T], bool))
+        # The body's BOTTOM, at its current size: `immutability` and
+        # `deformation` shrink a body, and a smaller body rests lower.
+        r = float(traj_valid.radius[bi])
+        s = np.asarray(traj_invalid.scale_mul[t0:T, bi], np.float64).min(axis=1)
+        bottom = (np.asarray(traj_invalid.pos[t0:T, bi, 2], np.float64)
+                  - r * s)[here]
+        if not bottom.size:
+            continue
+        lowest = float(np.asarray(traj_valid.pos[:, bi, 2]).min()) - r
+        # HALF a radius: a body sinking out of sight is hidden by the floor
+        # once fully under it, but it passes through half-sunk -- still in
+        # view -- on the way down, and that is what is caught.
+        if float(bottom.min()) < lowest - max(0.5 * r, 0.05):
+            return True
+    return False
 
 
 def violators_stay_visible(spec, family, plan, traj_valid, traj_invalid) -> bool:
@@ -1232,7 +1447,14 @@ def main() -> int:
               "resampling" % (attempt, a.scenario, a.seed), file=sys.stderr)
     spec.notes["framing_ok"] = bool(framed)
 
-    scene, simulator, renderer, objs = build_scene(spec, scratch)
+    # DRY RUN: every decision the worker makes -- plans, staging, event
+    # moments, the visibility gate -- and every trajectory and plan it writes,
+    # with nothing rendered. For checking the physics of a whole job in seconds
+    # (`scripts/check_multi.py`); the trajectories are the ones a real run
+    # would render, because the rollout does not depend on the renderer.
+    dry = bool(os.environ.get("PHYSLOC_SKIP_RENDER"))
+    scene, simulator, renderer, objs = build_scene(spec, scratch,
+                                                   render=not dry)
     # The scenario's own constraints, which must hold on the valid rollout and
     # on every invalid one -- a rope that is only inextensible after `t_event`
     # is not a rope.
@@ -1246,8 +1468,12 @@ def main() -> int:
     scenario.script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
-    replay(spec, objs, traj_valid, renderer, scene)
-    t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
+    if dry:
+        t_valid, shapes = 0.0, {}
+    else:
+        replay(spec, objs, traj_valid, renderer, scene)
+        t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir,
+                                          "valid")
     _announce("RENDERED", "valid")
 
     families = [f.strip() for f in a.family.split(",") if f.strip()]
@@ -1261,22 +1487,51 @@ def main() -> int:
         bins = severities
         if meta is not None and not getattr(meta, "graded", True):
             bins = [severities[-1]] if severities else []
-        # STRONGEST BIN FIRST. It is the bin most likely to throw a violator out
-        # of shot, so it decides which event moment this family uses; the other
-        # bins then reuse that moment, and the three magnitudes keep describing
-        # one violation.
-        attempt_used = None
-        for sev in bins[-1:] + bins[:-1]:
+        # ONE MOMENT FOR EVERY BIN, so the three magnitudes keep describing one
+        # violation -- chosen before anything renders. The strongest bin picks
+        # it first, as it always has: it is the bin most likely to throw a
+        # violator out of shot. Where a weaker bin cannot be seen at that
+        # moment, the first moment ALL bins can be seen at replaces it: the
+        # v0 release declined 91 weak/medium cells at the strong bin's moment,
+        # 58 of which had another moment that worked for every bin.
+        order = bins[-1:] + bins[:-1]
+        cache = {}
+
+        def attempt_at(sev, k, family=family, inj=inj):
+            if (sev, k) not in cache:
+                tag = "%s/%s" % (family, sev)
+                # The rng is seeded per (family, severity), not per run, so
+                # adding a family to the list cannot change the clips the
+                # others produce.
+                #
+                # crc32, never `hash()`. Python randomises string hashing per
+                # process unless PYTHONHASHSEED is set, and it is set nowhere
+                # here, so `hash(tag)` made the same (scenario, seed, family,
+                # severity) render a *different clip on every run*. Nothing in
+                # the test suite noticed, because every check ran against a
+                # single generation.
+                rng_seed = ((a.seed + 7919 + zlib.crc32(tag.encode()))
+                            % (2 ** 31 - 1))
+                inj.event_attempt = int(k)
+                try:
+                    cache[(sev, k)] = _invalid_variant(
+                        spec, scenario, inj, sev, rng_seed, traj_valid,
+                        simulator, scene, objs, scen_hooks)
+                finally:
+                    inj.event_attempt = 0
+            return cache[(sev, k)]
+
+        shared = None
+        if order and inj.available_at(spec):
+            shared = next((k for k in range(EVENT_ATTEMPTS)
+                           if attempt_at(order[0], k).get("visible")), None)
+            if shared is not None and not all(
+                    attempt_at(s, shared).get("visible") for s in order[1:]):
+                shared = next((k for k in range(EVENT_ATTEMPTS) if all(
+                    attempt_at(s, k).get("visible") for s in order)), shared)
+        attempt_used = shared
+        for sev in order:
             tag = "%s/%s" % (family, sev)
-            # The rng is seeded per (family, severity), not per run, so adding
-            # a family to the list cannot change the clips the others produce.
-            #
-            # crc32, never `hash()`. Python randomises string hashing per
-            # process unless PYTHONHASHSEED is set, and it is set nowhere here,
-            # so `hash(tag)` made the same (scenario, seed, family, severity)
-            # render a *different clip on every run*. Nothing in the test suite
-            # noticed, because every check ran against a single generation.
-            rng_seed = (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1)
             # A LEVEL CAN REMOVE WHAT A FAMILY ACTS ON, and that is not a
             # failure. `colour_shift` has nothing to shift once actors are
             # scanned GSO assets: it declines here rather than producing a
@@ -1298,13 +1553,7 @@ def main() -> int:
                      else (attempt_used,))
             made, any_ok, attempt = {}, False, 0
             for attempt in tries:
-                inj.event_attempt = int(attempt)
-                try:
-                    made = _invalid_variant(spec, scenario, inj, sev, rng_seed,
-                                            traj_valid, simulator, scene, objs,
-                                            scen_hooks)
-                finally:
-                    inj.event_attempt = 0
+                made = attempt_at(sev, attempt)
                 any_ok = any_ok or bool(made.get("ok"))
                 if made.get("visible"):
                     break
@@ -1316,7 +1565,8 @@ def main() -> int:
                                  "error": error})
                 _announce("NOT_RENDERED", tag)
                 continue
-            attempt_used = int(attempt)
+            if attempt_used is None:
+                attempt_used = int(attempt)
             plan, traj_invalid = made["plan"], made["traj"]
             plan.notes["event_attempt"] = attempt_used
 
@@ -1327,8 +1577,12 @@ def main() -> int:
                 json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
                            "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
 
-            replay(spec, objs, traj_invalid, renderer, scene)
-            dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
+            if dry:
+                dt = 0.0
+            else:
+                replay(spec, objs, traj_invalid, renderer, scene)
+                dt, _ = render_and_save(renderer, scene, spec, objs, vdir,
+                                        "invalid")
             _announce("RENDERED", tag)
             timings[tag] = round(dt, 2)
             variants.append({"family": family, "severity": sev, "ok": True,

@@ -29,6 +29,17 @@ def actors(spec) -> List:
     return [b for b in spec.bodies if b.role == "actor"]
 
 
+def scene_actors(spec) -> List:
+    """The scenario's OWN actors: every live actor the `multi` condition did
+    not add. `notes["peer_ids"]` when the spec records it, else the peers'
+    `peer_NN` names (specs built before it did)."""
+    peers = {int(i) for i in (spec.notes.get("peer_ids") or [])}
+    return [b for b in actors(spec)
+            if not b.dormant and not b.static
+            and int(b.segmentation_id) not in peers
+            and not (not peers and str(b.name).startswith("peer_"))]
+
+
 def actor(spec):
     a = actors(spec)
     return a[0] if a else None
@@ -368,7 +379,10 @@ def frame_in_band(spec, lo: int, hi: int) -> int:
         hi = min(hi, max(lo, limit))
     if hi <= lo:
         return lo
-    return lo + int(round(scene_fraction(spec) * (hi - lo)))
+    t = lo + int(round(scene_fraction(spec) * (hi - lo)))
+    # The draw stands when the lawful twin shows the violator then; otherwise
+    # the nearest in-shot frame of the same band. See `in_shot_moment`.
+    return in_shot_moment(spec, t, lo, hi)
 
 
 def default_event_frame(spec, num_frames: int) -> Optional[int]:
@@ -609,32 +623,103 @@ def visible_band(spec, traj, bodies, lo: int, hi: int) -> Tuple[int, int]:
 #: violators. Not all of them: a super-elastic ball that climbs out of the top
 #: of the shot and falls back in, or a shoved pendulum bob that swings wide and
 #: returns, is a violation anyone can see.
-VISIBLE_AFTER_SHARE = 0.6
+#:
+#: 0.4, down from 0.6. Measured over every cell the 61-frame v0 release
+#: declined as "leaves the frame" (722, replayed in the container by
+#: `render/probe_visibility.py`): at 0.6 the gate was turning away clips whose
+#: violator spends most of a 0.7 s window in plain view and then exits --
+#: `non_parabolic`, `superelastic` and `antigravity` lost 46%, 19% and 16% of
+#: their cells that way. The masks still cover only the frames the violator is
+#: actually in shot.
+VISIBLE_AFTER_SHARE = 0.4
 
-#: ...but the opening moment after the event must show them without a break,
-#: because that is where the evidence first appears.
+#: ...and the opening moment after the event must show them, because that is
+#: where the evidence first appears. `EVIDENCE_SHARE` of those frames, and
+#: always the event frame itself: requiring every one turned away a bounce
+#: whose ball clips the top edge for a single frame on its way up.
 EVIDENCE_SECONDS = 0.25
+EVIDENCE_SHARE = 0.75
 
 
 def violators_visible(spec, traj, bodies, t_event: int,
                      tolerance: float = VISIBLE_AFTER_SHARE) -> bool:
     """Does the clip keep `bodies` on screen after `t_event`?
 
-    Every frame of the first `EVIDENCE_SECONDS` after the event, and at least
-    `tolerance` of the `min_visible_frames` from it, must show them. Asked of
-    the INVALID trajectory by the worker, so an intervention that throws a
-    violator out of shot is caught; a family whose violation is the body going
-    out of sight asks it of the valid one instead.
+    The event frame itself, `EVIDENCE_SHARE` of the first `EVIDENCE_SECONDS`
+    after it, and at least `tolerance` of the `min_visible_frames` from it,
+    must show them. Asked of the INVALID trajectory by the worker, so an
+    intervention that throws a violator out of shot is caught; a family whose
+    violation is the body going out of sight asks it of the valid one instead.
     """
-    T = int(traj.num_frames)
+    return _shows_event(spec, violators_on_screen(spec, traj, bodies),
+                        t_event, tolerance)
+
+
+def _shows_event(spec, on: np.ndarray, t_event: int,
+                 tolerance: float = VISIBLE_AFTER_SHARE) -> bool:
+    """`violators_visible` on an already computed `[T]` on-screen mask."""
+    T = int(on.shape[0])
     t = int(np.clip(t_event, 0, T - 1))
     span = min(min_visible_frames(spec, T), T - t)
     if span <= 0:
         return False
-    on = violators_on_screen(spec, traj, bodies)[t:t + span]
+    on = on[t:t + span]
     fps = float(getattr(getattr(spec, "tier", None), "fps", 12) or 12)
     head = max(1, min(span, int(round(EVIDENCE_SECONDS * fps))))
-    return bool(on[:head].all() and on.mean() >= tolerance)
+    return bool(on[0] and on[:head].mean() >= EVIDENCE_SHARE
+                and on.mean() >= tolerance)
+
+
+def event_bodies(spec, body_ids=None) -> List:
+    """The bodies an event moment has to keep in shot.
+
+    The violator the current `violator_context` names, else `body_ids`, else
+    the scene's live actors -- the bodies every single-violator plan acts on.
+    """
+    if body_ids is None:
+        named = _VIOLATOR.get()
+        body_ids = None if named is None else [named]
+    if body_ids is not None:
+        want = {int(i) for i in body_ids}
+        return [b for b in spec.bodies
+                if int(b.segmentation_id) in want and not b.static]
+    return [b for b in actors(spec) if not b.static and not b.dormant]
+
+
+def in_shot_moment(spec, t: Optional[int], lo: int, hi: int,
+                   body_ids=None, traj=None) -> Optional[int]:
+    """`t`, unless the LAWFUL twin has the violator out of shot there.
+
+    A moment drawn without looking at the camera can land while the body is
+    above the frame, behind its edge, or not yet thrown: the v0 release lost
+    242 cells whose violator was off screen at the chosen moment in the VALID
+    clip too, so no intervention could have been seen. `angular_momentum`
+    fires mid-flight, `non_parabolic` at the start of flight, and on `drop`
+    both of those are above the shot.
+
+    **Unchanged whenever `t` already works** -- every clip that rendered before
+    this existed keeps its moment. Otherwise the frames in `[lo, hi]` from
+    which the lawful rollout passes `violators_visible`, nearest to `t` first,
+    with the event attempt choosing among them so a retry is a different
+    moment. `t` again when no frame qualifies; the worker's gate decides.
+    """
+    if traj is None:
+        traj = _EVENT_KEY.get()[2]
+    if t is None or traj is None:
+        return t
+    bodies = event_bodies(spec, body_ids)
+    if not bodies:
+        return t
+    T = int(traj.num_frames)
+    lo, hi = max(1, int(lo)), min(T - 2, int(hi))
+    on = violators_on_screen(spec, traj, bodies)
+    if _shows_event(spec, on, int(t)):
+        return int(t)
+    ok = [f for f in range(lo, hi + 1) if _shows_event(spec, on, f)]
+    if not ok:
+        return int(t)
+    ok.sort(key=lambda f: (abs(f - int(t)), f))
+    return int(ok[min(event_attempt(), len(ok) - 1)])
 
 
 def window_frames(num_frames: int, t0: int, fraction: float = None,
@@ -1070,7 +1155,7 @@ def in_frame(spec, points: np.ndarray, margin: float = 0.04,
 
 
 def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,
-                 min_normal_fraction: float = 0.3):
+                 min_normal_fraction: float = 0.3, after: int = 1):
     """(frame, other_id, normal) of this body's first real *impact*.
 
     Distinct from `first_contact_any`, which returns the first contact of any
@@ -1085,7 +1170,7 @@ def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,
         return None
     for k in np.argsort(np.asarray(c.frame)):
         f = int(c.frame[k])
-        if f < 1 or f >= traj.num_frames:
+        if f < max(1, int(after)) or f >= traj.num_frames:
             continue
         a, b = int(c.body_a[k]), int(c.body_b[k])
         if body_id not in (a, b):

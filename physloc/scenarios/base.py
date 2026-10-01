@@ -1304,6 +1304,10 @@ def _add_peers(spec: SceneSpec, seed: int) -> None:
     placed = C.distractors(spec, want, rng, floor_top=top, role="actor")
     spec.bodies.extend(placed)
     spec.notes["n_peers_placed"] = len(placed)
+    # Which actors the CONDITION added, so a `multi` plan can always put the
+    # scenario's own actor -- the ball that collides, the body that drops --
+    # among its violators (`injectors.multi`).
+    spec.notes["peer_ids"] = [int(b.segmentation_id) for b in placed]
     # WHAT ACTUALLY LANDED decides the count, not what was asked for. The
     # placement constraints can leave no room, and a scene that ended up with
     # three actors must not claim eight.

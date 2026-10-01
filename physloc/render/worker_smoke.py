@@ -36,6 +36,8 @@ scratch = kb.as_path(args.outdir) / "scratch"
 scratch.mkdir(parents=True, exist_ok=True)
 
 simulator = PyBullet(scene, scratch)
+import pybullet as _pb
+_pb.setTimeStep(1.0 / float(scene.step_rate))   # see worker.build_scene
 renderer = Blender(scene, scratch, use_denoising=True, samples_per_pixel=args.spp)
 
 # A falling ball on a floor: enough dynamics to exercise PyBullet, enough

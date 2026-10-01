@@ -74,7 +74,16 @@ class RestingTable(Scenario):
             raise NotImplementedError("complexity %s not built" % complexity)
 
         top_z = 0.76
-        balanced_base = bool(rng.rand() < 0.35)
+        # THE BALANCED TABLE IS GONE; the draw stays so every later draw is
+        # unchanged. A tabletop balanced on a sphere is metastable: the lawful
+        # clip held it still by resetting its pose every substep (a script,
+        # not physics), and any staged intervention released the hold, so the
+        # table tipped on solver noise and the props slid -- 0.17 m under
+        # `continuity`, which never touches them -- an unlabelled effect in a
+        # clip claiming one violation, and absent under families that do not
+        # stage. Every table now stands on its post, simulated, held by nothing.
+        _balanced_draw = rng.rand()  # noqa: F841 -- keeps the rng stream
+        balanced_base = False
         sphere_radius = 0.42
         table_z = (2.0 * sphere_radius + 0.06 if balanced_base
                    else top_z - 0.06)

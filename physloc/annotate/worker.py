@@ -11,13 +11,17 @@ def main():
     request = json.load(sys.stdin)
     from .. import params
     params.apply(request["params"])
-    from .pipeline import annotate_work
+    from .pipeline import NotObservable, annotate_work
 
     # Keep diagnostics separate from the machine-readable result.
     with contextlib.redirect_stdout(sys.stderr):
         release = os.path.basename(os.path.normpath(request["outroot"])) or "physloc_v0"
-        results = annotate_work(request["workdir"], request["outroot"],
-                                release=release, only=request.get("only"))
+        try:
+            results = annotate_work(request["workdir"], request["outroot"],
+                                    release=release, only=request.get("only"))
+        except NotObservable as exc:
+            json.dump({"declined": str(exc)}, sys.__stdout__)
+            return
         if request.get("overlay", True):
             from ..viz.overlay import build
             for result in results:

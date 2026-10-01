@@ -46,21 +46,17 @@ def _gate(spec, family, plan, traj_valid, traj_invalid):
                     if int(b.segmentation_id) in ids and not b.static],
                    plan.t_event)]
     T = int(traj.num_frames)
-    fps = float(spec.tier.fps)
     heads, shares = [], []
     for bodies, t_event in groups:
         if not bodies:
             continue
         t = int(np.clip(t_event, 0, T - 1))
+        on = _geom.violators_on_screen(spec, traj, bodies)
         span = min(_geom.min_visible_frames(spec, T), T - t)
-        if span <= 0:
-            heads.append(False)
-            shares.append(0.0)
-            continue
-        on = _geom.violators_on_screen(spec, traj, bodies)[t:t + span]
-        head = max(1, min(span, int(round(_geom.EVIDENCE_SECONDS * fps))))
-        heads.append(bool(on[:head].all()))
-        shares.append(float(on.mean()))
+        # `head` is the gate's own verdict (`_geom._shows_event`), so the probe
+        # follows whatever rule the worker applies; `share` is the raw number.
+        heads.append(bool(_geom._shows_event(spec, on, t)))
+        shares.append(float(on[t:t + span].mean()) if span > 0 else 0.0)
     if not shares:
         return True, 1.0
     return all(heads), min(shares)

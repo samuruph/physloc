@@ -511,6 +511,16 @@ class Injector:
             bi = out.index_of(bid)
             bad = np.flatnonzero(self._uncaused_frames(
                 out, spec, contacts, bid, from_frame=max(1, plan.t_event)))
+            # ONLY WHAT A VIOLATOR CAUSED. The geometric contact test is
+            # approximate -- bounding shapes -- and in a `multi` scene peers
+            # lawfully nudge each other, the ramp and the floor in ways it
+            # misses. Every such nudge read as uncaused and was "corrected":
+            # on `shadow_track` 20260832 multi x shadow, a family that moves
+            # no body at all, four peers were re-integrated 0.13-0.30 m off
+            # their paths. A speed change is the edit's to undo only where the
+            # SIMULATOR recorded this body touching a violator.
+            bad = bad[[bool(self._struck_by(traj, bid, violators, int(f)))
+                       for f in bad]] if bad.size else bad
             if not bad.size:
                 continue
             t0 = int(bad[0])
@@ -525,6 +535,23 @@ class Injector:
                                obstacles=_geom.Obstacles(spec, out,
                                                          exclude_ids=[bid]))
         return out
+
+    @classmethod
+    def _struck_by(cls, traj: Trajectory, body_id: int, violators,
+                   frame: int) -> bool:
+        """Did the LAWFUL rollout have `body_id` touching a violator within
+        `BYSTANDER_SLACK` frames of `frame`? Its contacts are the simulator's."""
+        c = traj.contacts
+        if not len(c):
+            return False
+        f = np.asarray(c.frame, int)
+        a = np.asarray(c.body_a, int)
+        b = np.asarray(c.body_b, int)
+        near = np.abs(f - int(frame)) <= int(cls.BYSTANDER_SLACK)
+        v = np.asarray(sorted(int(x) for x in violators), int)
+        hit = ((a == int(body_id)) & np.isin(b, v)) | (
+            (b == int(body_id)) & np.isin(a, v))
+        return bool((near & hit).any())
 
     @staticmethod
     def _changes_dynamics(traj: Trajectory, out: Trajectory,
@@ -726,6 +753,18 @@ class Injector:
         picks = self._instance_rng(spec).choice(len(live), size=k, replace=False)
         return [live[i] for i in sorted(int(x) for x in picks)]
 
+    @staticmethod
+    def _is_medium(spec, bodies) -> bool:
+        """Is `bodies` a granular MEDIUM -- not just more than two bodies?
+
+        "More than two targets" was the test, from when only `pour` handed a
+        family several. A `multi` clip hands it three to ten rigid peers, which
+        were then timed, capped and bounced as if they were a pour: gravity
+        reversed on frame 2, a bounce stepped as one pile.
+        """
+        return (len(bodies) > 2
+                and getattr(spec, "physics_medium", "rigid") == "granular")
+
     def _medium_event_frame(self, spec, traj, bodies, fallback):
         """Fire on a MEDIUM while it is still in the air, not once it has piled up.
 
@@ -743,7 +782,7 @@ class Injector:
         Only for a genuine medium -- two bodies or fewer keep whatever moment
         the family chose, so no single-actor scenario is affected.
         """
-        if len(bodies) <= 2:
+        if not self._is_medium(spec, bodies):
             return fallback
         t = _geom.before_medium_lands(spec, traj, bodies)
         if t is None or not (1 <= t < traj.num_frames - 2):

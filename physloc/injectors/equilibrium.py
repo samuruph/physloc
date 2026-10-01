@@ -35,7 +35,13 @@ class Support(Injector):
 
     family = "support"
     persistent = True
-    RISE_FRAMES = 3
+    #: How long a body takes to rise to its hover height, in SECONDS. It was
+    #: three frames: a quarter second at the debug tier's 12 fps, but 0.1 s at
+    #: the release's 30 -- a 0.75 m rise at 7.5 m/s, which reads as a jump.
+    RISE_SECONDS = 0.4
+
+    def _rise_frames(self, spec) -> int:
+        return max(2, int(round(self.RISE_SECONDS * _geom._fps(spec))))
     CLEARANCE_RADII = {"weak": 0.8, "medium": 2.0, "strong": 3.6}
     #: Natural frequency, rad/s, of the pull holding a hovering body at its
     #: height -- see `stage`.
@@ -211,7 +217,11 @@ class Support(Injector):
             have = max(0.0, float(pos[2]) - radius - top)
             lifted = (pos[0], pos[1], pos[2] + max(0.0, want - have))
             v, w = pb.getBaseVelocity(idx)
-            pb.resetBasePositionAndOrientation(idx, lifted, quat)
+            # RAISED, NOT PLACED. Resetting the body to the lifted height moved
+            # a resting peer 0.75 m in one frame -- a teleport inside a support
+            # clip, on every `multi` scene that has peers lying on the floor.
+            # The hold below pulls it up along the same eased curve `_apply`
+            # draws, over `RISE_SECONDS`.
             # The vertical component goes. Whatever the body was doing sideways
             # it carries on doing -- a sliding box keeps sliding, and freezing
             # it would add a Newton-1 violation on top of this one -- but a
@@ -228,7 +238,7 @@ class Support(Injector):
             pb.resetBaseVelocity(idx, [keep * float(v[0]), keep * float(v[1]),
                                        0.0], list(w))
             targets.append((idx, float(getattr(body, "mass", 1.0)),
-                            float(lifted[2])))
+                            float(pos[2]), float(lifted[2])))
         if not targets:
             return ()
 
@@ -250,9 +260,16 @@ class Support(Injector):
         # what "held up by nothing" means; it still collides with whatever it
         # meets.
         omega = float(self.HOLD_OMEGA)
+        ramp = self._rise_frames(spec)
+        spf = stepper.substeps_of(simulator)
 
-        def weightless(_client, _step, frame):
-            for idx, mass, z_hold in targets:
+        def weightless(_client, step, frame):
+            # The eased height `_apply` draws, per substep: `run_from` starts
+            # at `t_event`, so the substep counter is the time since it.
+            u = min(1.0, (step / float(max(spf, 1)) + 1.0) / ramp)
+            ease = u * u * (3.0 - 2.0 * u)
+            for idx, mass, z_from, z_to in targets:
+                z_hold = z_from + (z_to - z_from) * ease
                 pos, _ = pb.getBasePositionAndOrientation(idx)
                 vz = float(pb.getBaseVelocity(idx)[0][2])
                 hold = mass * (-omega * omega * (float(pos[2]) - z_hold)
@@ -282,7 +299,7 @@ class Support(Injector):
         # Eased up over a few frames, not snapped. A body that jumps three radii
         # between two frames is a *teleport*, so snapping it made every
         # `support` clip trip the continuity detector as well.
-        ramp = max(2, min(self.RISE_FRAMES, n))
+        ramp = max(2, min(self._rise_frames(spec), n))
         u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
         ease = u * u * (3.0 - 2.0 * u)
         start = traj.pos[t0 - 1, bi].astype(np.float64)
@@ -446,7 +463,7 @@ class Friction(Injector):
         # the grip decides how far the pile spreads when it hits, which is what
         # friction looks like on a granular medium, and all three bins share the
         # frame so their magnitudes stay comparable.
-        medium = len(targets) > 2
+        medium = self._is_medium(spec, targets)
         t0 = self._medium_event_frame(spec, traj, targets, t0)
         ramp_end = None
         ramp_id = spec.notes.get("ramp_id")

@@ -27,7 +27,11 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class PendulumSwing(Scenario):
     name = "pendulum_swing"
-    SEG_FLOOR, SEG_BOB, SEG_ROD, SEG_POST = 1, 2, 4, 3
+    SEG_FLOOR, SEG_BOB, SEG_ROD, SEG_POST, SEG_AXLE = 1, 2, 4, 3, 5
+    #: Gap, metres, between the swinging bob's widest point and the post.
+    POST_CLEARANCE = 0.12
+    #: Half-depth of the post, metres.
+    POST_HALF_DEPTH = 0.06
     #: Fractional energy rise per substep below which a gain is read as
     #: numerical drift and taken back. An intervention arrives far above it.
     DRIFT_TOLERANCE = 0.02
@@ -46,11 +50,6 @@ class PendulumSwing(Scenario):
         omega = math.sqrt(9.81 / arm)
         r_bob = float(rng.uniform(0.20, 0.26)) * C.size_scale(seed, self.name)
 
-        post = BodySpec(name="post", kind="cube",
-                        position=(0.0, 0.28, pivot[2] / 2.0),
-                        scale=(0.08, 0.06, pivot[2] / 2.0), mass=0.0, static=True,
-                        color=(0.30, 0.30, 0.34), segmentation_id=self.SEG_POST,
-                        role="prop")
         # The rod is GEOMETRY, not a participant. It is kinematic -- pinned in
         # the simulator and hung between the pivot and the bob every substep by
         # `_carry_rod` -- because a stick with no mass of its own contributes
@@ -91,9 +90,31 @@ class PendulumSwing(Scenario):
 
         bob = C.with_material(bob, M.pick(arng), arng)
 
+        # THE POST STANDS CLEAR OF THE SWING. It sat a fixed 0.28 m behind the
+        # swing plane, front face at 0.22 m, while the bob reaches 0.25-0.57 m
+        # (a scaled sphere, or a cube's corner): measured, the bob struck the
+        # post at the bottom of every swing, and the lawful clip kept 8% of its
+        # energy over two seconds -- the unrealistic swing you saw. Now placed
+        # behind the bob's own extent, with an AXLE from its top to the pivot,
+        # so the rod hangs from the bar instead of in front of it.
+        y_post = (float(bob.bounding_radius) + self.POST_CLEARANCE
+                  + self.POST_HALF_DEPTH)
+        post = BodySpec(name="post", kind="cube",
+                        position=(0.0, y_post, pivot[2] / 2.0),
+                        scale=(0.08, self.POST_HALF_DEPTH, pivot[2] / 2.0),
+                        mass=0.0, static=True,
+                        color=(0.30, 0.30, 0.34), segmentation_id=self.SEG_POST,
+                        role="prop")
+        reach = y_post - self.POST_HALF_DEPTH
+        axle = BodySpec(name="axle", kind="cube",
+                        position=(0.0, reach / 2.0, pivot[2]),
+                        scale=(0.03, reach / 2.0, 0.03), mass=0.0, static=True,
+                        collides=False, color=(0.30, 0.30, 0.34),
+                        segmentation_id=self.SEG_AXLE, role="prop")
+
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), post, bob, rod],
+            bodies=[C.ground(cx, self.SEG_FLOOR), post, bob, rod, axle],
             lights=C.lights(cx, look_at=(0, 0, 1.4)),
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
             floor_level=0.0, complexity=complexity,

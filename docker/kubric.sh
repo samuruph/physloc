@@ -82,6 +82,8 @@ exec docker run --rm --interactive \
   --env PHYSLOC_GPU \
   --env PHYSLOC_GPU_BACKEND \
   --env PHYSLOC_THREADS \
+  --env PHYSLOC_SKIP_RENDER \
+  --env PHYSLOC_DEBUG \
   --volume "$REPO_ROOT:/kubric" \
   --volume "/mnt/physloc:/mnt/physloc" \
   --workdir /kubric \

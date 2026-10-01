@@ -92,6 +92,10 @@ def _asset_block(spec, spec_d):
     return out
 
 
+class NotObservable(Exception):
+    """A rendered violation with no observable frame: declined, not failed."""
+
+
 def annotate_pair(workdir: str, vdir: str, outroot: str,
                   release: str = "physloc_v0",
                   write_video: bool = True) -> Dict[str, object]:
@@ -555,7 +559,18 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         diverged = _diverged_frames(
             traj_v, traj_i, ([c["id"]] if independent else list(causal_ids))
             + affected, c["t_event"], T)
-        gate = (c["consequence"] | diverged) & c["obs"]
+        # FROM THE MOMENT IT CAN BE SEEN, NOT ONLY ON THE FRAMES IT CAN. The
+        # gate was `& obs`, a per-frame pixel test that a subtle or slow
+        # violation crosses on and off -- `global_gravity` on bodies resting on
+        # `resting_table` flickered red frame to frame and some violators all
+        # but vanished from the mask. Who did it does not change from frame to
+        # frame: once the violation is observable, its violator stays the
+        # violator, and what it disturbed stays disturbed, while the
+        # consequences last. A violator never observable still gets nothing.
+        seen_from = np.flatnonzero(np.asarray(c["obs"], bool))
+        started = (frames >= int(seen_from[0])) if seen_from.size \
+            else np.zeros((T,), bool)
+        gate = (c["consequence"] | diverged) & started
         if shadow_component:
             part = np.zeros(seg_i.shape, np.uint8)
             part[invalid_mask(c) & gate[:, None, None]] = 1
@@ -615,6 +630,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # The schema derives the clip clock from its per-object windows.
     observable = np.logical_or.reduce([c["own_obs"] for c in violators])
+    if not observable.any():
+        # NOTHING TO SEE, so nothing to ship. The worker's gate asks whether
+        # the violators are ON SCREEN; this is the stricter question of
+        # whether the violation ever shows in the pixels, and a body can be in
+        # shot while what it does wrong is hidden -- `support` failing behind
+        # the `occluder_pass` screen. These used to reach the schema writer
+        # and fail its window check with a bare ValueError (17 of them in the
+        # v0 release); they are a decline, said as one.
+        raise NotObservable("violation never observable: no violator has an "
+                            "observable frame in the invalid clip")
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
                           primary_id, severity_t=sev_t, observable=observable)

@@ -329,6 +329,9 @@ class Solidity(Injector):
     #: strong bin did not pass through.
     SECONDS_BY_BIN = {"weak": 0.17, "medium": 0.34, "strong": 0.85}
 
+    #: Below this speed, m/s, a body counts as resting on its surface.
+    RESTING_SPEED = 0.3
+
     def strong_residual_reference(self, spec) -> float:
         """The penetration law reports depth in radii, which is exactly the unit
         `DEPTH_BY_BIN` is expressed in -- so the reference is the bin value.
@@ -385,6 +388,20 @@ class Solidity(Injector):
         if actor is None or event is None:
             return None
         t_contact, partner_id, partner_static, normal = event
+        # A BODY AT REST ON A STATIC SURFACE has no moment of contact worth the
+        # name: its first contact is the settle after it is placed, frames 1-4,
+        # before anything lawful has been shown. It can start sinking at any
+        # time, so it does so at an ordinary event-band moment -- drawn like
+        # every undirected event, and in shot (`frame_in_band`) -- while it is
+        # still resting there. A ball rolling into a wall keeps its contact.
+        earliest = max(1, int(round(_geom.EVENT_EARLIEST_SECONDS
+                                    * _geom._fps(spec))))
+        if partner_static and t_contact < earliest:
+            t_band = _geom.band_frame(spec, traj.num_frames)
+            bi = traj.index_of(int(actor.segmentation_id))
+            if t_band is not None and float(np.linalg.norm(
+                    traj.lin_vel[int(t_band), bi])) < self.RESTING_SPEED:
+                t_contact = int(t_band)
 
         radius = actor.bounding_radius
         depth_r = self.DEPTH_BY_BIN[severity_bin]
@@ -1220,7 +1237,7 @@ class SuperElastic(Injector):
             out.lin_vel[t0, bi, :] = v_out.astype(np.float32)
             v_by_body[int(body.segmentation_id)] = v_out
 
-        if len(targets) > 2:
+        if self._is_medium(spec, targets):
             # A whole medium bouncing: step it together. Boosting each grain
             # against the others' *lawful* paths ejected the ones buried in the
             # pile, and an ejection is a position jump large enough to read as
@@ -1282,6 +1299,24 @@ class SuperElastic(Injector):
         actor = self._primary(spec)
         if actor is None:
             return None
+        # THE HARDEST IMPACT THE SCENE OFFERS, unless the scene or a `multi`
+        # member names the body. The default actor's first impact can be the
+        # least visible one -- on `stack_topple` the middle block reaching the
+        # floor at 2.7 m/s, while the top block lands at 3.8 m/s a frame
+        # earlier -- and a bounce nobody notices is a violation nobody sees.
+        if not (spec.notes.get("family_targets") or {}).get(self.family):
+            best = None
+            for body in _geom.scene_actors(spec):
+                hit = _geom.first_impact(traj, int(body.segmentation_id))
+                if hit is None:
+                    continue
+                j = traj.index_of(int(body.segmentation_id))
+                speed = float(np.linalg.norm(
+                    traj.lin_vel[max(0, int(hit[0]) - 1), j]))
+                if best is None or speed > best[0]:
+                    best = (speed, body)
+            if best is not None:
+                actor = best[1]
         # An impact, not merely a contact: reflecting the normal component of a
         # rolling ball's velocity along the floor changes nothing, and the clip
         # would ship claiming a super-elastic bounce that never happened.
@@ -1292,12 +1327,29 @@ class SuperElastic(Injector):
         # -- the ball shot straight up and out of frame, which is neither what
         # the scenario is built around nor something a viewer can follow. The
         # same preference `_CollisionEdit` uses, for the same reason.
+        # NOT THE SETTLING TOUCH. Bodies spawned a few centimetres up land in
+        # the first frames of every clip, and amplifying that first contact
+        # launched them before anything lawful had been shown: on
+        # `barrier_pass` multi, three peers touched the floor at frame 2 and
+        # left it at 8 m/s, which reads as objects jumping out of place at the
+        # start. The earliest moment every other family may fire at is the
+        # earliest moment a bounce may be amplified.
+        # A granular medium is exempt: its grains genuinely arrive in those
+        # frames, and the medium path below times the bounce to that arrival.
+        # The scenario's OWN actor is exempt as well: its first impact is the
+        # event the scene was built around -- the dropped cube landing at
+        # frame 8 -- not a settle.
+        own = {int(b.segmentation_id) for b in _geom.scene_actors(spec)}
+        earliest = (1 if (getattr(spec, "physics_medium", "rigid") == "granular"
+                          or int(actor.segmentation_id) in own)
+                    else max(1, int(round(_geom.EVENT_EARLIEST_SECONDS
+                                          * _geom._fps(spec)))))
         pair = _geom.first_dynamic_pair_contact(
             spec, traj, prefer=int(actor.segmentation_id))
         impact = None
         if pair is not None:
             t_pair, id_a, id_b = pair
-            if 1 <= t_pair < traj.num_frames - 2:
+            if earliest <= t_pair < traj.num_frames - 2:
                 mine = int(actor.segmentation_id)
                 other = id_b if mine == id_a else id_a
                 if mine in (id_a, id_b):
@@ -1313,7 +1365,12 @@ class SuperElastic(Injector):
         if impact is None:
             return None
         t0, partner_id, normal = impact
-        if not (1 <= t0 < traj.num_frames - 2):
+        # ITS FIRST IMPACT, or none. Skipping a too-early landing and taking
+        # the next contact instead amplified whatever came later -- a cone
+        # that landed on its support, sat there, and was launched seconds
+        # afterwards (`stack_topple` camera+multi). A body whose first impact
+        # is the settle at spawn has nothing to bounce.
+        if not (earliest <= t0 < traj.num_frames - 2):
             return None
 
         targets = self._targets(spec, actor, partner_id)
@@ -1348,7 +1405,7 @@ class SuperElastic(Injector):
         # then most of the pour has already landed and stopped, and multiplying
         # the restitution of bodies at rest multiplies nothing. Measured, the
         # clip carried a declared energy gain of 35 and showed almost no bounce.
-        if len(targets) > 2:
+        if self._is_medium(spec, targets):
             arrival = _geom.before_medium_lands(spec, traj, targets)
             if arrival is not None and 1 <= arrival < traj.num_frames - 2:
                 t0 = arrival
@@ -1415,7 +1472,7 @@ class SuperElastic(Injector):
         # 783 the blocks met at 0.81 m/s, strong measured 1.99 against a floor
         # of 35, and every bin scored under 0.06 while the clip visibly changed
         # a tenth of the frame.
-        if len(targets) > 2 or r_strong <= 1e-9:
+        if self._is_medium(spec, targets) or r_strong <= 1e-9:
             r_strong = max(r_strong, float((1.0 + excess * fit) ** 2 - 1.0))
 
         return InterventionPlan(
@@ -1879,9 +1936,13 @@ class _CollisionEdit(Injector):
         eligible = (spec.notes.get("family_targets") or {}).get(self.family)
         actor = self._primary(spec)
         actor_id = int(actor.segmentation_id) if actor is not None else None
-        hit = _geom.first_dynamic_pair_contact(spec, traj, prefer=actor_id,
-                                               only=eligible)
-        if hit is None:
+        # ONE named body means "a collision involving this body": `only`
+        # restricts BOTH sides of the pair, so naming a single violator -- as
+        # `injectors.multi` does, one per violator -- left no pair to find.
+        single = eligible is not None and len(eligible) == 1
+        hit = _geom.first_dynamic_pair_contact(
+            spec, traj, prefer=actor_id, only=None if single else eligible)
+        if hit is None or (single and int(eligible[0]) not in hit[1:]):
             return None
         t_contact, id_a, id_b = hit
         if not (1 <= t_contact < traj.num_frames - 1):
@@ -1909,7 +1970,7 @@ class _CollisionEdit(Injector):
         # after the previews, so `r_strong` is measured on the frame the clip
         # actually fires on.
         group = self._group(spec)
-        medium = len(group) > 2
+        medium = self._is_medium(spec, group)
         if medium:
             t_contact = self._medium_event_frame(spec, traj, group, t_contact)
             t_event = max(1, int(t_contact) - 1)

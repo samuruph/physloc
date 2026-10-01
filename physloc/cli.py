@@ -936,6 +936,8 @@ def cmd_generate(a) -> int:
                         late.extend(_annotate(info["outdir"], rel,
                                               overlay=not a.no_overlay,
                                               only=[x["dir"]]))
+                    except AnnotationDeclined as exc:
+                        bad.append(dict(x, ok=False, error=str(exc)))
                     except Exception as exc:                   # noqa: BLE001
                         bad.append(dict(x, ok=False,
                                         error="annotate failed: %r" % exc))
@@ -1580,7 +1582,15 @@ def _annotate(workdir, outroot, overlay=True, only=None):
         if proc.returncode:
             raise RuntimeError("annotation worker exited %d: %s" %
                                (proc.returncode, proc.stderr[-40000:]))
-        return json.loads(proc.stdout)
+        out = json.loads(proc.stdout)
+        if isinstance(out, dict) and out.get("declined"):
+            raise AnnotationDeclined(out["declined"])
+        return out
+
+
+class AnnotationDeclined(Exception):
+    """The annotator refused a clip on purpose -- see `NotObservable`. Its
+    message is the decline reason, reported as-is rather than as a crash."""
 
 
 class _SampleAnnotator:

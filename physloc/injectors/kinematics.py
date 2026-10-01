@@ -179,7 +179,12 @@ class _GravityScale(Injector):
         # down by frame 3, so a weak bin at 0.45 g landed the pile at z = 0.21
         # against a lawful 0.19. Firing at frame 2 leaves the descent itself to
         # happen at the wrong rate, which is the only thing there is to see.
-        if len(targets) > 2:
+        #
+        # A GRANULAR medium only. The test was `len(targets) > 2`, and a
+        # `multi` scene gives `global_gravity` every actor -- three to ten rigid
+        # bodies -- so every multi clip of this family reversed gravity on
+        # frame 2, before anything lawful had been shown.
+        if self._is_medium(spec, targets):
             t0 = max(1, min(t0, 2))
 
         n_left = traj.num_frames - t0
@@ -614,13 +619,54 @@ class Continuity(Injector):
         body actually is.
         """
         delta = np.asarray(plan.params["delta_m"], np.float64)
+        moving = {int(i) for i in plan.causal_body_ids}
         for bid in plan.causal_body_ids:
             body = next(b for b in spec.bodies
                         if int(b.segmentation_id) == int(bid))
             obj = objs[body.name]
-            obj.position = tuple(float(x) for x in
-                                 np.asarray(obj.position, np.float64) + delta)
+            start = np.asarray(obj.position, np.float64)
+            step = self._live_clear_step(spec, simulator, objs, body, start,
+                                         delta, moving)
+            if step is not delta:
+                plan.notes["landing_scale"] = float(
+                    np.linalg.norm(step) / max(np.linalg.norm(delta), 1e-9))
+            obj.position = tuple(float(x) for x in start + step)
         return ()
+
+    def _live_clear_step(self, spec, simulator, objs, body, start, delta,
+                         moving):
+        """`delta`, or the nearest longer jump that lands clear of the bodies
+        where they ARE -- not where the lawful rollout put them.
+
+        `_clear_landing` checks the jump against the valid rollout at `t0`,
+        which is the whole world for a single violator. In a `multi` clip the
+        other violators may already have jumped, and landing on one of them
+        left two bodies interpenetrating for the rest of the clip -- measured
+        on `resting_table` 20260832 multi x continuity, a cube and a prop
+        0.21 m apart with radii 0.37 + 0.24. Checked by bounding sphere against
+        every other dynamic body's live pose.
+        """
+        import pybullet as pb
+        from ..render import stepper
+
+        others = []
+        for b in spec.bodies:
+            if b.static or int(b.segmentation_id) in moving or b.dormant:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec,
+                                         int(b.segmentation_id))
+            if idx is None:
+                continue
+            pos, _ = pb.getBasePositionAndOrientation(idx)
+            others.append((np.asarray(pos, np.float64),
+                           float(b.bounding_radius)))
+        r = float(body.bounding_radius)
+        for k in (1.0, 1.15, 1.3, 1.5, 1.75):
+            target = start + delta * k
+            if all(float(np.linalg.norm(target - p)) >= 0.9 * (r + ro)
+                   for p, ro in others):
+                return delta if k == 1.0 else delta * k
+        return delta
 
     def _teleport_all(self, traj, bodies, t0: int, delta) -> Trajectory:
         out = self._clone(traj)
@@ -782,6 +828,13 @@ class NonParabolic(Injector):
         t0, t1 = int(run[0]) + 1, int(run[1])
         if t1 - t0 < 3:
             return None
+        # From the first frame of the flight the camera shows, not the first
+        # frame of the flight: a `drop` is airborne from frame 0 and above the
+        # shot for the start of it, and this family declined on 46% of its
+        # cells, every attempt firing on that same unseen frame.
+        t0 = _geom.in_shot_moment(spec, t0, t0, t1 - 3,
+                                  body_ids=[int(b.segmentation_id)
+                                            for b in (targets or [actor])])
 
         radius = float(actor.bounding_radius)
         # THE SIZE OF THE THING THAT IS SNAKING. On one actor that is its own
@@ -800,7 +853,7 @@ class NonParabolic(Injector):
         # threw the pile 40 m -- declined on every attempt. Scaled on the
         # STRONG bin, so the three keep their spacing, and only on a medium: a
         # single body has nothing to collide with mid-flight.
-        if len(targets) > 2:
+        if self._is_medium(spec, targets):
             strong = self.AMPLITUDE_RADII["strong"] * scale
             peak = self._peak_speed(spec, strong, t1 - t0 + 1, 1.0 / traj.dt)
             if peak > self.MEDIUM_SPEED_CAP:
@@ -925,7 +978,7 @@ class NonParabolic(Injector):
         # half of `pour` spilled over and rolled out of shot. Only a touch on
         # something STATIC counts -- grains in a falling stream brush each
         # other, and stopping on that would stop almost everything at once.
-        crowd = len(targets) > 2
+        crowd = self._is_medium(spec, targets)
         statics = set()
         if crowd:
             for b in spec.bodies:
@@ -1208,6 +1261,13 @@ class TimeSlip(Injector):
         primary = self._primary(spec)
         if primary is not None:
             order = [primary] + [b for b in order if b is not primary]
+        # A NAMED TARGET IS THE ONLY CANDIDATE. `injectors.multi` names each
+        # violator in turn; searching the other actors as well handed back a
+        # different body, the sub-plan was discarded, and every `multi` clip of
+        # this family shipped one violator.
+        if (spec.notes.get("family_targets") or {}).get(self.family) \
+                and primary is not None:
+            order = [primary]
         best = None
         for body in order:
             if body.dormant or body.static:

@@ -491,6 +491,12 @@ DISTRACTOR_MOVING = 0.5
 #: ever falls, falling identifies the actor.
 DISTRACTOR_AIRBORNE = 0.35
 
+#: Share of `multi` PEERS that start in the air, and the time they take to land,
+#: in seconds -- inside the event band, so a peer has a genuine first impact and
+#: is moving when a family acts on it. See `distractors`.
+PEER_AIRBORNE = 0.6
+PEER_DROP_SECONDS = (0.35, 0.75)
+
 #: How much of the actor's silhouette a distractor must clear, in actor radii.
 #: Smaller than the physical margin on purpose -- see the note at its use.
 SIGHTLINE_RADII = 1.35
@@ -661,7 +667,18 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
             # mistake as approving a clearance and then growing the body.
             # Measured on `toss`: `distractor_04` ended 0.109 rad from the ball
             # against the 0.131 it needed.
-            if float(rng.uniform()) < DISTRACTOR_AIRBORNE:
+            if role == "actor":
+                # A PEER IS DROPPED SO IT LANDS INSIDE THE EVENT BAND. Peers
+                # placed at rest, or a couple of radii up, have touched down by
+                # frame 5 -- before any event may fire -- so a `multi` clip had
+                # no second body for `superelastic` to rebound or a motion
+                # family to act on, and those families were declined on most
+                # multi scenes. The height comes from the fall time.
+                if float(rng.uniform()) < PEER_AIRBORNE:
+                    t_land = float(rng.uniform(*PEER_DROP_SECONDS))
+                    pos[2] = floor_top + r + 0.5 * float(
+                        np.linalg.norm(g)) * t_land * t_land
+            elif float(rng.uniform()) < DISTRACTOR_AIRBORNE:
                 pos[2] = floor_top + r + float(rng.uniform(0.5, 2.5)) * r
             if any(float(np.linalg.norm(pos - c)) < (keep + r)
                    for c, keep in keep_clear):

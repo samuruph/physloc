@@ -384,6 +384,27 @@ class Injector:
         """
         return None
 
+    def _held(self, plan) -> Dict[str, Any]:
+        """What `stage(plan)` must hand to `unstage(plan)`, kept PER PLAN.
+
+        It was one attribute on the instance -- `self._swaps`, `self._gone` --
+        which is one slot for something that can be staged several times over.
+        A `multi` clip stages each violator's plan on the same world before
+        unstaging any (`stepper.run_segments`), so the second `stage`
+        overwrote the first one's proxies and `unstage` restored only the last
+        violator. Measured on `collision` x multi: every `deformation` variant
+        left two parked bodies and two orphan proxies behind, and every family
+        after it in the job ran on the orphans -- `newton1_inertia` and
+        `superelastic` with their violator falling through the floor to z = -21
+        km, declined as "leaves the frame" at every event moment.
+        """
+        return self.__dict__.setdefault("_held_by_plan", {}).setdefault(
+            id(plan), {})
+
+    def _release(self, plan) -> Dict[str, Any]:
+        """`_held(plan)`, removed: for `unstage`, which restores it once."""
+        return self.__dict__.get("_held_by_plan", {}).pop(id(plan), {})
+
     def refine_windows(self, spec, traj_valid: Trajectory,
                        traj_invalid: Trajectory,
                        plan: InterventionPlan) -> None:

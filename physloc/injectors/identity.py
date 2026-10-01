@@ -122,7 +122,7 @@ class Permanence(Injector):
         gone = [g for g in gone if g.ok]
         if not gone:
             return ()
-        self._gone = gone
+        self._held(plan)["gone"] = gone
         for g in gone:
             g.hide()
         t1 = plan.consequence_windows[0][1]
@@ -141,9 +141,8 @@ class Permanence(Injector):
         return (restore,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        for g in getattr(self, "_gone", ()) or ():
+        for g in reversed(self._release(plan).get("gone", ())):
             g.show()
-        self._gone = []
         spec.notes.pop("_release_balanced_support", None)
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
@@ -304,12 +303,11 @@ class Immutability(Injector):
         bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
         if not bodies:
             return ()
-        self._swaps = []
         swaps = [stepper.ShapeSwap(simulator, objs, spec, b) for b in bodies]
         swaps = [w for w in swaps if w.ok]
         if not swaps:
             return ()
-        self._swaps = swaps
+        self._held(plan)["swaps"] = swaps
         t0 = plan.t_event
         profile = self._profile(plan, spec.tier.num_frames - t0)
         spf = stepper.substeps_of(simulator)
@@ -337,9 +335,8 @@ class Immutability(Injector):
         return (resize,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        for swap in getattr(self, "_swaps", ()) or ():
+        for swap in reversed(self._release(plan).get("swaps", ())):
             swap.restore()
-        self._swaps = []
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The visual half. PyBullet carries the size, Blender has to be told.
@@ -745,11 +742,10 @@ class Fission(Injector):
         twin = self._twin_of(spec)
         if actor is None or twin is None:
             return ()
-        # Cleared first, never assumed empty: an early return below would
-        # otherwise leave the PREVIOUS variant's proxies sitting on the
-        # instance, and `unstage` would restore bodies this plan never touched.
-        self._swap = None
-        self._mine = None
+        # Kept per plan (`_held`), so an early return below leaves nothing
+        # for `unstage` to restore, and a previous variant's proxies are never
+        # mistaken for this one's.
+        held = self._held(plan)
         idx = stepper.pybullet_index(simulator, objs, spec,
                                      int(actor.segmentation_id))
         if idx is None:
@@ -794,12 +790,12 @@ class Fission(Injector):
             mine.set_scale((k, k, k), pose=((origin + step).tolist(), quat),
                            velocity=((v + push).tolist(), list(ang)),
                            mass=half_mass)
-            self._mine = mine
+            held["mine"] = mine
         else:
             pb.resetBasePositionAndOrientation(
                 idx, (origin + step).tolist(), quat)
             pb.resetBaseVelocity(idx, (v + push).tolist(), list(ang))
-        self._swap = swap
+        held["swap"] = swap
 
         # ...and solid to each other again the moment they have parted. Left
         # suppressed for the whole clip, two halves that come to rest near each
@@ -811,11 +807,11 @@ class Fission(Injector):
         return ()
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        for attr in ("_mine", "_swap"):
-            swap = getattr(self, attr, None)
+        held = self._release(plan)
+        for key in ("mine", "swap"):
+            swap = held.get(key)
             if swap is not None:
                 swap.restore()
-            setattr(self, attr, None)
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """Switch the understudy on. PyBullet moved it; nothing told the render.
@@ -1029,7 +1025,7 @@ class Fusion(Injector):
                 continue
             merges.append({"t": int(frame), "keep": keep, "gone": gone,
                            "swap": swap, "vanish": vanish, "stage": "wait"})
-        self._merges = merges
+        self._held(plan)["merges"] = merges
         if not merges:
             return ()
 
@@ -1087,12 +1083,11 @@ class Fusion(Injector):
     def unstage(self, spec, simulator, objs, plan) -> None:
         import pybullet as pb
 
-        for m in getattr(self, "_merges", ()) or ():
+        for m in reversed(self._release(plan).get("merges", ())):
             m["swap"].restore()
             m["vanish"].show()
             if m["vanish"].ok:
                 pb.setCollisionFilterGroupMask(m["vanish"].idx, -1, 1, 1)
-        self._merges = []
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The render side: the survivor's size, and the absorbed body's
@@ -1296,7 +1291,7 @@ class Dissolve(Injector):
         gone = [g for g in gone if g.ok]
         if not gone:
             return ()
-        self._gone = gone
+        self._held(plan)["gone"] = gone
         # **THE FRAME IT GOES INVISIBLE IS THE FRAME IT STOPS TOUCHING THINGS.**
         # The fade profile in `post_simulate` runs `u = (k + 1) / n`, so opacity
         # reaches exactly zero on the LAST faded frame, `t_event + n - 1` -- and
@@ -1323,9 +1318,8 @@ class Dissolve(Injector):
         return (fade,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        for g in getattr(self, "_gone", ()) or ():
+        for g in reversed(self._release(plan).get("gone", ())):
             g.show()
-        self._gone = []
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The optical half -- opacity and presence, neither of which PyBullet

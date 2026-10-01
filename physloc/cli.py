@@ -693,6 +693,25 @@ def cmd_generate(a) -> int:
     if len(levels) > 1:
         print("-- ladder: " + ", ".join("%s x%d" % lv for lv in levels))
 
+    # NAMED JOBS ONLY. Rerunning a handful of failed jobs while another
+    # `generate` is still finishing in the same outdir: `--resume` alone would
+    # also restart the jobs that run has in flight, since they have no ledger
+    # entry yet. The names are the ledger's and `failures/`'s, so
+    # `ls failures | sed 's/\.log$//'` is a valid list.
+    only = [x.strip() for x in str(getattr(a, "only", "") or "").split(",")
+            if x.strip()]
+    if only:
+        def _job_name(job):
+            seed, scenario, _f, variant, level, _n = job
+            return "%s_%s_%d_v%d" % (level, scenario, seed, variant)
+        unknown = set(only) - {_job_name(j) for j in jobs}
+        if unknown:
+            print("--only names no job of this config: %s"
+                  % ", ".join(sorted(unknown)), file=sys.stderr)
+            return 2
+        jobs = [j for j in jobs if _job_name(j) in set(only)]
+        print("-- only: %d named job(s)" % len(jobs))
+
     # ----------------------------------------------------------------- resume
     # A RUN THAT DIES AT 80% MUST NOT START OVER. A release run is days, and
     # until now `generate` had no memory at all: every invocation rebuilt every
@@ -1380,12 +1399,25 @@ def _threads_for(running: int, cores: int) -> int:
 #: A `None` scenario is the charge for every other scenario at that level.
 # Full release pour jobs exceeded the old 10 GiB cap (kernel MEMCG OOM).
 # Mid-render RSS is not the peak during pass extraction or later variants.
+#
+# The 61-frame v0_release run (2026-09) lost 33 of 260 jobs to MEMCG OOM, each
+# killed just above its charge: `pour` L0-L2 at 20.9 GB, `pour` L3 at 68 GB,
+# every `shadow_track` job at its level default, and a few others at 4.15 GB
+# (L0) and 8 GB (L3). Those are LOWER bounds on the true peak, not the peak.
+#
+# `shadow_track` is structurally heavier than its level: `render_and_save`
+# holds a second full pass stack for the no-caster render, and a third for
+# the key-only render at L2/L3 -- so it is charged per level, not by default.
 JOB_MEMORY_GB = {
     ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
     ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
-    ("pour", "release", "L0"): 20.0, ("pour", "release", "L1"): 20.0,
-    ("pour", "release", "L2"): 20.0, ("pour", "release", "L3"): 65.0,
-    (None, "release", "L2"): 5.0, (None, "release", "L3"): 8.0,
+    ("pour", "release", "L0"): 36.0, ("pour", "release", "L1"): 36.0,
+    ("pour", "release", "L2"): 36.0, ("pour", "release", "L3"): 120.0,
+    ("shadow_track", "release", "L0"): 12.0,
+    ("shadow_track", "release", "L1"): 12.0,
+    ("shadow_track", "release", "L2"): 16.0,
+    ("shadow_track", "release", "L3"): 16.0,
+    (None, "release", "L2"): 6.0, (None, "release", "L3"): 12.0,
 }
 
 #: How long the head of the memory queue may be passed by smaller jobs that fit.
@@ -1395,7 +1427,7 @@ BACKFILL_SECONDS = 1800.0
 #: Hard limits require a safe peak allowance, even when average usage is lower.
 #: The earlier 1 GB release charge admitted too many jobs at once and caused
 #: host OOM kills; a release L0 `drop` alone has been measured at 2.6 GB.
-DEFAULT_JOB_MEMORY_GB = {"debug": 3.0, "release": 4.0}
+DEFAULT_JOB_MEMORY_GB = {"debug": 3.0, "release": 6.0}
 
 #: Left for the host itself -- the annotator, an editor, the docker daemon.
 HOST_RESERVE_GB = 48.0
@@ -2014,6 +2046,9 @@ def _build(suppress: bool = False):
                    help="schema-v4 samples; a relative path is placed "
                         "under out/ (e.g. `r` -> out/r)")
     p.add_argument("--no-overlay", action="store_true")
+    p.add_argument("--only",
+                   help="run only these jobs, a comma list of ledger names "
+                        "like L0_pour_20260832_v8 (the names in failures/)")
     p.add_argument("--resume", action="store_true",
                    help="skip jobs this outdir has already completed. Safe to "
                         "leave on: a job is reused only when the RECORDED "

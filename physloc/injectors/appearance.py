@@ -150,7 +150,6 @@ class _Squash(Injector):
     def stage(self, spec, simulator, objs, plan):
         from ..render import stepper
 
-        self._swaps = []
         bodies = self._target_bodies(spec, plan)
         if not bodies:
             return ()
@@ -158,7 +157,7 @@ class _Squash(Injector):
         swaps = [s for s in swaps if s.ok]
         if not swaps:
             return ()
-        self._swaps = swaps
+        self._held(plan)["swaps"] = swaps
         t0 = plan.t_event
         profile = self._profile(plan, spec.tier.num_frames - t0)
         spf = stepper.substeps_of(simulator)
@@ -181,9 +180,8 @@ class _Squash(Injector):
         return (reshape,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
-        for swap in getattr(self, "_swaps", ()) or ():
+        for swap in reversed(self._release(plan).get("swaps", ())):
             swap.restore()
-        self._swaps = []
 
     def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
         """The visual half: PyBullet carries the shape, Blender has to be told."""

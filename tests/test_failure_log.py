@@ -72,7 +72,7 @@ def test_worker_limit_matches_its_memory_reservation(monkeypatch):
         return 137, {"stderr": "simulated worker failure"}
 
     _generate(monkeypatch, worker, ("--tier", "release"))
-    assert limits == ["4g"]
+    assert limits == ["%dg" % int(cli.DEFAULT_JOB_MEMORY_GB["release"])]
 
 
 def test_successful_resume_clears_the_previous_failure(monkeypatch, tmp_path):

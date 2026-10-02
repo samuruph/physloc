@@ -5,7 +5,8 @@
 
 # ---- 1. edit these -----------------------------------------------------------
 export SBATCH_ACCOUNT="CHANGEME@cpu"      # your hours (`idrproj`); sbatch reads this
-export SALLOC_ACCOUNT="$SBATCH_ACCOUNT"   # ...and srun / salloc read this one
+export SALLOC_ACCOUNT="$SBATCH_ACCOUNT"   # ...salloc reads this one
+export SLURM_ACCOUNT="$SBATCH_ACCOUNT"    # ...and srun this one
 export PHYSLOC_CONFIG="v0_release"        # which config to generate
 export PHYSLOC_RELEASE="physloc_v0"       # its outdir name (configs/<config>.yaml)
 export PHYSLOC_CONDA_MODULE="miniforge"   # `module avail conda` -- only for setup

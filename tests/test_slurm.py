@@ -308,3 +308,10 @@ def test_status_remedies():
     assert st.remedy("out of memory", "4cores") == "--cpus-per-task=8"
     assert st.remedy("out of memory", "pour_L3") == "--cpus-per-task=40"  # one node
     assert st.remedy("failed twice", "4cores") is None          # investigate instead
+
+
+def test_status_writes_compact_array_ranges():
+    spec = _slurm_module("status").array_spec
+    assert spec([0, 1, 2, 5, 7, 8]) == "0-2,5,7-8"
+    assert spec([3]) == "3"
+    assert spec(range(180)) == "0-179"

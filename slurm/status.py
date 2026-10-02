@@ -102,6 +102,20 @@ def remedy(reason, list_name):
     return ""
 
 
+def array_spec(indices):
+    """[0, 1, 2, 5, 7, 8] -> "0-2,5,7-8", the form `sbatch --array` takes."""
+    parts, run = [], []
+    for i in sorted(indices):
+        if run and i != run[-1] + 1:
+            parts.append(run)
+            run = []
+        run.append(i)
+    if run:
+        parts.append(run)
+    return ",".join(str(r[0]) if len(r) == 1 else "%d-%d" % (r[0], r[-1])
+                    for r in parts)
+
+
 def last_error(outdir, job):
     """The most telling line of a failed job's log in failures/, if any."""
     path = os.path.join(outdir, "failures", job + ".log")
@@ -161,7 +175,7 @@ def main():
         print("Re-send (a task that lands in the meantime is skipped in seconds):")
         for (list_name, options), indices in sorted(resend.items()):
             print("  sbatch --array=%s %sslurm/render_%s.slurm" % (
-                ",".join(map(str, indices)), options + " " if options else "",
+                array_spec(indices), options + " " if options else "",
                 list_name))
         print()
     if investigate:

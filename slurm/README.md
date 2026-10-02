@@ -75,10 +75,10 @@ assist@idris.fr.
 srun --qos=qos_cpu-dev --hint=nomultithread --cpus-per-task=4 --time=01:00:00 --pty bash
 module load singularity
 source slurm/env.sh
-export PHYSLOC_THREADS=4 PHYSLOC_SCRATCH=$JOBSCRATCH
+export PHYSLOC_THREADS=4 PHYSLOC_SCRATCH=${JOBSCRATCH:-$SCRATCH/smoke_tmp}
 bash slurm/kubric_singularity.sh scripts/probes/worker_smoke.py --frames 4      # renders?
 python -m physloc.cli generate --config review --scenario drop --family solidity \
-    --workers 1 --outdir $PHYSLOC_DATA/smoke --workdir $JOBSCRATCH/w            # render + annotate
+    --workers 1 --outdir $PHYSLOC_DATA/smoke --workdir $PHYSLOC_SCRATCH/w      # render + annotate
 python -m physloc.cli validate $PHYSLOC_DATA/smoke                              # must end "ok": true
 exit
 ```

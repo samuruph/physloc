@@ -302,6 +302,8 @@ are kept either way, and running the same command again resumes.
   To start over, delete `out/physloc_v0` and `out/work_v0`.
 - **Across machines.** Run one level per machine — `bash scripts/run.sh v0_L0` on one,
   `v0_L1` on the next, and so on; see [Generating one level at a time](#generating-one-level-at-a-time).
+- **On a SLURM cluster.** Each job becomes one array task (`generate --only <name>`), run under
+  Singularity with a local asset mirror; [slurm/README.md](../slurm/README.md) is the runbook.
 - **Memory.** A job starts only when its memory fits in host RAM, and every container is capped,
   so a crowded machine cannot OOM-kill its own jobs; smaller jobs may start ahead of a big one
   that does not fit yet. One job type is heavy: release-size L3 `pour`, which measured 39–47 GB

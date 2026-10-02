@@ -664,9 +664,14 @@ def cmd_generate(a) -> int:
     from . import params as _params
 
     tunables = _cfg.load_params(getattr(a, "config", None))
-    params_path = _params.write(tunables, work)
+    # Applied even when only LISTING jobs: a config's `ladder` override decides
+    # how many variants each level gets, and so which jobs exist. Written only
+    # when something will run -- a listing touches no workdir.
     _params.apply(tunables)
-    print("-- params: %s" % params_path)
+    params_path = None
+    if not getattr(a, "list_jobs", None):
+        params_path = _params.write(tunables, work)
+        print("-- params: %s" % params_path)
     rel = _under_out(a.outdir) or os.path.join(OUTPUT_ROOT, "release")
     for flag, given, used in (("--workdir", a.workdir, work),
                               ("--outdir", a.outdir, rel)):
@@ -717,15 +722,12 @@ def cmd_generate(a) -> int:
     only = [x.strip() for x in str(getattr(a, "only", "") or "").split(",")
             if x.strip()]
     if only:
-        def _job_name(job):
-            seed, scenario, _f, variant, level, _n = job
-            return "%s_%s_%d_v%d" % (level, scenario, seed, variant)
-        unknown = set(only) - {_job_name(j) for j in jobs}
+        unknown = set(only) - {job_name(j) for j in jobs}
         if unknown:
             print("--only names no job of this config: %s"
                   % ", ".join(sorted(unknown)), file=sys.stderr)
             return 2
-        jobs = [j for j in jobs if _job_name(j) in set(only)]
+        jobs = [j for j in jobs if job_name(j) in set(only)]
         print("-- only: %d named job(s)" % len(jobs))
 
     # ----------------------------------------------------------------- resume
@@ -771,10 +773,7 @@ def cmd_generate(a) -> int:
                              "PHYSLOC_GPU", "PHYSLOC_IMAGE")}}
 
     def _ledger_path(job):
-        seed, scenario, _f, variant, level, _n = job
-        return os.path.join(ledger_dir,
-                            "%s_%s_%d_v%d.json" % (level, scenario, seed,
-                                                   variant))
+        return os.path.join(ledger_dir, job_name(job) + ".json")
 
     def _ledger_load(job):
         """The recorded outcome, or None if absent, stale or unreadable."""
@@ -830,6 +829,8 @@ def cmd_generate(a) -> int:
     # Output is unchanged: a job's seed, variant and directory never depend on
     # its position.
     jobs = _longest_first(jobs, tier, n_bins)
+    if getattr(a, "list_jobs", None):
+        return _write_job_list(a.list_jobs, jobs, tier, a.severity)
     weights = [job_weight(level, tier, SECONDS_PER_CLIP, COMPLEXITY,
                           n_families=len(families), n_bins=n_bins)
                for _seed, _scen, families, _v, level, _n in jobs]
@@ -1034,9 +1035,7 @@ def cmd_generate(a) -> int:
     failure_dir = os.path.join(rel, "failures")
 
     def _failure_path(job):
-        seed, scenario, _families, variant, level, _n = job
-        return os.path.join(failure_dir, "%s_%s_%d_v%d.log"
-                            % (level, scenario, seed, variant))
+        return os.path.join(failure_dir, job_name(job) + ".log")
 
     def _failure_clear(job):
         try:
@@ -1253,16 +1252,65 @@ def cmd_generate(a) -> int:
         print("%d cell(s) produced nothing:" % len(failed), file=sys.stderr)
         for row in failed:
             print("   %s" % (row,), file=sys.stderr)
-    # STATS ON EVERY RUN. `physloc stats` had to be remembered, and no script
-    # remembered it, so a run's distributions were only ever looked at when
-    # someone thought to ask. It reads sample.json only -- seconds, even over
-    # a release -- and a failure to plot is reported, never a failed run.
+    # NOT WHEN THE RUN IS ONE OF MANY. Finishing rewrites every sample.json in
+    # the release, so a SLURM array -- hundreds of `generate --only` tasks on
+    # one outdir -- passes `--no-finalize` and runs `physloc finalize` once at
+    # the end (slurm/finalize.sbatch).
+    if not getattr(a, "no_finalize", False):
+        _finish_release(rel)
+    return 0
+
+
+def job_name(job) -> str:
+    """A job's name: its ledger file, its `failures/` log, and what `--only`
+    accepts. Keyed by identity BEFORE it runs -- level, scenario, seed, variant
+    -- because the clip directory is named for a condition sampled later."""
+    seed, scenario, _families, variant, level, _n = job
+    return "%s_%s_%d_v%d" % (level, scenario, seed, variant)
+
+
+#: `generate --list-jobs` columns, in order. A scheduler that runs one job per
+#: task (slurm/submit.sh) reads these to size each task: `memory_gb` is the
+#: same charge `MemoryBudget` admits a job by.
+JOB_LIST_COLUMNS = ("name", "level", "scenario", "seed", "variant",
+                    "families", "renders", "memory_gb")
+
+
+def _write_job_list(path, jobs, tier, severity) -> int:
+    """Write the jobs `generate` would run, one per line, longest first."""
+    rows = ["\t".join(JOB_LIST_COLUMNS)]
+    for job in jobs:
+        seed, scenario, families, variant, level, _n = job
+        rows.append("\t".join(str(x) for x in (
+            job_name(job), level, scenario, seed, variant, len(families),
+            _renders_for(families, severity),
+            job_memory_gb(scenario, tier, level))))
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write("\n".join(rows) + "\n")
+    os.replace(tmp, path)
+    print("-- %d job(s) listed -> %s" % (len(jobs), path))
+    return 0
+
+
+def _finish_release(rel) -> bool:
+    """Stats and the dataset manifest for a release root. True if both landed.
+
+    STATS ON EVERY RUN. `physloc stats` had to be remembered, and no script
+    remembered it, so a run's distributions were only ever looked at when
+    someone thought to ask. It reads sample.json only -- seconds, even over a
+    release -- and a failure to plot is reported, never a failed run.
+    """
+    ok = True
     try:
         from .release.stats import report
         got = report(rel)
         print("stats: %d samples -> %s" % (got["samples"], got["outdir"]))
     except (Exception, SystemExit) as exc:                 # noqa: BLE001
         print("!! stats not written for %s: %r" % (rel, exc), file=sys.stderr)
+        ok = False
     # A generated run is already the canonical dataset representation. Finish
     # its global manifest and index in place; `export` only copies this same
     # sample tree to a publication directory.
@@ -1274,7 +1322,16 @@ def cmd_generate(a) -> int:
     except (Exception, SystemExit) as exc:                 # noqa: BLE001
         print("!! dataset manifest not written for %s: %r" % (rel, exc),
               file=sys.stderr)
-    return 0
+        ok = False
+    return ok
+
+
+def cmd_finalize(a) -> int:
+    """What `generate` does as its last act, for a release built by many runs."""
+    if not os.path.isdir(os.path.join(a.root, "samples")):
+        print("no samples/ under %s" % a.root, file=sys.stderr)
+        return 2
+    return 0 if _finish_release(a.root) else 1
 
 
 def _levels_for(spec: str, variants: int):
@@ -1519,7 +1576,12 @@ class MemoryBudget:
 def _run_worker(scenario, seed, tier, family, severity, workdir,
                 complexity="L0", window=None, dials=None, variant=0,
                 n_variants=None, params_path=None, env=None, on_line=None):
-    cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
+    # The script that runs the worker inside the pinned image: docker by
+    # default, `slurm/kubric_singularity.sh` on a cluster (set in slurm/env.sh).
+    # A relative path is relative to the repository.
+    launcher = os.path.join(REPO, os.environ.get("PHYSLOC_LAUNCHER")
+                            or os.path.join("docker", "kubric.sh"))
+    cmd = ["bash", launcher,
            "physloc/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
            "--severity", severity, "--complexity", complexity,
@@ -2073,7 +2135,21 @@ def _build(suppress: bool = False):
                         "and every sample it claims still has a sample.json. "
                         "Change any of those and the job is rebuilt. Nothing "
                         "is ever deleted; a resume only declines to redo work.")
+    p.add_argument("--list-jobs", metavar="FILE",
+                   help="write the jobs this run would execute to FILE (tab-"
+                        "separated: %s), longest first, and exit without "
+                        "running anything" % ", ".join(JOB_LIST_COLUMNS))
+    p.add_argument("--no-finalize", action="store_true",
+                   help="skip the end-of-run stats and dataset manifest. For "
+                        "one task of many writing the same outdir; run "
+                        "`finalize` once when they are all done")
     p.set_defaults(fn=cmd_generate)
+
+    p = add_parser("finalize",
+                   help="stats + dataset manifest for a release root (what "
+                        "generate does at the end; for runs split into tasks)")
+    p.add_argument("root", help="a release root, e.g. out/physloc_v0")
+    p.set_defaults(fn=cmd_finalize)
 
     p = add_parser("annotate", help="host-side annotation of a worker dir")
     p.add_argument("workdir")

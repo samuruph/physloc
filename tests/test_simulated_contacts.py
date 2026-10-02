@@ -98,6 +98,25 @@ def _obstacle_pairs(traj, t_event):
     return out
 
 
+def _resting_pairs(traj, t_event):
+    """Post-event pairs with a supporting contact: one body rests on the other.
+    A surface the moved body RESTS ON in the invalid clip is its support there,
+    not an obstacle it was moved past -- a scan teleported sideways along
+    `rolling_ramp` lands on the ramp and keeps rolling down it."""
+    import numpy as np
+
+    c = traj.contacts
+    out = set()
+    for k in range(len(c)):
+        if int(c.frame[k]) < t_event:
+            continue
+        n = np.asarray(c.normal[k], float)
+        mag = float(np.linalg.norm(n))
+        if mag > 1e-9 and abs(float(n[2]) / mag) > SUPPORT_COS:
+            out.add((int(c.body_a[k]), int(c.body_b[k])))
+    return out
+
+
 def _jumped_past(traj, t_event, pair, violators, delta):
     """Did a jump of `delta` carry the violator beyond where it lawfully
     touched the other body of `pair` -- past the obstacle, not away from it?"""
@@ -225,6 +244,33 @@ def test_a_prevented_collision_leaves_no_contact(work):
                     % (family, sorted(want)))
                 checked += 1
                 continue
+
+        # A MULTI CLIP JUDGES EACH VIOLATOR ON ITS OWN JUMP AND MOMENT. The
+        # merged plan's top-level delta and t_event are the first member's;
+        # applied to every violator they asked a body to have jumped past an
+        # obstacle with someone else's jump. A contact between two violators
+        # that both moved is not an obstacle either of them was moved past.
+        members = blob.get("violators") or []
+        per = (blob.get("intervention") or {}).get("params", {}).get(
+            "per_violator") or []
+        if family == "continuity" and members and len(per) >= len(members):
+            moved = {int(m["body_id"]) for m in members}
+            for m, params in zip(members, per):
+                bid, tm = int(m["body_id"]), int(m["t_event_frame"])
+                lost_m = _pairs_after(a, tm) - _pairs_after(b, tm)
+                resting = _resting_pairs(b, tm)
+                obstacle = {q for q in _obstacle_pairs(a, tm)
+                            if bid in q and not set(q) <= moved
+                            and q not in resting and q[::-1] not in resting}
+                obstacle = {q for q in obstacle
+                            if _jumped_past(a, tm, q, {bid},
+                                            params.get("delta_m"))}
+                if obstacle:
+                    assert lost_m & obstacle, (
+                        "%s: violator %d kept every obstacle contact it had "
+                        "lawfully (%s)" % (family, bid, sorted(obstacle)))
+                    checked += 1
+            continue
 
         # Otherwise -- `continuity`, which moves a body rather than naming a
         # pair -- fall back to the obstacle heuristic. A body teleported across

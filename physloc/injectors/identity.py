@@ -260,7 +260,9 @@ class Immutability(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "scale_factor": k, "ramp_frames": int(ramp),
                    "r_strong": abs(self._factor("strong", grow) ** 3 - 1.0),
-                   "constrained": bool(spec.notes.get("constraint")),
+                   # THIS body on the pivot, not the scene having one: a
+                   # `multi` pendulum's peers lie on the floor.
+                   "constrained": _geom.on_pivot(spec, actor),
                    "occluded_at_event": bool(t0 in occ)})
 
     #: STAGED, through `stepper.ShapeSwap`. PyBullet cannot rescale a collision
@@ -374,10 +376,13 @@ class Immutability(Injector):
             out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
             if plan.notes.get("constrained"):
                 continue
-            # A SCRIPTED body is held on a constraint, not on a surface -- a
+            # A body ON A PIVOT is held by its rod, not a surface -- a
             # pendulum bob has nothing under it -- so seating it against the
-            # ground would drag the whole assembly down to the floor.
-            if actor.scripted:
+            # ground would drag the whole assembly down to the floor. Every
+            # other body is seated, scripted or not: `shadow_track`'s actor is
+            # scripted and rests on the floor, and a grown actor sank into it.
+            if (_geom.on_pivot(spec, actor)
+                    or actor.role in ("shadow", "shadow_caster")):
                 continue
             r0 = float(traj.radius[bi])
             _geom.reseat(spec, traj, out, actor, bi, t0, r0 * factor)

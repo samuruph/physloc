@@ -40,6 +40,21 @@ def scene_actors(spec) -> List:
             and not (not peers and str(b.name).startswith("peer_"))]
 
 
+def on_pivot(spec, body) -> bool:
+    """Is `body` the one hanging from the scene's pivot?
+
+    "The scene has a pivot" is not the question: a `multi` pendulum scene has
+    peers lying on the floor, and treating them as swinging gave
+    `angular_momentum` a spin about a pivot they are not attached to (zero
+    severity on every peer) and `phantom_impulse` a kick along a swing they
+    are not on. Only the scenario's own actor hangs from the pivot.
+    """
+    if body is None or spec.notes.get("constraint") != "pivot":
+        return False
+    return int(body.segmentation_id) in {
+        int(b.segmentation_id) for b in scene_actors(spec)}
+
+
 def actor(spec):
     a = actors(spec)
     return a[0] if a else None

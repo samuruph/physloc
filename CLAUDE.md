@@ -107,7 +107,7 @@ publication. Nothing has been published yet.
   not 299. `taxonomy.COMPATIBILITY` selects the 166 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
-  liquid does not fit the pose-based seam. `pour` (96 grains at the debug tier, 212 above)
+  liquid does not fit the pose-based seam. `pour` (96 grains, at every tier)
   is the v0
   stand-in and is labelled `physics_medium: "granular"` — never call it fluid. True fluid and
   cloth are Phase 3.

@@ -167,6 +167,16 @@ class PendulumSwing(Scenario):
             rod = stepper.pybullet_index(simulator, objs, spec, self.SEG_ROD)
             pos, quat = pb.getBasePositionAndOrientation(idx)
             vel, spin = pb.getBaseVelocity(idx)
+            # A HINGE, NOT A BALL JOINT. The rod hangs from a horizontal axle,
+            # so the bob can only swing in the plane at the pivot's y. Holding
+            # the distance alone let `continuity` throw the bob 2.3 m sideways
+            # and leave it circling the pivot in 3D, the rod drawn in its old
+            # plane and visibly detached. Plane first, then length.
+            if abs(float(pos[1]) - float(pivot[1])) > 1e-9 or abs(float(vel[1])) > 1e-9:
+                pos = (float(pos[0]), float(pivot[1]), float(pos[2]))
+                vel = (float(vel[0]), 0.0, float(vel[2]))
+                pb.resetBasePositionAndOrientation(idx, pos, quat)
+                pb.resetBaseVelocity(idx, list(vel), list(spin))
             arm_vec = _np.asarray(pos, _np.float64) - pivot
             dist = float(_np.linalg.norm(arm_vec))
             if dist < 1e-9:
@@ -308,12 +318,24 @@ class PendulumSwing(Scenario):
         import numpy as _np
 
         centre = pivot + direction * (arm / 2.0)
-        # Local +Z onto the arm direction, about +Y: the plane the swing is in.
-        theta = float(_np.arctan2(direction[0], -direction[2]))
-        phi = _np.pi - theta
-        pb.resetBasePositionAndOrientation(
-            rod, centre.tolist(),
-            [0.0, float(_np.sin(phi / 2.0)), 0.0, float(_np.cos(phi / 2.0))])
+        # Local +Z onto the arm direction, whatever it is. The hinge keeps it
+        # in the swing plane, but the rod is drawn along the real direction
+        # rather than assuming that plane: a rod rotated only about +Y while
+        # its centre followed a bob out of plane is the detached rod you saw.
+        d = _np.asarray(direction, _np.float64)
+        d = d / max(float(_np.linalg.norm(d)), 1e-12)
+        z = _np.array([0.0, 0.0, 1.0])
+        axis = _np.cross(z, d)
+        s = float(_np.linalg.norm(axis))
+        c = float(z @ d)
+        if s < 1e-9:
+            quat = [0.0, 0.0, 0.0, 1.0] if c > 0 else [1.0, 0.0, 0.0, 0.0]
+        else:
+            half = 0.5 * float(_np.arctan2(s, c))
+            axis = axis / s * float(_np.sin(half))
+            quat = [float(axis[0]), float(axis[1]), float(axis[2]),
+                    float(_np.cos(half))]
+        pb.resetBasePositionAndOrientation(rod, centre.tolist(), quat)
         pb.resetBaseVelocity(rod, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
 
 

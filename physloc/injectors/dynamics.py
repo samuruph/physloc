@@ -153,7 +153,7 @@ class PhantomImpulse(Injector):
         # expressed relative to the rate there is -- at the top of an arc there
         # is none, so the same kick is both unrepresentable and invisible. The
         # bottom of the swing is where a shove reads most clearly anyway.
-        if spec.notes.get("constraint") == "pivot":
+        if _geom.on_pivot(spec, actor):
             t0 = self._fastest_frame(traj, actor, t0, T)
 
         # Direction is a property of the SCENE, not of the bin. Drawn from
@@ -183,7 +183,7 @@ class PhantomImpulse(Injector):
         top = _geom.surface_top(spec, actor)
         airborne = bool(traj.pos[t0, bi, 2] - float(traj.radius[bi])
                         > top + 0.05)
-        if spec.notes.get("constraint") == "pivot":
+        if _geom.on_pivot(spec, actor):
             # ALONG THE SWING. A constraint eats the radial component of any
             # impulse the instant it is applied -- the rod simply does not let
             # the bob move that way -- so a shove aimed anywhere else arrives
@@ -375,7 +375,8 @@ class AngularMomentum(Injector):
 
     # ------------------------------------------------------------------ #
     def _pivot(self, spec) -> bool:
-        return spec.notes.get("constraint") == "pivot"
+        """Does THIS plan's body hang from the pivot? See `_geom.on_pivot`."""
+        return _geom.on_pivot(spec, self._primary(spec))
 
     #: Shapes whose rotation the camera CANNOT see, and so the ones this family
     #: declines. With untextured primitives a spinning ball is pixel-identical

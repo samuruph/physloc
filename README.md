@@ -470,7 +470,7 @@ Five levels: **medium → domain → family → scenario → instance.**
 | `drop` | rigid | 14 | sphere or cube falls to a floor and bounces |
 | `occluder_pass` | rigid | 12 | body travels behind a screen and re-emerges |
 | `pendulum_swing` | rigid | 8 | bob on a rigid rod, swung from a pivot (scripted, not solved) |
-| `pour` | granular | 17 | a loose column of grains falls into an open box (96 at the debug tier, 212 above) |
+| `pour` | granular | 17 | a loose column of 96 grains falls into an open box |
 | `pyramid_impact` | rigid | 13 | cube dropped onto a sphere pyramid |
 | `ramp_slide` | rigid | 11 | block slides down an incline |
 | `resting_table` | rigid | 11 | several bodies at rest on a surface |

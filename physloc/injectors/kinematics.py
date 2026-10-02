@@ -542,6 +542,20 @@ class Continuity(Injector):
         heading += self.RETRY_HEADING_TURNS[
             _geom.event_attempt() % len(self.RETRY_HEADING_TURNS)]
         direction = np.array([np.cos(heading), np.sin(heading), 0.0])
+        # A BODY ON A PIVOT JUMPS ALONG ITS SWING. Its hinge only lets it move
+        # in the swing plane at arm's length, so a horizontal heading was
+        # mostly undone the instant it landed -- on `pendulum_swing` a 2.3 m
+        # sideways jump left the bob circling the pivot out of plane, the rod
+        # detached. Along the arc's tangent the jump lands on the arc, further
+        # along or back; the heading still picks which way.
+        if _geom.on_pivot(spec, actor):
+            pivot = np.asarray(spec.notes["pivot"], np.float64)
+            arm_vec = (np.asarray(traj.pos[t0, traj.index_of(
+                int(actor.segmentation_id))], np.float64) - pivot)
+            arm_vec[1] = 0.0
+            n_arm = arm_vec / max(float(np.linalg.norm(arm_vec)), 1e-9)
+            tangent = np.array([-n_arm[2], 0.0, n_arm[0]])
+            direction = tangent * (1.0 if np.cos(heading) >= 0.0 else -1.0)
         # PAST WHAT THE MOTION EXPLAINS. A teleport is a step no plausible speed
         # covers, and `position_continuity` scores exactly that: the step less
         # `step_tolerance` x the speed on either side, in radii. A jump of 1.5
@@ -719,7 +733,9 @@ class Continuity(Injector):
         d = np.asarray(delta, np.float64)
         side = np.array([-d[1], d[0], 0.0])
         sideways = []
-        for k in self.LANDING_TRIES:
+        # Not for a body on a pivot: turned a quarter, its jump would leave
+        # the swing plane its hinge holds it in.
+        for k in (() if _geom.on_pivot(spec, actor) else self.LANDING_TRIES):
             if k <= 0.0:
                 continue
             for turn in (side, -side):

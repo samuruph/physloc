@@ -558,11 +558,27 @@ def _decline_only(info) -> bool:
     The renderer uses exit code 3 when every requested injector declines its
     sampled scene. That is scheduling information, not a renderer failure: the
     generator must expose the variant records to its fresh-seed retry loop.
+
+    ANY stated reason counts, not only "no plan": a cell declined because its
+    violator leaves the frame, or because a `multi` clip found one body to act
+    on, is an outcome the worker reached and reported -- the check run of the
+    v0 feedback logged such retries in `failures/` beside real crashes. A
+    failure is a worker that produced no report at all (a crash, an OOM kill),
+    or one whose report is an ERROR rather than a decision -- an exception
+    while planning, a broken prefix, an annotation that crashed
+    (`BUG_REASONS`).
     """
     variants = info.get("variants") if isinstance(info, dict) else None
     failed = [item for item in (variants or [])
               if not item.get("ok") and not item.get("skipped")]
-    return bool(failed) and all(item.get("error") == NO_PLAN for item in failed)
+    return bool(failed) and all(
+        bool(item.get("error"))
+        and not str(item["error"]).startswith(BUG_REASONS)
+        for item in failed)
+
+
+#: Worker variant errors that are BUGS, not decisions: they stay failures.
+BUG_REASONS = ("plan raised", "trajectory prefix differs", "annotate failed")
 
 #: How many fresh seeds a declined cell is offered before it counts as dead.
 #: A cell that cannot be built on any of them is a genuine matrix error -- the
@@ -1385,7 +1401,9 @@ def _threads_for(running: int, cores: int) -> int:
 #:      drop, release:  L0 2.6
 #:
 #: The release-tier L2 and L3 `pour` values are ESTIMATES, deliberately high:
-#: the measured debug value scaled by the grain count (212 against 96). A job
+#: the measured debug value scaled by the grain count (212 against 96). The
+#: release pour has since come down to 96 grains (`scenarios.pour.GRAINS`), so
+#: they are now generous rather than tight. A job
 #: that overruns its estimate is still capped per container (`PHYSLOC_MEMORY`),
 #: so a low guess fails that job without exhausting the host.
 #:

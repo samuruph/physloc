@@ -23,6 +23,13 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 SEG_GRAIN_BASE = 16
 
+#: Grains per pour, by BASE tier. The release tier used 212 in the same box at
+#: the same grain size -- a pile about twice as deep as the 96 the scene and its
+#: residual ladders were built and checked at -- and every cost scales with the
+#: count: contacts in the solver, meshes in Blender, a residual and a mask per
+#: body in the annotation. See `Pour._sample`.
+GRAINS = {"debug": 96, "release": 96}
+
 
 class Pour(Scenario):
     name = "pour"
@@ -78,7 +85,7 @@ class Pour(Scenario):
         # looks.
         # Keyed on the BASE tier: a dial override renames the tier (`debug+f49`)
         # and must not quietly swap the debug medium for the release one.
-        n_grains = 96 if tier.name.split("+")[0] == "debug" else 212
+        n_grains = int(GRAINS.get(tier.name.split("+")[0], GRAINS["release"]))
         r = float(rng.uniform(0.058, 0.068))
         hue = float(rng.uniform(0, 1))
 

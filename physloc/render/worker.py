@@ -46,6 +46,10 @@ PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
 #: free at this scale, so a retry costs a rollout and nothing else.
 EVENT_ATTEMPTS = 6
 
+#: Fallback multipliers on a family's frame fit, tried in order when a bin is
+#: lost at every event moment -- see the moment choice in `main`.
+FIT_CAPS = (1.0, 0.7, 0.5, 0.35)
+
 #: Families whose violation is the violator going OUT OF SIGHT: it vanishes
 #: (`permanence`), fades (`dissolve`), sinks into the floor or through a wall
 #: (`solidity`), or is absorbed into another body (`fusion`). Their violator
@@ -1498,7 +1502,8 @@ def main() -> int:
         cache = {}
 
         def attempt_at(sev, k, family=family, inj=inj):
-            if (sev, k) not in cache:
+            key = (float(inj.fit_cap), sev, k)
+            if key not in cache:
                 tag = "%s/%s" % (family, sev)
                 # The rng is seeded per (family, severity), not per run, so
                 # adding a family to the list cannot change the clips the
@@ -1514,21 +1519,50 @@ def main() -> int:
                             % (2 ** 31 - 1))
                 inj.event_attempt = int(k)
                 try:
-                    cache[(sev, k)] = _invalid_variant(
+                    cache[key] = _invalid_variant(
                         spec, scenario, inj, sev, rng_seed, traj_valid,
                         simulator, scene, objs, scen_hooks)
                 finally:
                     inj.event_attempt = 0
-            return cache[(sev, k)]
+            return cache[key]
 
-        shared = None
-        if order and inj.available_at(spec):
+        def choose_moment():
+            """(shared attempt or None, how many bins are visible at it)."""
             shared = next((k for k in range(EVENT_ATTEMPTS)
                            if attempt_at(order[0], k).get("visible")), None)
             if shared is not None and not all(
                     attempt_at(s, shared).get("visible") for s in order[1:]):
                 shared = next((k for k in range(EVENT_ATTEMPTS) if all(
                     attempt_at(s, k).get("visible") for s in order)), shared)
+            if shared is None:
+                return None, 0
+            return shared, sum(bool(attempt_at(s, shared).get("visible"))
+                               for s in order)
+
+        def frame_fitted():
+            """Did this family fit its strong bin to the frame at all?"""
+            made = attempt_at(order[0], 0)
+            plan = made.get("plan")
+            return plan is not None and "frame_fit_scale" in (plan.params or {})
+
+        shared = None
+        if order and inj.available_at(spec):
+            # A SMALLER INTERVENTION BEFORE A LOST BIN. The frame fit judges a
+            # host-side preview; the real rollout can still throw the strong
+            # bin out of shot at every moment -- `phantom_impulse` on
+            # `resting_table` kept only `weak` that way. Every bin is shrunk
+            # by the same factor (`Injector.fit_cap`), so their order holds,
+            # and the cap that shows the most bins wins.
+            best = (None, -1, 1.0)
+            for cap in FIT_CAPS:
+                inj.fit_cap = cap
+                got, n_seen = choose_moment()
+                if n_seen > best[1]:
+                    best = (got, n_seen, cap)
+                if n_seen == len(order) or not frame_fitted():
+                    break
+            shared, _n, cap = best
+            inj.fit_cap = cap
         attempt_used = shared
         for sev in order:
             tag = "%s/%s" % (family, sev)
@@ -1590,6 +1624,8 @@ def main() -> int:
                              "t_event": plan.t_event, "windows": plan.windows,
                              "magnitude": plan.magnitude,
                              "magnitude_unit": plan.magnitude_unit})
+
+        inj.fit_cap = 1.0
 
     print("PHASE0 " + json.dumps({
         "ok": any(v.get("ok") for v in variants),

@@ -72,6 +72,10 @@ if [ -n "${PHYSLOC_RUN_ID:-}" ]; then
   CPU_ARGS+=(--label "physloc.run=$PHYSLOC_RUN_ID")
 fi
 
+# Two mounts: the code at /kubric, and ONE data folder at its own path, so a
+# job's `--workdir` means the same file inside the container as outside it.
+# PHYSLOC_DATA picks the folder (default /mnt/physloc, the data disk).
+DATA_ROOT="${PHYSLOC_DATA:-/mnt/physloc}"
 exec docker run --rm --interactive \
   "${GPU_ARGS[@]}" \
   "${CPU_ARGS[@]}" \
@@ -85,7 +89,7 @@ exec docker run --rm --interactive \
   --env PHYSLOC_SKIP_RENDER \
   --env PHYSLOC_DEBUG \
   --volume "$REPO_ROOT:/kubric" \
-  --volume "/mnt/physloc:/mnt/physloc" \
+  --volume "$DATA_ROOT:$DATA_ROOT" \
   --workdir /kubric \
   "$IMAGE" \
   python3 "$@"

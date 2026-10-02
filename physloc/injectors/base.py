@@ -985,6 +985,15 @@ class Injector:
     #: strongest bin, which is what that looks like from the outside.
     FIT_LADDER = (1.0, 0.90, 0.80, 0.71, 0.63, 0.55, 0.48, 0.41, 0.34, 0.28)
 
+    #: A further multiplier on whatever `_fit_to_frame` settles on, set by the
+    #: WORKER, never by a family. The fit judges a host-side preview; when the
+    #: real simulation still throws the strong bin out of shot at every moment
+    #: -- a kicked body bouncing off a table edge, a peer knocked along -- the
+    #: worker lowers this for all three bins together and asks again. One
+    #: factor for every bin, so they keep their order and spacing, and the
+    #: magnitude each plan records is the one it applied.
+    fit_cap = 1.0
+
     #: Fits already made on this worker's scenes: {key: (result, spec, traj)}.
     #: Class-level so every injector instance starts with its own on first
     #: write -- see `_remember_fit`.
@@ -1085,7 +1094,8 @@ class Injector:
         key = self._fit_key("scale", spec, traj, bodies, t0, tolerance,
                             ladder, memo)
         if key is not None and key in self._fit_memo:
-            return self._fit_memo[key][0]
+            got = self._fit_memo[key][0]
+            return (got[0] * float(self.fit_cap), got[1])
         if _geom.event_attempt() > 0:
             tolerance = 0
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
@@ -1131,7 +1141,7 @@ class Injector:
             got = (ladder[i], built[i])
         if key is not None:
             self._remember_fit(key, got, spec, traj)
-        return got
+        return (got[0] * float(self.fit_cap), got[1])
 
     def _fit_window_to_frame(self, spec, traj: Trajectory, bodies, t0: int,
                              n_win: int, build, tolerance: int = 1,

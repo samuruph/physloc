@@ -7,7 +7,7 @@ set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=$1; shift
 LEDGER=/mnt/physloc/physloc_v0/.jobs
-PARAMS=/mnt/physloc/work_v0/params.json
+PARAMS=${PHYSLOC_PARAMS:-/mnt/physloc/work_v0/params.json}
 declare -A NV=([L0]=10 [L1]=5 [L2]=3 [L3]=2)
 for job in "$@"; do
   level=${job%%_*}; rest=${job#*_}; v=${rest##*_v}; rest=${rest%_v*}

@@ -217,7 +217,13 @@ class _Squash(Injector):
             # target is a flattened disc lying on the floor whose declared
             # radius has nothing to do with how tall it is drawn -- so seating
             # it against a surface would lift it off the ground it *is*.
-            if body is None or body.scripted or body.role == "shadow_caster":
+            #
+            # NOT EVERY scripted body, though: `shadow_track`'s actor is
+            # scripted along its path AND rests on the floor, and skipping it
+            # let a squashed actor sink into the ground. What must not be
+            # seated is a shadow or its caster, and a body on a pivot.
+            if (body is None or body.role in ("shadow", "shadow_caster")
+                    or _geom.on_pivot(spec, body)):
                 continue
             # The body's FOOTPRINT moved, so its pose has to move with it. A
             # volume-preserving stretch shortens two axes, and the vertical one

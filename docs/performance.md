@@ -146,7 +146,8 @@ and was killed by the host OOM killer. The 20 GiB pour allowance is conservative
 a complete multi-family render still needs peak-memory measurement.
 
 **The release L3 `pour` figure is an estimate** — the debug value scaled by grain count (212
-against 96), set high on purpose. It drives most of the remaining queueing, so measure it once on
+against 96), set high on purpose. The release pour now uses 96 grains like the debug tier
+(`scenarios.pour.GRAINS`; one job's physics went from 1,784 s to 600 s), so the figure is generous. It drives most of the remaining queueing, so measure it once on
 a new machine (the command is in the README, *Running the full release*) and update
 `JOB_MEMORY_GB`.
 

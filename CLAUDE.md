@@ -281,6 +281,12 @@ publication. Nothing has been published yet.
 
 Never install Kubric, Blender or PyBullet on the host. The trajectory seam is the boundary.
 
+On a SLURM cluster the container is the same pinned image as a Singularity `.sif`:
+`PHYSLOC_LAUNCHER=slurm/kubric_singularity.sh` replaces `docker/kubric.sh`, `PHYSLOC_ASSETS` points
+the worker at a local asset mirror, and one array task runs one `generate --only <job>
+--no-finalize`. All of it is opt-in and lives in `slurm/` ([slurm/README.md](slurm/README.md));
+`docker/kubric.sh` knows nothing about it.
+
 ## Two traps that fail silently
 
 1. **Always run `kb.adjust_segmentation_idxs()` after `renderer.render()`.** Kubric numbers

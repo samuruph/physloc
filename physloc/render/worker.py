@@ -61,7 +61,14 @@ ABSENCE_FAMILIES = frozenset({"permanence", "dissolve", "solidity", "fusion"})
 
 
 # --------------------------------------------------------------------------
-KUBASIC = "gs://kubric-public/assets/KuBasic/KuBasic.json"
+#: Where the three asset manifests live: Kubric's public bucket by default.
+#: `PHYSLOC_ASSETS` points it at a local mirror instead, for hosts with no
+#: internet -- a cluster's compute nodes (`slurm/setup/mirror_assets.py` builds
+#: one). A mirror's manifests carry a rewritten `data_dir`, and
+#: `AssetSource.from_manifest` reads a local path as readily as a gs:// one.
+ASSETS = (os.environ.get("PHYSLOC_ASSETS", "").strip().rstrip("/")
+          or "gs://kubric-public/assets")
+KUBASIC = ASSETS + "/KuBasic/KuBasic.json"
 
 #: KuBasic primitives usable as actors, beyond the two Kubric builds natively.
 #: The full set also has `gear`, `torus_knot`, `sponge`, `spot`, `teapot` and
@@ -75,8 +82,8 @@ KUBASIC_SHAPES = ("cylinder", "cone", "torus")
 #: content. The id list and every asset's bounds are baked into
 #: `physloc/scenarios/_gso.py` -- see there for why the host needs the geometry
 #: and the HDRI list gets away with ids alone.
-GSO = "gs://kubric-public/assets/GSO/GSO.json"
-HDRI = "gs://kubric-public/assets/HDRI_haven/HDRI_haven.json"
+GSO = ASSETS + "/GSO/GSO.json"
+HDRI = ASSETS + "/HDRI_haven/HDRI_haven.json"
 
 
 

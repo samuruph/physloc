@@ -1,0 +1,5 @@
+# Job lists written by make_job_lists.py (regenerated per config).
+jobs/
+# Logs of every SLURM job; the folder itself is kept so sbatch can write into it.
+logs/*
+!logs/.gitkeep

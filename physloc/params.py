@@ -169,8 +169,12 @@ def resolved(over: Optional[Dict[str, Any]] = None,
 def write(values: Dict[str, Any], workdir: str) -> str:
     os.makedirs(workdir, exist_ok=True)
     path = os.path.join(workdir, FILENAME)
-    with open(path, "w") as fh:
+    # Atomically: a worker reading the file while another run rewrites it must
+    # see the old values or the new ones, never half of either.
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w") as fh:
         json.dump(values, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
     return path
 
 

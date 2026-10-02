@@ -98,9 +98,11 @@ def test_ordinary_scanned_jobs_are_charged_more_than_the_baseline():
     assert cli.job_memory_gb("collision", "release", "L3") > cli.job_memory_gb("collision", "release", "L0")
 
 
-def test_pour_is_the_outlier_only_at_the_scanned_level():
-    """96 grains become 96 scanned meshes at L3; below it pour is ordinary-sized."""
-    assert cli.job_memory_gb("pour", "debug", "L3") > 5 * cli.job_memory_gb("pour", "debug", "L0")
+def test_pour_is_charged_above_its_measured_peak():
+    """Measured at debug L0 with every family rendering: 9.3 GB at the strong
+    bin, 10.0 GB at all three. At L3, 96 grains become 96 scanned meshes."""
+    assert cli.job_memory_gb("pour", "debug", "L0") >= 10.0
+    assert cli.job_memory_gb("pour", "debug", "L3") > cli.job_memory_gb("pour", "debug", "L0")
     assert cli.job_memory_gb("pour", "debug", "L3") > 5 * cli.job_memory_gb("drop", "debug", "L3")
 
 

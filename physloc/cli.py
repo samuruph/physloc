@@ -1417,12 +1417,19 @@ def _threads_for(running: int, cores: int) -> int:
 # every `shadow_track` job at its level default, and a few others at 4.15 GB
 # (L0) and 8 GB (L3). Those are LOWER bounds on the true peak, not the peak.
 #
+# `pour` at the debug tier was re-measured (cgroup `memory.peak`, one job on a
+# loaded box) once the visibility gate stopped declining nearly every one of
+# its variants: all seventeen families, L0, 25 frames -- 9.3 GB at the strong
+# bin alone and 10.0 GB at all three. The earlier 2.7 GB was a job that
+# rendered almost nothing. L0/L1 are charged 12 GB; L2 keeps its old ratio to
+# L0. L3 and the release tier were not re-measured.
+#
 # `shadow_track` is structurally heavier than its level: `render_and_save`
 # holds a second full pass stack for the no-caster render, and a third for
 # the key-only render at L2/L3 -- so it is charged per level, not by default.
 JOB_MEMORY_GB = {
-    ("pour", "debug", "L0"): 3.0, ("pour", "debug", "L1"): 3.0,
-    ("pour", "debug", "L2"): 4.0, ("pour", "debug", "L3"): 28.0,
+    ("pour", "debug", "L0"): 12.0, ("pour", "debug", "L1"): 12.0,
+    ("pour", "debug", "L2"): 16.0, ("pour", "debug", "L3"): 28.0,
     ("pour", "release", "L0"): 36.0, ("pour", "release", "L1"): 36.0,
     ("pour", "release", "L2"): 36.0, ("pour", "release", "L3"): 120.0,
     ("shadow_track", "release", "L0"): 12.0,

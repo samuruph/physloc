@@ -204,7 +204,7 @@ class Immutability(Injector):
     #: How many times within a frame the collision shape is rebuilt during the
     #: ramp. See the note in `stage`.
     #:
-    #: Eight rather than four: measured on the review sweep, a body swelling to
+    #: Eight rather than four: measured, a body swelling to
     #: 2.3x pressed 5.5 cm into the floor on `barrier_pass` and 8.7 cm on `drop`
     #: during the five ramp frames before the solver pushed it back out. That is
     #: real -- a growing body does press into what it rests on -- but at four
@@ -266,11 +266,10 @@ class Immutability(Injector):
                    "occluded_at_event": bool(t0 in occ)})
 
     #: STAGED, through `stepper.ShapeSwap`. PyBullet cannot rescale a collision
-    #: shape in place, which is why this family and `deformation` were the last
-    #: two that could only edit a finished trajectory -- and it showed exactly
-    #: where you would expect: the render knew the ball had swollen and the
-    #: physics did not, so it grew half-way into the barrier beside it and a
-    #: shrunken cube stopped touching the floor it stood on.
+    #: shape in place, and editing only the finished trajectory leaves the
+    #: render knowing the ball has swollen while the physics does not -- it
+    #: grows half-way into the barrier beside it, and a shrunken cube stops
+    #: touching the floor it stood on.
     #:
     #: What PyBullet *can* do is replace a body mid-run, carrying the pose and
     #: both velocities across. So the size change is real from `t_event` on: the
@@ -413,12 +412,11 @@ class Fission(Injector):
 
     family = "fission"
     persistent = True
-    #: Half the pair's separation speed, in m/s. Deliberately modest: you
-    #: reported the split reading as "mechanical", two objects already far
-    #: apart rather than one object coming apart, and 3.8 m/s at the strong bin
-    #: was why -- at 30 fps that is 0.13 m between two consecutive frames, so
-    #: the halves are a body-width apart on the frame after the split and the
-    #: coming-apart is never on screen. Severity here is how far they end up,
+    #: Half the pair's separation speed, in m/s. Deliberately modest: at
+    #: 3.8 m/s and 30 fps the halves move 0.13 m between two consecutive
+    #: frames, a body-width apart on the frame after the split, so the
+    #: coming-apart is never on screen and the split reads as "mechanical" --
+    #: two objects already far apart. Severity here is how far they end up,
     #: and there is a whole clip for them to get there.
     #: **Where the halves end up**, centre to centre, in radii -- so 2.0 is
     #: exactly touching and anything above it is a visible gap.
@@ -427,22 +425,17 @@ class Fission(Injector):
     #: separation *velocity* the outcome depends on everything the scenario
     #: happens to be: how much floor friction there is, whether the halves are
     #: airborne when they part, how long the clip has left. The same 3.4 radii/s
-    #: that flung `drop`'s halves out of frame in the preview left them 0.50 m
-    #: apart in the render, overlapping, because they landed and stopped. So the
-    #: intervention was fitted against one number and rendered as another.
+    #: that flings `drop`'s halves out of frame in the preview leaves them 0.50 m
+    #: apart in the render, overlapping, because they land and stop.
     #:
-    #: Pushed apart to a target and then brought to relative rest, the answer is
-    #: the same in every scene: this far apart, arrived at smoothly. It is also
-    #: self-limiting -- neither half can travel more than half the target from
-    #: where the body was -- so no frustum fit is needed to keep them in shot,
-    #: which removes the machinery that was clamping the violation to a
-    #: quarter of its nominal strength.
-    #: Widened from 2.6 / 3.6 / 5.0. Those are separations of 0.99 / 1.37 /
-    #: 1.90 m on a `drop` ball -- a factor of 1.9 across the whole ladder, when
-    #: what a viewer reads is roughly the log of the gap. You asked for higher
-    #: changes across the levels; this is a factor of 2.9, and it stays
-    #: self-limiting because each half travels only half the target from where
-    #: the body was.
+    #: Aimed at a target, the answer is the same in every scene: this far
+    #: apart, arrived at smoothly. It is also self-limiting -- neither half can
+    #: travel more than half the target from where the body was -- so no
+    #: frustum fit is needed to keep them in shot.
+    #:
+    #: The ladder spans a factor of 2.9, because what a viewer reads is roughly
+    #: the log of the gap; a factor of 1.9 across the ladder (2.6 / 3.6 / 5.0)
+    #: leaves the bins hard to tell apart.
     SEPARATION_BY_BIN = {"weak": 2.4, "medium": 4.2, "strong": 7.0}
     #: Bounds on the DEPARTURE SPEED, m/s, so no scene can ask for either an
     #: explosion or a division nobody can see.
@@ -458,22 +451,20 @@ class Fission(Injector):
     GENTLER = 0.05
     #: HALF THE VOLUME EACH, so `2 * k**3 == 1`. The halves are placed exactly
     #: touching -- at +/- this many of the body's own HALF-EXTENTS along the
-    #: split axis, which is the correction that made the split read as one
-    #: object coming apart.
+    #: split axis, so the split reads as one object coming apart.
     #:
-    #: It used to be this many `bounding_radius`, and `bounding_radius` is the
-    #: mesh's SCALE FACTOR rather than its width. No KuBasic mesh reaches 1.0
-    #: in its own coordinates, so for a cone -- whose mesh is 0.60 wide -- the
-    #: halves were set down 0.604 m apart while each was 0.363 m across. A
-    #: quarter of a metre of clear air appeared between them on the frame of
-    #: the split, which is two cones popping into existence beside each other,
-    #: not one cone parting. They now start with their surfaces in contact and
-    #: the gap opens under the impulse.
+    #: Not `bounding_radius`, which is the mesh's SCALE FACTOR rather than its
+    #: width. No KuBasic mesh reaches 1.0 in its own coordinates, so for a
+    #: cone -- whose mesh is 0.60 wide -- halves placed that far out sit
+    #: 0.604 m apart while each is 0.363 m across: two cones popping into
+    #: existence beside each other, not one cone parting. Placed by
+    #: half-extent they start with their surfaces in contact and the gap opens
+    #: under the impulse.
     #:
     #: Three more things fall out of the same number.
     #:
     #: They do not overlap, so their contact never has to be suppressed --
-    #: which is what let the forward half on `barrier_pass` rebound off the wall
+    #: otherwise the forward half on `barrier_pass` can rebound off the wall
     #: and travel straight back THROUGH its sibling, a pass-through inside a
     #: fission clip.
     #:
@@ -483,9 +474,8 @@ class Fission(Injector):
     #: reads as a teleport, and two families that cannot then be scored apart.
     #:
     #: And it is what cleaving actually looks like: one object becomes two
-    #: smaller ones. Full-size halves were chosen to stay legible at 128 px back
-    #: when they sat close together; they now separate to between two and five
-    #: radii, so there is nothing to confuse.
+    #: smaller ones. They separate to between two and five radii, so they stay
+    #: legible even at 128 px.
     CLEAVE_SCALE = 0.5 ** (1.0 / 3.0)
     #: The per-bin override, kept at the volume-halving value -- see
     #: `CLEAVE_SCALE`. The comment below records why it was 1.0 and what
@@ -512,18 +502,17 @@ class Fission(Injector):
             return None
         T = traj.num_frames
         # Fire just BEFORE an occlusion, not inside it. Splitting while hidden
-        # was the original choice -- it gives the halves the whole hidden
-        # stretch to separate -- and you reported the cost: on `occluder_pass`
-        # the one thing the family exists to show, an object coming apart,
-        # happens where nobody can see it, and the clip reads as two objects
-        # emerging from behind a screen one object went into. Which is
-        # `permanence`'s picture, not this one's.
+        # gives the halves the whole hidden stretch to separate, but the one
+        # thing the family exists to show, an object coming apart, then happens
+        # where nobody can see it, and the clip reads as two objects emerging
+        # from behind a screen one object went into -- `permanence`'s picture,
+        # not this one's.
         #
         # With room to SEE it, too: twice the evidence span the worker requires
-        # after an event (`_geom.EVIDENCE_SECONDS`). A quarter-second lead was
-        # exactly that span, and the halves -- each smaller than the ball the
-        # occlusion was declared for -- slipped behind the screen a frame early,
-        # so on `occluder_pass` every seed's split was declined as unseen.
+        # after an event (`_geom.EVIDENCE_SECONDS`). With a lead of exactly that
+        # span the halves -- each smaller than the ball the occlusion was
+        # declared for -- slip behind the screen a frame early, and the split
+        # is declined as unseen.
         occ_run = spec.notes.get("occluded_frames") or []
         if len(occ_run) >= 3:
             lead = self._frames_for(spec, 2.0 * _geom.EVIDENCE_SECONDS)
@@ -540,21 +529,18 @@ class Fission(Injector):
         # ACROSS THE SCREEN, and HORIZONTAL. Two failure modes bracket this
         # choice and the middle is narrow.
         #
-        # A heading drawn uniformly on the horizontal circle -- the first
-        # version -- comes out near the viewing axis often enough that the
-        # halves separate in depth, one behind the other, and the clip shows a
-        # single object that briefly looks lumpy. So the split must live in the
-        # image plane.
+        # A heading drawn uniformly on the horizontal circle comes out near the
+        # viewing axis often enough that the halves separate in depth, one
+        # behind the other, and the clip shows a single object that briefly
+        # looks lumpy. So the split must live in the image plane.
         #
-        # Perpendicular to the body's screen-space velocity -- the second
-        # version -- was worse on exactly the scenarios that matter. A ball
-        # rolling across frame has its screen velocity along the horizontal, so
-        # the perpendicular is *vertical*: one half hops, the other is pressed
-        # into the floor it is already resting on, and they end up in the same
-        # place. Measured on `barrier_pass`, total separation over the whole
-        # clip was 0.11 m against a body 0.50 m wide -- which is the "not
-        # visible" you reported, and the "same line, occluding each other" on
-        # `occluder_pass`.
+        # Perpendicular to the body's screen-space velocity is worse on exactly
+        # the scenarios that matter. A ball rolling across frame has its screen
+        # velocity along the horizontal, so the perpendicular is *vertical*:
+        # one half hops, the other is pressed into the floor it is already
+        # resting on, and they end up in the same place (measured on
+        # `barrier_pass`: 0.11 m of separation over the whole clip against a
+        # body 0.50 m wide).
         #
         # Horizontal and as close to the camera's right as the world allows is
         # the one direction that is always in the image plane and never fights
@@ -568,25 +554,23 @@ class Fission(Injector):
         # medium and strong would be three different violations whose magnitudes
         # are not comparable.
         unit = unit * float(self._instance_rng(spec).choice([-1.0, 1.0]))
-        twin_spec = [actor, twin]
         half_scale = self.SCALE_BY_BIN[severity_bin]
         radius = float(actor.bounding_radius)
         # ONE IMPULSE, then physics. Nothing pushes the halves after the
         # instant they come apart and nothing brakes them; what stops them is
-        # the friction of whatever they land on. The previous version held a
-        # separating force for a third of a second and then an equal braking
-        # force, and it looked like what it was -- two halves shoved apart by
-        # something invisible and then caught by it. There is no such force in a
-        # thing coming apart.
+        # the friction of whatever they land on. A sustained separating force
+        # followed by a braking one looks like what it is -- two halves shoved
+        # apart by something invisible and then caught by it. There is no such
+        # force in a thing coming apart.
         #
         # The departure speed is SOLVED so the halves settle about `target`
         # apart, which keeps the severity ladder meaningful without prescribing
         # anything after `t_event`.
         target = float(self.SEPARATION_BY_BIN[severity_bin]) * radius
-        # SOLVED FOR STRONG, SCALED FOR THE REST. Each bin used to be solved on
-        # its own against a preview that could not always reach its target, and
-        # on `collision` medium and strong both hit the speed cap and came out
-        # one clip: the three bins ran at 3.05 / 4.0 / 4.0 m/s. On flat ground
+        # SOLVED FOR STRONG, SCALED FOR THE REST. Solving each bin on its own
+        # against a preview that cannot always reach its target lets two bins
+        # hit the speed cap together and come out one clip (on `collision`:
+        # 3.05 / 4.0 / 4.0 m/s). On flat ground
         # a departure speed carries a body a distance that goes as its square,
         # so each weaker bin takes strong's speed times the square root of its
         # share of strong's separation -- ordered by construction, and still
@@ -716,12 +700,12 @@ class Fission(Injector):
         return best
 
     #: STAGED. Both halves are bodies the solver owns from `t_event` on, so
-    #: whatever they hit, they hit for real. On `collision` the edited version
-    #: could not do that: the striker split, both halves went elsewhere, and the
-    #: bystander guard then had to hold the ball they no longer struck perfectly
-    #: still -- which is what you saw, a target that never reacts to anything.
-    #: Staged, a half that reaches the target moves it and a half that misses
-    #: leaves it alone, and neither outcome has to be decided in advance.
+    #: whatever they hit, they hit for real. An edited path cannot: on
+    #: `collision` the striker splits, both halves go elsewhere, and the
+    #: bystander guard then holds the ball they no longer strike perfectly
+    #: still -- a target that never reacts to anything. Staged, a half that
+    #: reaches the target moves it and a half that misses leaves it alone, and
+    #: neither outcome has to be decided in advance.
     simulated = True
 
     def _twin_of(self, spec):
@@ -874,19 +858,17 @@ class Fusion(Injector):
     persistent = True
     #: How close two bodies must come to be merge candidates, in contact radii.
     #:
-    #: The ordering was INVERTED, and it made the severity ladder run backwards
-    #: on a medium: `strong` demanded the tightest approach, so it found the
-    #: fewest eligible pairs and merged the least. On `pour` you judged the
-    #: strongest bin too gentle, and that is why. Reaching further is what makes
-    #: a stronger bin fuse more of the pile.
+    #: Increasing with the bin: reaching further is what makes a stronger bin
+    #: fuse more of a medium. A strong bin that demands the tightest approach
+    #: finds the fewest eligible pairs and merges the least, running the
+    #: ladder backwards on `pour`.
     MEET_RADII = {"weak": 1.7, "medium": 2.5, "strong": 3.6}
     #: Share of the possible merges each bin actually makes.
     MERGE_FRACTION = {"weak": 0.30, "medium": 0.60, "strong": 1.0}
     #: Volume is CONSERVED: a body that swallows another comes out bigger, by
     #: exactly the cube root of two.
     #:
-    #: The family used to keep the survivor's size deliberately, on the
-    #: reasoning that a body growing while another vanishes reads as
+    #: A body growing while another vanishes might seem to read as
     #: `immutability` and `permanence` in one clip. That worry is real in
     #: isolation and wrong here: the growth is *paired* with the disappearance,
     #: happens over the same frames and along the same line of centres, and
@@ -983,11 +965,9 @@ class Fusion(Injector):
                                   int(round(self.DRAW_IN_FRACTION
                                             * traj.num_frames)))})
 
-    #: STAGED. The merge used to be written into the trajectory: the absorbed
-    #: body's path interpolated onto its neighbour's, the survivor's size scaled
-    #: for the render only, and everything after the merge re-integrated by the
-    #: host's approximation rather than solved. Staged, the approach is an
-    #: attraction the simulator integrates, the survivor grows in the PHYSICS
+    #: STAGED, rather than written into the trajectory and re-integrated by the
+    #: host's approximation. The approach is an attraction the simulator
+    #: integrates, the survivor grows in the PHYSICS
     #: (`ShapeSwap`), the absorbed body leaves the world (`Vanish`), and the
     #: merged body -- carrying both masses and their joint momentum -- meets the
     #: floor and everything else through the solver.
@@ -1012,8 +992,6 @@ class Fusion(Injector):
 
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
         draw = max(1, int(plan.notes["draw_in"]))
-        spf = stepper.substeps_of(simulator)
-        dt = 1.0 / (float(spec.tier.fps) * spf)
         g = np.asarray(spec.gravity, np.float64)
         omega = self.DRAW_IN_OMEGA / (draw / float(spec.tier.fps))
         profile = self._swell_profile(draw)
@@ -1167,14 +1145,11 @@ class Fusion(Injector):
                 resume.append((by_id[int(keep_id)], t + n, v_f))
 
         # **THE SURVIVOR HAS TO BE RE-INTEGRATED, or it keeps the collision.**
-        # This edited only the absorbed body's path and the survivor's SIZE, so
-        # the survivor kept its lawful trajectory verbatim -- including the
-        # impact with the body it had just swallowed. Measured on
-        # `collision x 0777`: the absorbed ball is drawn in and removed by frame
-        # 6, and `ball_a` still decelerates from 1.94 to 0.42 m/s at frame 12,
-        # rebounding off nothing. Its invalid path was byte-identical to the
-        # valid one for the whole clip. You reported it as the fused object
-        # behaving as though it were still colliding.
+        # Editing only the absorbed body's path and the survivor's SIZE leaves
+        # the survivor on its lawful trajectory verbatim -- including the impact
+        # with the body it has just swallowed (on `collision x 0777`, `ball_a`
+        # decelerates from 1.94 to 0.42 m/s at frame 12, rebounding off
+        # nothing).
         #
         # The absorbed bodies are excluded from the obstacle set for the same
         # reason: they are gone, and a merged body must not bounce off its own
@@ -1182,10 +1157,9 @@ class Fusion(Injector):
         for body, t_res, v_f in resume:
             bi = traj.index_of(int(body.segmentation_id))
             fused_radius = float(traj.radius[bi]) * float(self.SWELL)
-            # The render and the collision geometry must share a bottom face.
-            # Re-integrating the swollen survivor at the old centre/radius put
-            # its newly enlarged lower half inside the floor, even though the
-            # integrator itself was behaving correctly for the stale radius.
+            # The render and the collision geometry must share a bottom face:
+            # re-integrated at the old centre/radius, the swollen survivor's
+            # enlarged lower half would sit inside the floor.
             p0 = np.asarray(out.pos[t_res - 1, bi], np.float64).copy()
             floor = _geom.floor_fn(spec, body)
             clearance = (float(traj.pos[t_res - 1, bi, 2])
@@ -1219,10 +1193,9 @@ class Dissolve(Injector):
 
     **Optical, not geometric**: the body keeps its size and shape and simply
     stops being opaque. The renderer mixes its shaded surface with a Transparent
-    BSDF and keyframes the blend -- measured working in the pinned image, see
-    `render/probe_opacity.py`, which also records that the Principled BSDF's own
-    alpha input does nothing here and why it took three attempts to find that
-    out.
+    BSDF and keyframes the blend -- measured working in the pinned image. The
+    Principled BSDF's own alpha input does nothing there (see
+    `render.worker._fade_controls`).
 
     Fading alone is not enough to *remove* it, though, so the body is dropped
     from the scene once it is invisible. Cryptomatte tracks geometry, so a
@@ -1299,13 +1272,11 @@ class Dissolve(Injector):
         self._held(plan)["gone"] = gone
         # **THE FRAME IT GOES INVISIBLE IS THE FRAME IT STOPS TOUCHING THINGS.**
         # The fade profile in `post_simulate` runs `u = (k + 1) / n`, so opacity
-        # reaches exactly zero on the LAST faded frame, `t_event + n - 1` -- and
-        # this used to leave the body in the solver until `t_event + n`. That is
-        # one whole frame of a body nobody can see that still collides, and on
-        # `collision x 0777` it was the frame that mattered: measured, ball_a
-        # was at opacity 0.00 from frame 11 and ball_b was struck during
-        # 11 -> 12 and rolled away exactly as in the lawful twin. You reported
-        # it as the other ball moving after the first had dissolved.
+        # reaches exactly zero on the LAST faded frame, `t_event + n - 1`.
+        # Leaving the body in the solver until `t_event + n` gives one whole
+        # frame of a body nobody can see that still collides -- on
+        # `collision x 0777` that is the frame the other ball is struck in, so
+        # it rolls away after the first has dissolved.
         #
         # A fading body is still solid while you can still see it, which is the
         # point of the family; a body you cannot see is gone, and gone bodies do

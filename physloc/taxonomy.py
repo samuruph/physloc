@@ -204,10 +204,9 @@ FAMILIES: Dict[str, Family] = {
 # --------------------------------------------------------------------------
 # What a scene has to offer for a family to be stageable in it
 # --------------------------------------------------------------------------
-# The compatibility matrix used to be written out cell by cell, and it showed:
-# `colour_shift` was built on twelve scenarios and `continuity` on six, for no
-# reason except which cells someone had got round to. Both need exactly the same
-# thing -- a visible actor -- so both should be everywhere.
+# The compatibility matrix is DERIVED, not written out cell by cell: a
+# hand-written grid drifts (two families that need exactly the same thing -- a
+# visible actor -- end up on different scenarios for no reason).
 #
 # Families declare what they need, scenarios declare what they have, and the
 # matrix is derived. Adding a scenario then lights up every family it can host,

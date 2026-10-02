@@ -735,9 +735,9 @@ function header() {
   const scenarios = [...new Set(S.index.samples.map(x => x.scenario).filter(Boolean))].sort();
   if (pair.length < 2 && scenarios.length < 2) { box.innerHTML = ""; return; }
 
-  // Keep family selection separate from severity selection. The old row made
-  // one button for every family x severity combination, which gets crowded as
-  // soon as a scene contains several violation families.
+  // Family selection is separate from severity selection: one button per
+  // family x severity combination gets crowded as soon as a scene contains
+  // several violation families.
   const families = [...new Set(pair.filter(x => x.label !== "valid").map(x => x.family))].sort();
   const current = S.index.samples[S.cur];
   const family = current.label === "valid" ? families[0] : current.family;

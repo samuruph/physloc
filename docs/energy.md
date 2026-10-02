@@ -123,11 +123,11 @@ scored against its own twin rather than against a global constant.
 
 ## What ships
 
-| schema-v3 location | contents |
+| schema-v4 location | contents |
 |---|---|
 | `data.h5:/energy` | scene and per-object total, translational kinetic, rotational kinetic, potential, residual, and anomaly arrays |
 | `data.h5:/objects` | mass, pose, velocity, opacity, inertia, height, momentum, and other physical state needed to recompute energy |
-| `sample.json:annotations.scene_energy` | units and HDF5 references for the dense energy arrays |
+| `dataset.json:dataset_metadata.energy_accounting` | which bodies contribute to which total |
 
 `energy_map` is per-body constant within a body's silhouette. For a rigid body that is the
 honest spatial resolution -- energy is not a field inside a rigid body, and pretending

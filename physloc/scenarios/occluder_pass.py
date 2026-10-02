@@ -12,9 +12,8 @@ rendered segmentation first.
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
+from typing import List
 
-import numpy as np
 
 from .. import camera as cam
 from . import _common as C
@@ -47,10 +46,10 @@ class OccluderPass(Scenario):
         size = C.size_scale(seed, self.name)
         radius = float(rng.uniform(0.26, 0.36)) * size
         # Derived from the frame -- see `collision`. This also fixes the
-        # occluded *fraction* of the clip, which used to shrink as the tiers got
-        # longer: the screen is a fixed width, so a ball that travels further
-        # spends proportionally less of the clip behind it, and the observability
-        # lag this scenario exists to produce quietly shortened with tier.
+        # occluded *fraction* of the clip across tiers: the screen is a fixed
+        # width, so a ball that travels further would spend proportionally less
+        # of a longer clip behind it, shortening the observability lag this
+        # scenario exists to produce.
         speed = float(cam.traverse_speed(
             CAMERA, LOOK_AT, tier.num_frames / float(tier.fps),
             fraction=float(rng.uniform(0.62, 0.74))))
@@ -166,7 +165,6 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path,
         cx, cy, cz = eye_at(f)
         s = (sy - cy) / (by - cy)          # ray parameter at the screen plane
         ix = cx + s * (bx - cx)
-        iz = cz + s * (bz - cz)
         r_proj = silhouette_radius * s     # the ball's silhouette at that plane
         # Vertically, the body's real top and bottom rather than a disc of the
         # conservative radius: nothing of it reaches below the floor it rolls

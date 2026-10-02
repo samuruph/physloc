@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import colorsys
 import math
-from typing import Optional, List, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from .base import BodySpec, Complexity, LightSpec
+
+if TYPE_CHECKING:                       # numpy is imported lazily below
+    import numpy as np
 
 
 def appearance_rng(seed: int, salt: str = "") -> "np.random.RandomState":
@@ -233,9 +236,9 @@ def size_scale(seed: int, scenario: str) -> float:
 #: The smallest a scenario's main object may be DRAWN, as a share of the frame
 #: width at its own depth -- at the scenario's nominal size, so `size_scale`
 #: still varies it from scene to scene around whatever this settles on.
-#: Measured before this existed: the ramps' blocks came out at 4.4-4.6% of the
-#: frame (6 px across at the debug tier) because their shots hold a whole ramp,
-#: a flight and a run-out, against 10-20% everywhere else.
+#: Without it the ramps' blocks come out at 4.4-4.6% of the frame (6 px
+#: across at the debug tier) because their shots hold a whole ramp, a flight
+#: and a run-out, against 10-20% everywhere else.
 MIN_SCREEN_SHARE = 0.12
 #: ...but never more than this multiple of the scenario's own size: past it a
 #: ramp's block starts to dwarf the ramp it slides on.
@@ -257,7 +260,7 @@ def screen_share(spec, seg_id: int) -> float:
 
 
 def at_least_screen_share(build, seg_id: int, nominal_scale: float,
-                          floor: float = None, cap: float = None,
+                          floor: Optional[float] = None, cap: Optional[float] = None,
                           rounds: int = 4):
     """Build a scene, and rebuild it with its main object enlarged until the
     object is drawn at least `floor` of the frame wide at its nominal size.
@@ -424,11 +427,10 @@ SURFACE_SHAPES = ("sphere", "cube")
 def shape_name(kind: str, suffix: str = "") -> str:
     """What to CALL a body whose shape was drawn.
 
-    The scenarios used to hardcode the name -- `drop` called its actor "ball"
-    whatever it drew -- so a clip of a falling cone shipped an instance called
-    `ball`, and every overlay, tooltip and per-object table repeated it. The
-    name is the one field a reader trusts without checking `category`, so it
-    follows the draw.
+    A hardcoded name ("ball" whatever was drawn) would ship a falling cone as
+    an instance called `ball`, repeated by every overlay, tooltip and
+    per-object table. The name is the one field a reader trusts without
+    checking `category`, so it follows the draw.
     """
     return "%s_%s" % (kind, suffix) if suffix else str(kind)
 
@@ -475,10 +477,9 @@ PEER_SIZE = (0.65, 1.45)
 #: clutter: a model can learn "the thing that moves is the subject" and never
 #: look at the physics at all. Moving distractors take that shortcut away.
 #:
-#: The lower bound is no longer zero, because "moving" now means moving. It
-#: used to be a uniform draw from 0, so a distractor's speed was a continuum
-#: and roughly a third of them were near-stationary by accident rather than by
-#: choice; `DISTRACTOR_MOVING` decides that explicitly now.
+#: The lower bound is not zero, because "moving" means moving: a uniform draw
+#: from 0 would leave roughly a third of moving distractors near-stationary by
+#: accident. Whether a distractor moves at all is `DISTRACTOR_MOVING`'s call.
 DISTRACTOR_SPEED = (0.25, 0.85)
 
 #: Share of distractors that move at all. The rest are inert -- genuinely
@@ -661,12 +662,10 @@ def distractors(spec, n: int, rng, floor_top: float = 0.0, role: str = "distract
             # checked. If only the actor ever falls, "the thing that falls"
             # identifies the actor without looking at physics.
             #
-            # It used to be decided after the sightline test, and lifting a
-            # body changes where it is on screen: a candidate cleared at floor
-            # height rose straight into the actor's line, which is the same
-            # mistake as approving a clearance and then growing the body.
-            # Measured on `toss`: `distractor_04` ended 0.109 rad from the ball
-            # against the 0.131 it needed.
+            # Before the sightline test, because lifting a body changes where
+            # it is on screen: a candidate cleared at floor height can rise
+            # straight into the actor's line, the same mistake as approving a
+            # clearance and then growing the body.
             if role == "actor":
                 # A PEER IS DROPPED SO IT LANDS INSIDE THE EVENT BAND. Peers
                 # placed at rest, or a couple of radii up, have touched down by

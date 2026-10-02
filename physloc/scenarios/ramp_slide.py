@@ -73,18 +73,16 @@ class RampSlide(Scenario):
         sin_t, cos_t = math.sin(tilt), math.cos(tilt)
 
         # ---- where the block stops, so it stops ON SCREEN ----
-        # The camera used to be fixed on the ramp, and the block reached the
-        # floor at 3-4 m/s against a floor friction PyBullet takes as the
-        # PRODUCT of the pair (~0.1-0.16): it needed several metres and about
-        # three seconds to stop. At 25 frames that was past the end of the clip;
-        # at 37 the block left the shot at frame 15 and slid off the edge of the
-        # ground, and eight families on this scenario were declined in the
-        # full-length review. What the block does after the ramp must not
-        # depend on how long the clip is, so -- as `rolling_ramp` does -- the
-        # run-out is solved for and the camera framed on it.
+        # The block reaches the floor at 3-4 m/s against a floor friction
+        # PyBullet takes as the PRODUCT of the pair (~0.1-0.16), so it needs
+        # several metres and about three seconds to stop -- with a camera
+        # fixed on the ramp it leaves the shot and slides off the edge of the
+        # ground. What the block does after the ramp must not depend on how
+        # long the clip is, so -- as `rolling_ramp` does -- the run-out is
+        # solved for and the camera framed on it.
         #
-        # The slide itself is unchanged: the ramp contact stays at `mu**2`,
-        # which is what it was with `mu` on both the block and the slab.
+        # The ramp contact stays at `mu**2`, `mu` on both the block and the
+        # slab.
         a_slide = 9.81 * max(sin_t - mu * mu * cos_t, 0.05)
         v_lip = math.sqrt(v0 ** 2 + 2.0 * a_slide * (half_len - start_along))
         vx_lip, vz_lip = v_lip * cos_t, -v_lip * sin_t

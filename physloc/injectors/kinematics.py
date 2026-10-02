@@ -54,23 +54,20 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     run = _geom.longest_airborne_run(traj, bi, _geom.surface_top(spec, body))
     lo = max(1, num_frames // 4)
     if run is not None and run[1] > run[0]:
-        # ANYWHERE in the airborne run, not at its lower edge. This used to be
-        # `min(max(run[0] + 1, lo), run[1])`, and for a body that is airborne
-        # from frame 0 -- every `drop`, every `toss` -- `lo` was binding on
-        # every seed, so the family fired on frame `num_frames // 4` in every
-        # clip it ever produced. `continuity` and `phantom_impulse` were pinned
-        # that way across twelve scenarios each.
+        # ANYWHERE in the airborne run, not at its lower edge. Clamping to the
+        # edge (`min(max(run[0] + 1, lo), run[1])`) makes `lo` binding for any
+        # body airborne from frame 0 -- every `drop`, every `toss` -- so the
+        # family would fire on frame `num_frames // 4` in every clip.
         flight_lo = max(run[0] + 1, 1) if motion_anchor else max(run[0] + 1, lo)
         t = _geom.frame_in_band(spec, *_geom.visible_band(
             spec, traj, [body], flight_lo, run[1]))
         if 1 <= t < num_frames - 1:
             return int(t)
     # No airborne run at all -- a ball rolling the whole clip, a body at rest
-    # on a table. The old fallback was the constant `num_frames // 3`, which is
-    # why `continuity` and `phantom_impulse` fired on the same frame in every
-    # clip of `collision`, `resting_table`, `stack_topple` and `pour`. Nothing
-    # physical dictates the moment for such a body, which is precisely what
-    # `default_event_frame` is for, jitter included.
+    # on a table. Nothing physical dictates the moment for such a body, which
+    # is precisely what `default_event_frame` is for, jitter included (a
+    # constant such as `num_frames // 3` would fire on the same frame in every
+    # clip of the scenario).
     t = _geom.default_event_frame(spec, num_frames)
     if t is None:
         t = max(1, num_frames // 3)
@@ -109,9 +106,9 @@ class _GravityScale(Injector):
         top of the world's `m*g`, and the force has to be re-applied every
         substep because PyBullet clears accumulated external forces after each
         step. Staged rather than integrated by hand, so a body that rises and
-        falls does it while still colliding with everything around it: the
-        trapezoid profile used to be written into the trajectory and then
-        re-integrated against approximations of the scene.
+        falls does it while still colliding with everything around it, rather
+        than against the approximations of the scene a re-integrated, edited
+        trajectory would collide with.
         """
         import pybullet as pb
         from ..render import stepper
@@ -300,11 +297,9 @@ class AntiGravity(_GravityScale):
 
     family = "antigravity"
 
-    # The per-body review clips need a more legible lower end than the shared
-    # gravity ladder: on `review_f37`, the old weak pulse was barely visible.
-    # Move weak up to the old medium setting and put medium between the old
-    # medium and strong settings. Keep strong unchanged so the top of the
-    # ladder remains comparable with the previous generation.
+    # A more legible lower end than the shared gravity ladder: a weak pulse at
+    # the shared setting is barely visible on a single body. Strong matches the
+    # shared ladder so the top of the two stays comparable.
     ALPHA_BY_BIN = {"weak": -1.6, "medium": -2.8, "strong": -4.0}
 
     def _targets(self, spec):
@@ -387,14 +382,12 @@ class GlobalGravity(_GravityScale):
     regime and reverses, because `strong` is the development default and a
     strongest bin nobody can see is not worth generating.
 
-    The ladder used to be `{weak: 0.45, medium: 0.05, strong: -1.2}`, which is
-    V-shaped rather than monotone: medium was a FIVE PER CENT deviation, far
-    milder than weak's forty-five. So the bins did not order by strength, and it
-    showed -- measured over a 166-cell L0 sweep, `global_gravity` scored
-    weak 0.000 / medium 0.000 / strong 1.000 on four of its five scenarios, and
-    weak 0.585 / medium 0.312 / strong 1.000 on the fifth. A binary family with
-    a redundant bin, wearing three labels. `test_severity_ladders.py` now
-    refuses any ladder that turns around.
+    The ladder must be monotone in the deviation `|1 - alpha|`, not in alpha.
+    A V-shaped ladder such as `{weak: 0.45, medium: 0.05, strong: -1.2}` (a
+    five per cent deviation at medium, far milder than weak's forty-five) does
+    not order its bins by strength: measured over a 166-cell L0 sweep it scored
+    weak 0.000 / medium 0.000 / strong 1.000 on four of five scenarios.
+    `test_severity_ladders.py` refuses any ladder that turns around.
 
     **Needs at least two moving bodies, and `plan` returns None below that.**
     With one object on screen, scaling gravity for the scene and scaling it for
@@ -405,42 +398,31 @@ class GlobalGravity(_GravityScale):
 
     family = "global_gravity"
     #: Monotone in the quantity the family is SCORED on, which is
-    #: `|1 - alpha|`, not alpha. The previous ladder read
-    #: `{0.25, 0.55, -1.2}` under a comment claiming "monotone: 0.25 < 0.55 <
-    #: 1.2" -- but those are alphas, and their deviations are 0.75, 0.45 and
-    #: 2.2. Medium deviated LESS than weak, which is the same V the ladder
-    #: before it was rewritten to remove, one level of indirection down; the
-    #: shipped magnitudes said so plainly (weak 0.75, medium 0.45, strong 2.2)
-    #: and nothing checked them.
+    #: `|1 - alpha|`, not alpha: deviations of 0.55 / 1.20 / 2.20 for the three
+    #: alphas below. Weak stays inside the "different planet" regime; medium
+    #: and strong reverse gravity and leave it. Smaller deviations (0.75 and
+    #: 0.45, spread over a trapezoid whose mean is well under its peak) read
+    #: on `pour` as a pour falling slightly slowly -- invisible.
     #:
-    #: Deviations are now 0.55 / 1.20 / 2.20: gravity at 0.45x Earth, reversed
-    #: gently at -0.2x, and reversed hard at -1.2x. Weak stays inside the
-    #: "different planet" regime; medium and strong leave it. You reported weak
-    #: and medium as invisible on `pour` -- at 0.75 and 0.45 deviation, spread
-    #: over a trapezoid whose mean is well under its peak, they were a pour
-    #: falling slightly slowly.
-    #: Stronger across the board, and strong most of all, from 0.40 / -0.35 /
-    #: -1.8: you judged every bin too gentle and strong not strong at all. The
-    #: window is fitted on the strongest bin but already sits at its three-frame
-    #: floor on every scene measured, so a harder strong cannot shorten it and
-    #: take the weaker bins down with it -- it simply lifts further.
+    #: The window is fitted on the strongest bin but already sits at its
+    #: three-frame floor on every scene measured, so a harder strong cannot
+    #: shorten it and take the weaker bins down with it -- it simply lifts
+    #: further.
     ALPHA_BY_BIN = {"weak": 0.25, "medium": -0.6, "strong": -3.0}
     #: The ladder for a scene whose bodies are RESTING when gravity bends.
     #:
     #: A lighter gravity moves nothing that is already supported: a mug on a
-    #: table at 0.4 g is a mug on a table. Measured on the review sweep, weak
-    #: `global_gravity` scored 0 on every clip of `collision`, `pyramid_impact`,
-    #: `stack_topple` and two of three `resting_table` -- not a scoring fault,
-    #: there was nothing on screen. A weak violation must be small, not absent,
-    #: so where the bodies are supported every bin reverses gravity and they
-    #: differ in how hard. Strong is the same as the free-fall ladder, so the
-    #: window, which is fitted on the strongest bin, is too.
-    #: Weak at -0.35 was scored but, on `collision`, seen: two rolling
-    #: spheres hopped a few centimetres within the three-frame window, 0.13% of
-    #: the frame on one frame. -0.6 lifts them visibly.
-    #: Raised again, from -0.6 / -1.1 / -1.8, for the same reason as the
-    #: free-fall ladder: measured over the three-frame window, strong lifted
-    #: bodies 0.5-1.0 m and weak as little as 0.06 m.
+    #: table at 0.4 g is a mug on a table. Measured, a weak lighter gravity
+    #: scored 0 on every clip of `collision`, `pyramid_impact`, `stack_topple`
+    #: and two of three `resting_table` -- not a scoring fault, there was
+    #: nothing on screen. A weak violation must be small, not absent, so where
+    #: the bodies are supported every bin reverses gravity and they differ in
+    #: how hard. Strong is the same as the free-fall ladder, so the window,
+    #: which is fitted on the strongest bin, is too.
+    #:
+    #: Weak must still lift bodies visibly within the three-frame window: at
+    #: -0.35 two rolling spheres on `collision` hopped a few centimetres (0.13%
+    #: of the frame on one frame).
     SUPPORTED_ALPHA_BY_BIN = {"weak": -1.0, "medium": -1.8, "strong": -3.2}
     #: Share of the bodies in contact at the event for the scene to count as
     #: resting rather than falling.
@@ -560,10 +542,9 @@ class Continuity(Injector):
         # covers, and `position_continuity` scores exactly that: the step less
         # `step_tolerance` x the speed on either side, in radii. A jump of 1.5
         # radii on a body already covering more than that per frame -- a
-        # falling ball, a pendulum bob, a block sliding off a ramp -- was on
-        # screen and scored 0.000; weak `continuity` failed on nine scenarios
-        # of the review sweep that way. So the bins are radii BEYOND the
-        # body's own travel, which is what the law reads back.
+        # falling ball, a pendulum bob, a block sliding off a ramp -- is on
+        # screen and scores 0.000. So the bins are radii BEYOND the body's own
+        # travel, which is what the law reads back.
         idx = [traj.index_of(int(b.segmentation_id)) for b in targets]
         speed = float(np.linalg.norm(np.asarray(
             traj.lin_vel[max(0, t0 - 1):t0 + 1, idx, :], np.float64), axis=2).max())
@@ -576,14 +557,13 @@ class Continuity(Injector):
             reach by `radii`: |travel + L*u| = tol*speed*dt + radii*r, solved
             for L. Exact for the heading drawn, so it is no longer than it
             needs to be -- a fixed worst-case margin (a jump straight against
-            the motion) overshot, and on `drop` pushed weak into obstacles
-            strong jumped clear of."""
+            the motion) overshoots, and on `drop` pushes weak into obstacles
+            strong jumps clear of."""
             want = self.STEP_TOLERANCE * speed * float(traj.dt) + radii * radius
             b = float(travel @ direction)
             disc = b * b - float(travel @ travel) + want * want
             return direction * max(0.0, -b + float(np.sqrt(max(disc, 0.0))))
 
-        nominal = jump_for(jump_r)
         # A teleport big enough to leave the frame depicts an object vanishing,
         # which is `permanence`, not `continuity`. Shorten it until both lobes
         # of the two-lobed mask are actually in shot -- fitting on the longest
@@ -625,12 +605,11 @@ class Continuity(Injector):
     def stage(self, spec, simulator, objs, plan):
         """Move the body, keep its velocity, and let physics take over.
 
-        You reported the teleported ball bouncing off a barrier it had already
-        been moved past. It did: the trajectory was edited and then
-        re-integrated against the scene as *declared*, so the resolver kept the
-        wall in front of a body that was behind it. Staged into the simulator
-        there is nothing to bounce off, because PyBullet is looking at where the
-        body actually is.
+        Staged, not edited: an edited trajectory is re-integrated against the
+        scene as *declared*, so the resolver keeps a wall in front of a body
+        that has been teleported past it and the ball bounces off a barrier it
+        is already behind. In the simulator there is nothing to bounce off,
+        because PyBullet is looking at where the body actually is.
         """
         delta = np.asarray(plan.params["delta_m"], np.float64)
         moving = {int(i) for i in plan.causal_body_ids}
@@ -784,11 +763,10 @@ class NonParabolic(Injector):
     continuous with a continuous derivative everywhere -- and gets the *shape*
     wrong. A model that only checks how fast things fall sees nothing.
 
-    Earlier this was a single sine bump over five frames, and it read as a
-    teleport: at 12 fps a one-cycle wobble large enough to notice is a body
-    appearing a body-width away and coming back. The fix is more cycles over
-    more frames at a smaller amplitude -- a visible snake rather than a
-    displacement.
+    Several cycles over many frames at a modest amplitude -- a visible snake
+    rather than a displacement. A single sine bump over a few frames reads as
+    a teleport: at 12 fps a one-cycle wobble large enough to notice is a body
+    appearing a body-width away and coming back.
 
     **The wobble is laid out in the camera's image plane**, using the same basis
     the frustum test uses. Perturbing a world axis is a gamble on where the
@@ -801,11 +779,10 @@ class NonParabolic(Injector):
     #: Peak lateral excursion in body radii. Small on purpose -- legibility here
     #: comes from the number of cycles, not from the size of each one.
     AMPLITUDE_RADII = {"weak": 0.5, "medium": 1.0, "strong": 2.0}
-    #: Fewer cycles than the 2.5 this shipped with. At v0's 30 fps a 2.5-cycle
-    #: snake over a short airborne run turns each half-cycle over in a handful
-    #: of frames, which reads as a jitter rather than as a path -- you asked for
-    #: it smoother, and the amplitude is not the part to change: legibility here
-    #: comes from the shape being continuous and obviously not a parabola.
+    #: Few cycles. At 30 fps a 2.5-cycle snake over a short airborne run turns
+    #: each half-cycle over in a handful of frames, which reads as a jitter
+    #: rather than as a path. Legibility comes from the shape being continuous
+    #: and obviously not a parabola, not from the amplitude.
     CYCLES = 1.75
     #: Peak sideways speed, m/s, of the path a MEDIUM is asked to follow. See
     #: `plan`: about half of how fast `pour`'s grains fall.
@@ -858,7 +835,7 @@ class NonParabolic(Injector):
         # is a wobble nobody sees. Measured on `pour`, the amplitude came to
         # 0.036--0.108 m against a 0.078 m grain, and the whole pour was
         # displaced by that one offset in lockstep -- a pile sliding sideways,
-        # not a pile falling wrongly. You reported it as having no effect.
+        # not a pile falling wrongly, and visibly no effect at all.
         scale = self._medium_radius(traj, targets, t0)
         amp = self.AMPLITUDE_RADII[severity_bin] * scale
         # A MEDIUM SNAKES NO FASTER THAN IT CAN WITHOUT DETONATING. The amplitude
@@ -908,11 +885,10 @@ class NonParabolic(Injector):
         """The lateral offset per frame, in the camera's image plane.
 
         `k` of `of` gives body number `k` its own phase and its own share of
-        the amplitude. Every body used to get the identical curve, which on a
-        medium is not a serpentine at all -- forty grains offset by the same
-        vector on every frame is the pile translating rigidly, and a rigid
-        translation of a falling pile still fits a parabola. You asked for it
-        applied to all the grains at different strengths; this is that.
+        the amplitude. The identical curve on every body is not a serpentine
+        on a medium at all -- forty grains offset by the same vector on every
+        frame is the pile translating rigidly, and a rigid translation of a
+        falling pile still fits a parabola.
 
         Amplitudes run from half the nominal to the full value so the medium
         spreads as it snakes, and the phases are spread over a full turn so
@@ -1062,16 +1038,15 @@ class NonParabolic(Injector):
 class Newton1Inertia(Injector):
     """A moving body stops dead with nothing to stop it, and stays stopped.
 
-    Halting only. It used to do double duty -- halt a moving body *or* shove a
-    resting one -- and the second half was `phantom_impulse` wearing a different
-    label: an uncaused velocity change on a body with nothing touching it. Two
-    families that overlap on half their cases cannot be scored independently,
-    which is the whole point of keeping them apart, so the shove belongs to
-    `phantom_impulse` and the halt belongs here.
+    Halting only. Shoving a resting body would be `phantom_impulse` wearing a
+    different label -- an uncaused velocity change on a body with nothing
+    touching it -- and two families that overlap cannot be scored
+    independently, so the shove belongs to `phantom_impulse` and the halt
+    belongs here.
 
     That also settles the family's `kind`. The two branches disagreed --
     stopping is a state that persists, shoving is an event -- so the taxonomy
-    could only be right about one of them. Now the window runs to the end of the
+    could only be right about one of them. The window runs to the end of the
     clip, because a body sitting motionless where it should still be sliding is
     violating Newton 1 for every frame it sits there.
     """
@@ -1268,8 +1243,7 @@ class TimeSlip(Injector):
         # `default_event_frame` hides an event behind a screen wherever the
         # scenario offers one, and a stall that happens entirely out of sight is
         # a body that emerges late -- which is not something a viewer can read
-        # as a stall at all. You reported it as barely visible on
-        # `occluder_pass`; this is why.
+        # as a stall at all (barely visible on `occluder_pass`).
         want = _geom.band_frame(spec, T) or max(
             1, int(round(_geom.EVENT_FRACTION * T)))
         occluded = set(int(f) for f in (spec.notes.get("occluded_frames") or []))

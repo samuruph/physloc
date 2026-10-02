@@ -37,7 +37,7 @@ DERIVED_VIOLATOR = {"t_event_frame", "t_observable_frame", "observability_lag_fr
 WINDOW_CLOCKS = {"violation_windows": "active", "intervention_windows": "intervening",
                  "consequence_windows": "consequence", "observable_windows": "observable"}
 
-#: The unit of each energy dataset. Everything used to be tagged "J".
+#: The unit of each energy dataset.
 ENERGY_UNITS = {"mass": "kg", "height": "m", "inertia": "kg*m^2",
                 "momentum": "kg*m/s", "angular_momentum": "kg*m^2/s",
                 "in_frame": None}

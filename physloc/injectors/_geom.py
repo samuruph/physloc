@@ -74,9 +74,9 @@ def top_of(spec, body) -> float:
     # THE MESH'S OWN TOP, not its scale. `scale` is a scale FACTOR, and no
     # KuBasic mesh reaches 1.0 in its own coordinates: a cylinder stops at 0.5,
     # a torus at 0.15, and a cone's tip is at 0.900 while its base is at
-    # -0.306, so it is not even centred on its origin. This used to return
-    # `position + scale` for all of them, which puts a cylinder's support
-    # surface at TWICE its real height and a torus's at nearly seven times.
+    # -0.306, so it is not even centred on its origin. `position + scale`
+    # would put a cylinder's support surface at TWICE its real height and a
+    # torus's at nearly seven times.
     #
     # It matters because this is the datum `support` scores against: a body
     # resting on a cylinder was measured as floating half the cylinder's height
@@ -188,12 +188,9 @@ WINDOW_FRACTION = 0.55
 #: The band an event is drawn from when nothing physical dictates the moment,
 #: as fractions of the clip -- further narrowed by `MIN_VISIBLE_AFTER`.
 #:
-#: It used to be `EVENT_FRACTION` jittered by a tenth either way, one draw per
-#: SCENE: every family on a scene fired at the same moment, and every clip in
-#: the release between a quarter and 45% of the way in. A benchmark whose
-#: violations all begin in one stretch of the clip teaches when to look rather
-#: than what to look for. The lower edge keeps a lawful prefix long enough to
-#: establish what the scene is doing.
+#: Wide on purpose: a benchmark whose violations all begin in one stretch of
+#: the clip teaches when to look rather than what to look for. The lower edge
+#: keeps a lawful prefix long enough to establish what the scene is doing.
 EVENT_BAND = (0.15, 0.70)
 
 #: How much of the clip must remain AFTER an event for its effect to be seen,
@@ -320,10 +317,10 @@ def event_fraction(spec, body_id: Optional[int] = None, salt: int = 0) -> float:
     """A number in [0, 1) keyed on (scene, family, violator, attempt).
 
     NOT on the severity bin: the three severities of one cell must fire
-    together or their magnitudes stop being comparable. But per FAMILY, where
-    it used to be per scene -- two families on one scene firing at the same
-    moment bought comparability nobody used, at the price of a release whose
-    event times clustered. `body_id` gives each violator of a `multi` clip its
+    together or their magnitudes stop being comparable. But per FAMILY, not
+    per scene -- two families on one scene firing at the same moment would buy
+    comparability nobody uses, at the price of a release whose event times
+    cluster. `body_id` gives each violator of a `multi` clip its
     own moment; `attempt` is how the worker asks for a different moment when a
     violator would leave the frame.
 
@@ -446,9 +443,7 @@ def anchored_event_frame(spec, num_frames: int) -> Optional[int]:
     _, _, traj = _EVENT_KEY.get()
     if not cfg or traj is None or not len(getattr(traj, "contacts", ())):
         return None
-    bodies = {int(i) for i in cfg.get("body_ids", ())}
-    partners = {int(i) for i in cfg.get("partner_ids", ())}
-    if not bodies:
+    if not cfg.get("body_ids"):
         return None
     contact = anchor_contact_frame(spec, num_frames)
     if contact is None:
@@ -641,7 +636,7 @@ def visible_band(spec, traj, bodies, lo: int, hi: int) -> Tuple[int, int]:
 #:
 #: 0.4, down from 0.6. Measured over every cell the 61-frame v0 release
 #: declined as "leaves the frame" (722, replayed in the container by
-#: `render/probe_visibility.py`): at 0.6 the gate was turning away clips whose
+#: `scripts/probes/probe_visibility.py`): at 0.6 the gate was turning away clips whose
 #: violator spends most of a 0.7 s window in plain view and then exits --
 #: `non_parabolic`, `superelastic` and `antigravity` lost 46%, 19% and 16% of
 #: their cells that way. The masks still cover only the frames the violator is
@@ -712,8 +707,8 @@ def in_shot_moment(spec, t: Optional[int], lo: int, hi: int,
     fires mid-flight, `non_parabolic` at the start of flight, and on `drop`
     both of those are above the shot.
 
-    **Unchanged whenever `t` already works** -- every clip that rendered before
-    this existed keeps its moment. Otherwise the frames in `[lo, hi]` from
+    **Unchanged whenever `t` already works**, so a moment that is already in
+    shot is never moved. Otherwise the frames in `[lo, hi]` from
     which the lawful rollout passes `violators_visible`, nearest to `t` first,
     with the event attempt choosing among them so a retry is a different
     moment. `t` again when no frame qualifies; the worker's gate decides.
@@ -737,7 +732,7 @@ def in_shot_moment(spec, t: Optional[int], lo: int, hi: int,
     return int(ok[min(event_attempt(), len(ok) - 1)])
 
 
-def window_frames(num_frames: int, t0: int, fraction: float = None,
+def window_frames(num_frames: int, t0: int, fraction: Optional[float] = None,
                   minimum: int = 3) -> int:
     """A sustained window as a share of what is left after the event."""
     frac = WINDOW_FRACTION if fraction is None else fraction
@@ -1404,8 +1399,8 @@ def acting_frame(spec, traj, body_id: int, num_frames: int,
     way into the *clip* is a third of the way into the *landing*: the shove
     arrives one frame before impact and the floor absorbs it, and the split
     happens at the moment of contact so both halves are pinned by friction
-    before they have moved a body-width. You reported both -- a phantom impulse
-    that is barely visible and a fission whose halves end up overlapping.
+    before they have moved a body-width -- a phantom impulse that is barely
+    visible and a fission whose halves end up overlapping.
 
     So a family that acts on a free body fires inside the contact-free run with
     at least `share` of that run still ahead of it, and no earlier than
@@ -1427,15 +1422,14 @@ def acting_frame(spec, traj, body_id: int, num_frames: int,
     # **ROOM AHEAD WINS WHEN THE RUN IS TOO SHORT TO HONOUR BOTH.** The clip
     # fraction keeps a lawful prefix, which is a nicety; `share` keeps free
     # flight after the event, which is the whole reason this function exists.
-    # Taking the max of the two silently inverted the band on a short run and
-    # then clamped to `earliest` -- the LATEST usable frame, which is the
-    # failure the docstring above describes and this was written to prevent.
+    # Taking the max of the two would invert the band on a short run and
+    # clamp to `earliest` -- the LATEST usable frame, the failure the
+    # docstring above describes.
     #
-    # Measured on `pyramid_impact`: the cube is airborne for six frames and
+    # Example, `pyramid_impact`: the cube is airborne for six frames and
     # strikes the pyramid on frame 6, so `latest` is 3 and a floor of a sixth
-    # of a 25-frame clip is 4. The shove landed on frame 4, two frames before
-    # impact, and read as simultaneous with it -- you reported that the impulse
-    # should happen before the falling object touches the pyramid.
+    # of a 25-frame clip is 4. A shove on frame 4, two frames before impact,
+    # reads as simultaneous with it rather than before it.
     floor = int(round(floor_fraction * num_frames))
     if earliest <= floor <= latest:
         earliest = floor
@@ -1464,8 +1458,8 @@ def unoccluded_event_frame(spec, num_frames: int, span: int,
     observability lag is non-zero. Some families need the other thing: a
     `dissolve` that fades out entirely behind a screen is an object that went
     behind a screen and did not come out, which is the picture `permanence`
-    already ships -- you noticed the two were indistinguishable on
-    `occluder_pass`, and this is what separates them.
+    already ships. Keeping the event in view is what separates the two on
+    `occluder_pass`.
 
     Nearest wins, and ties go earlier: shifting back keeps more of the clip for
     the consequence, and a fade that starts before the actor reaches the screen
@@ -1529,10 +1523,10 @@ def hidden_behind_static(spec, point) -> bool:
 
     The declared `occluded_frames` list cannot answer this, and that is not a
     detail. It is computed from the LAWFUL rollout, so it says where the body
-    passes on the path it does not take: on the `occluder_pass` seed in the
-    review sweep it was empty -- the ball never dwells behind the screen when it
-    keeps rolling -- while the friction clip brought it to rest squarely behind
-    it. The question is about the invalid path, so it has to be asked of a
+    passes on the path it does not take: it can be empty -- the ball never
+    dwells behind the screen when it keeps rolling -- while a friction clip
+    brings it to rest squarely behind it. The question is about the invalid
+    path, so it has to be asked of a
     position rather than of a frame index.
 
     Rotated boxes are skipped rather than approximated, and boxes that lie flat

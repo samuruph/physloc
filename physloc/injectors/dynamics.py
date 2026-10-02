@@ -5,7 +5,6 @@ mechanism at two settings of the same dial and share their collision-finding.)
 """
 from __future__ import annotations
 
-import math
 from typing import Dict, Optional
 
 import numpy as np
@@ -26,10 +25,10 @@ class PhantomImpulse(Injector):
     """
 
     family = "phantom_impulse"
-    #: Raised from 1.0 / 2.4 / 4.5. The frustum fit walks these back per scene
-    #: wherever the geometry cannot host them, so the nominal value should be
-    #: what reads clearly rather than what never overflows -- you judged the
-    #: strongest bin too gentle on `drop` and elsewhere.
+    #: The frustum fit walks these back per scene wherever the geometry cannot
+    #: host them, so the nominal value is what reads clearly rather than what
+    #: never overflows (1.0 / 2.4 / 4.5 left the strongest bin too gentle on
+    #: `drop` and elsewhere).
     DV_BY_BIN = {"weak": 1.8, "medium": 4.2, "strong": 10.0}     # m/s
     #: Frames the violator may spend off camera before the fit weakens the shove.
     FRAME_TOLERANCE = 4
@@ -169,13 +168,13 @@ class PhantomImpulse(Injector):
         # purely horizontal one is easy to mistake for a nudge from off screen,
         # while a visible hop is unmistakably uncaused.
         #
-        # A body IN FLIGHT gets a mostly vertical one, and this is the half that
-        # was wrong. `drop` is framed tall and narrow around a fall, so a
+        # A body IN FLIGHT gets a mostly vertical one. `drop` is framed tall
+        # and narrow around a fall, so a
         # sideways shove -- however hard -- takes the actor out of the side of
         # the frame within a few frames: measured, 5 of 21 frames off camera at
-        # the very floor of the fit ladder, and 17 at nominal. The fit could
-        # only respond by weakening the shove, so the strongest bin delivered
-        # 1.9 m/s of a nominal 7.0 and still left the shot. Sending a falling
+        # the very floor of the fit ladder, and 17 at nominal. The fit can
+        # only respond by weakening the shove, so the strongest bin would
+        # deliver 1.9 m/s of a nominal 7.0 and still leave the shot. Sending a falling
         # body UP instead is both unmistakable -- it stops falling and climbs,
         # with nothing to have done it -- and stays in the frame the scenario
         # already sized for the fall.
@@ -206,18 +205,18 @@ class PhantomImpulse(Injector):
         strongest = unit * self.DV_BY_BIN["strong"]
         # A LOOSER framing budget than the default. This family's whole content
         # is a large uncaused displacement, so the fit is the one thing standing
-        # between it and legibility -- on `drop` it clamped to the floor of the
-        # ladder and delivered 1.9 m/s of a nominal 7.0, which is the "barely
-        # visible" you reported. Letting the actor drift out of shot for the
+        # between it and legibility -- at the default budget, on `drop` it
+        # clamped to the floor of the ladder and delivered 1.9 m/s of a nominal
+        # 7.0, which is barely visible. Letting the actor drift out of shot for the
         # last frame or two costs the tail of the mask; a shove nobody can see
         # costs the whole clip.
         # **A MEDIUM IS FITTED AS A MEDIUM.** `stage` adds the push to EVERY
-        # target, and this fitted it on `targets[0]` alone, re-integrated on
-        # its own with nothing around it -- one grain launched out of the box
-        # with no walls, no neighbours and no pile to land in. That grain left
-        # the shot at every rung, so on `pour` the fit bottomed out at 0.28 and
-        # the strongest bin delivered 2.0 m/s of a nominal 7.0 to a pile that
-        # the box then held in place. You reported it as barely visible.
+        # target, so the fit must see every target too. Fitted on `targets[0]`
+        # alone, re-integrated with nothing around it, one grain is launched
+        # out of the box with no walls, no neighbours and no pile to land in;
+        # it leaves the shot at every rung, so on `pour` the fit bottomed out
+        # at 0.28 and the strongest bin delivered 2.0 m/s of a nominal 7.0 to
+        # a pile that the box then held in place -- barely visible.
         #
         # `_rewrite_group` steps the whole medium together against the scene's
         # obstacles, and `_offscreen_frames` already judges a group by the
@@ -541,10 +540,10 @@ class AngularMomentum(Injector):
                 traj.quat[t0 - 1, bi], omega, traj.dt, n)
         return out
 
-    #: STAGED for a FREE body. You reported the spin running on forever and the
-    #: physics never becoming valid again: it could not, because the edited path
-    #: wrote one constant angular velocity into every remaining frame, so the
-    #: body kept that spin through its landing and along the ground. Handed to
+    #: STAGED for a FREE body. An edited path would write one constant angular
+    #: velocity into every remaining frame, so the body would keep that spin
+    #: through its landing and along the ground and the physics would never
+    #: become valid again. Handed to
     #: the solver as a one-off change of angular velocity, the torque is an
     #: impulse and everything after it is real -- the spin persists in flight,
     #: because that is what conservation means, and contact damps it when the

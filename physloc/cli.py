@@ -29,7 +29,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------- taxonomy
 def cmd_taxonomy(a) -> int:
     from .taxonomy import (DOMAINS, FAMILIES, MEDIA, SCENARIOS,
-                           SEVERITY_BINS, build_cells, validate_taxonomy)
+                           build_cells, validate_taxonomy)
     validate_taxonomy()
     print("MEDIA (%d)  -- level 0, the LikePhys-style macro-category" % len(MEDIA))
     for m, why in MEDIA.items():
@@ -130,7 +130,7 @@ def _workers(value) -> int:
 #: real; at 512sq the sampling cost dominates and the true ratio is 2.6x. The
 #: guess was 60% high, on the quarter of the dataset that is L2 and L3.
 #:
-#: `physloc/render/probe_cost.py` reproduces every per-frame number here, and
+#: `scripts/probes/probe_cost.py` reproduces every per-frame number here, and
 #: needs an IDLE box to do it -- check `docker ps` first.
 SECONDS_PER_CLIP = {("debug", "solid"): 8.0, ("debug", "hdri"): 44.0,
                     ("release", "solid"): 228.0, ("release", "hdri"): 518.0}
@@ -263,9 +263,9 @@ OUTPUT_ROOT = "out"
 def _under_out(path):
     """A relative output path, placed under `out/` unless it already is there.
 
-    `generate --outdir r --workdir w` used to create `r/` and `w/` in the
-    repository root, beside the source code. A bare or relative name now lands
-    in `out/r` and `out/w`; a path already under `out/` is unchanged. Absolute
+    Keeps generated output out of the repository root: a bare or relative
+    name lands in `out/r` and `out/w`; a path already under `out/` is
+    unchanged. Absolute
     paths, and relative ones that climb out with `..`, are left as given --
     those are an explicit choice of somewhere else.
     """
@@ -366,7 +366,7 @@ def _print_release_size(cells, a) -> None:
         if unmeasured:
             print("   note: %s differ from the %s tier; the price uses the per-frame "
                   "cost measured at %d px / %d spp -- re-measure with "
-                  "physloc/render/probe_cost.py"
+                  "scripts/probes/probe_cost.py"
                   % (" and ".join(unmeasured), a.tier, base_tier.resolution,
                      base_tier.samples_per_pixel))
     for level, n_v in levels:
@@ -555,14 +555,14 @@ NO_PLAN = "injector produced no plan"
 def _decline_only(info) -> bool:
     """Whether a non-zero worker result is only a sample-level decline.
 
-    The renderer uses exit code 3 when every requested injector declines its
+    The worker exits non-zero (2) when every requested injector declines its
     sampled scene. That is scheduling information, not a renderer failure: the
     generator must expose the variant records to its fresh-seed retry loop.
 
     ANY stated reason counts, not only "no plan": a cell declined because its
     violator leaves the frame, or because a `multi` clip found one body to act
-    on, is an outcome the worker reached and reported -- the check run of the
-    v0 feedback logged such retries in `failures/` beside real crashes. A
+    on, is an outcome the worker reached and reported, and must not be logged
+    in `failures/` beside real crashes. A
     failure is a worker that produced no report at all (a crash, an OOM kill),
     or one whose report is an ERROR rather than a decision -- an exception
     while planning, a broken prefix, an annotation that crashed
@@ -730,9 +730,8 @@ def cmd_generate(a) -> int:
 
     # ----------------------------------------------------------------- resume
     # A RUN THAT DIES AT 80% MUST NOT START OVER. A release run is days, and
-    # until now `generate` had no memory at all: every invocation rebuilt every
-    # clip, so an interrupted run -- a spot reclaim, a full disk, a Ctrl-C --
-    # threw away everything it had already paid for.
+    # an interrupted run -- a spot reclaim, a full disk, a Ctrl-C -- must not
+    # throw away everything it has already paid for.
     #
     # The ledger is one small json per JOB, written only after the job has
     # fully landed (worker ok, annotation done, overlays built). `--resume`
@@ -964,10 +963,9 @@ def cmd_generate(a) -> int:
                 "info": info, "results": results, "bad": bad,
                 "skipped": skipped}
 
-    # A progress line as each job lands. The parallel path used to collect
-    # every outcome before printing anything, so a twenty-minute run showed
-    # nothing at all until it finished. The ordered results still print
-    # afterwards, so the transcript stays identical at any worker count.
+    # A progress line as each job lands, so a long run shows progress before
+    # it finishes. The ordered results still print afterwards, so the
+    # transcript stays identical at any worker count.
     #
     # RETRIES PUSH THE TOTAL UP. A declined cell is rebuilt on a fresh seed, so
     # the job count is not known until the run is over; `bump` widens the bar
@@ -1049,13 +1047,11 @@ def cmd_generate(a) -> int:
     def _failure_save(job, outcome):
         """Write why a job failed next to the release, and return the path.
 
-        The reason used to reach the terminal and nowhere else, capped at 400
-        characters in the end-of-run summary. The first v0 release run lost
-        every failure that way: its terminal went with the instance, and what
-        was left on disk was a progress log saying FAILED 176 times and nothing
-        about why. A job that fails now leaves its whole stderr tail -- or the
-        worker's own report, when it produced one -- in `failures/`, named like
-        its ledger entry, so a rerun of the same job overwrites it.
+        The end-of-run summary caps each reason at 400 characters and lives
+        only in the terminal, which may not outlive the run. So a job that
+        fails leaves its whole stderr tail -- or the worker's own report, when
+        it produced one -- in `failures/`, named like its ledger entry, so a
+        rerun of the same job overwrites it.
         """
         seed, scenario, families, variant, level, _n = job
         path = _failure_path(job)
@@ -1088,10 +1084,9 @@ def cmd_generate(a) -> int:
     container_cap = {}
 
     # STOPPING. A render container does not die with the process that started
-    # it, so Ctrl-C used to stop only this front-end while dozens of containers
-    # rendered on -- and threads queued for memory went on starting new ones.
-    # Every container now carries this run's id as a label; the first Ctrl-C
-    # (or SIGTERM) stops new jobs from starting and kills exactly those
+    # it, so stopping only this front-end would leave containers rendering on.
+    # Every container carries this run's id as a label; the first Ctrl-C (or
+    # SIGTERM) stops new jobs from starting and kills exactly those
     # containers, and a second exits at once.
     import threading
 
@@ -1112,12 +1107,10 @@ def cmd_generate(a) -> int:
                                      items))
         return [run_and_report(job, i) for i, job in items]
 
-    # NO SERIAL WARM-UP JOB. One used to run alone "to populate Kubric's asset
-    # cache", but the pinned Kubric has no shared cache: `AssetSource` copies
-    # every asset into its own `tempfile.mkdtemp()` inside a `--rm` container,
-    # so there is nothing for two containers to race on. At release geometry
-    # that one job is ~40 renders, which held a 32-core box at one container
-    # for most of half a day.
+    # NO SERIAL WARM-UP JOB. The pinned Kubric has no shared asset cache:
+    # `AssetSource` copies every asset into its own `tempfile.mkdtemp()` inside
+    # a `--rm` container, so there is nothing for two containers to race on,
+    # and a warm-up job would only hold the box at one container.
     outcomes = run_all(jobs)
 
     # A cell that DECLINED THIS SAMPLE gets another one.
@@ -1413,11 +1406,10 @@ def _threads_for(running: int, cores: int) -> int:
 #:      pour     L0 4.5-4.9   L2 3.7-4.0   L3 39-47
 #:      others   L2 ~1.1      L3 1.8-3.7   (collision, rolling_ramp)
 #:
-#: -- charged with a margin. Lower charges once admitted too many workers and
-#: the host OOM killer terminated twelve `pour` jobs and the coordinator.
+#: -- charged with a margin: lower charges admit too many workers, and the
+#: host OOM killer then terminates jobs and the coordinator.
 #:
 #: A `None` scenario is the charge for every other scenario at that level.
-# Full release pour jobs exceeded the old 10 GiB cap (kernel MEMCG OOM).
 # Mid-render RSS is not the peak during pass extraction or later variants.
 #
 # The 61-frame v0_release run (2026-09) lost 33 of 260 jobs to MEMCG OOM, each
@@ -1614,11 +1606,11 @@ class AnnotationDeclined(Exception):
 class _SampleAnnotator:
     """Annotate each completed render into a schema-v4 sample immediately.
 
-    Videos used to appear only when a whole job ended: a job renders its valid
-    twin and then every family at every severity -- about fifty clips, fifteen
-    to twenty hours into a release run on a busy machine -- and only then was
-    anything annotated. The worker announces each finished render, and its clip
-    is annotated here the moment it lands.
+    A job renders its valid twin and then every family at every severity --
+    about fifty clips, many hours at release geometry -- so waiting for the
+    whole job before annotating anything delays every video. The worker
+    announces each finished render, and its clip is annotated here the moment
+    it lands.
 
     On a thread of its own, so a slow annotation never stalls reading the
     container's output; one clip at a time, because a job's clips share its
@@ -1700,8 +1692,6 @@ def _condition_in(pair_dir) -> Optional[str]:
     Only needed for runs generated before the condition joined the clip path;
     a current one carries it in the directory name.
     """
-    import glob
-
     from .annotate import layout
 
     for mp in glob.glob(os.path.join(pair_dir, "**", layout.SAMPLE_METADATA),
@@ -1766,8 +1756,6 @@ def cmd_viz(a) -> int:
     Nothing is re-rendered -- it reads the samples already on disk, so it costs
     seconds and can be run again after any change to the visualisers.
     """
-    import glob
-
     from .viz.grid import build, sheet
 
     root = a.root

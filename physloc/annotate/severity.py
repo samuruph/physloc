@@ -63,8 +63,8 @@ class NoiseFloor:
         family reference of 5.5 -- a negative denominator -- and a clean
         phantom-impulse signal of 5.4 scored as exactly zero.
 
-        Gating those frames out instead was the first attempt and it was worse:
-        it fixed the airborne scenarios and silently zeroed every family staged
+        Gating those frames out instead is worse: it fixes the airborne
+        scenarios and silently zeroes every family staged
         on a body that rests on a table or slides down a ramp, which is in
         contact on every frame it exists. A robust estimator fixes both without
         anyone having to declare which frames to trust.
@@ -92,8 +92,8 @@ def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
     one number throws away the part that matters whenever a lawful clip's
     residual is not stationary -- which is most of them.
 
-    Three separate families shipped with a severity of exactly zero before this
-    was per-frame. The clearest: a `drop` twin is airborne for half the
+    A single per-clip scalar can score a clean violation as exactly zero. The
+    clearest case: a `drop` twin is airborne for half the
     clip and resting on the floor for the rest, and Kubric reports a contact
     *force* rather than an impulse, so its momentum residual is 0 while falling
     and about 20 while resting. No single scalar describes that. The median came
@@ -147,7 +147,6 @@ def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],
     whole frame instead.
     """
     s = seg[..., 0] if seg.ndim == 4 else seg
-    T = s.shape[0]
     out = np.zeros(s.shape, np.float32)
 
     if global_value is not None:

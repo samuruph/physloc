@@ -27,8 +27,11 @@ def test_worker_decline_exit_is_retryable_but_real_errors_are_not():
                               "error": cli.NO_PLAN}]}
     assert cli._decline_only(declined)
     assert not cli._decline_only({"stderr": "blender crashed"})
+    # Any stated reason is a decision the worker reached -- except a bug.
+    assert cli._decline_only(
+        {"variants": [{"ok": False, "error": "violator leaves the frame"}]})
     assert not cli._decline_only(
-        {"variants": [{"ok": False, "error": "corrupt EXR"}]})
+        {"variants": [{"ok": False, "error": "plan raised: KeyError('x')"}]})
 
 
 def _run(monkeypatch, argv, declines_while):
@@ -52,7 +55,7 @@ def _run(monkeypatch, argv, declines_while):
                 out.append({"family": f, "ok": False, "error": cli.NO_PLAN})
             else:
                 out.append({"family": f, "ok": True, "dir": "/dev/null"})
-        # The renderer reports a declined-only batch with exit code 3. The
+        # The renderer reports a declined-only batch with a non-zero exit. The
         # scheduler must still route those structured records to its retry
         # loop rather than misclassifying them as a Blender failure.
         rc = 3 if any(not item["ok"] for item in out) else 0

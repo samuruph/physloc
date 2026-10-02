@@ -1,15 +1,15 @@
 """Step PyBullet forward from a state we choose -- the simulated-intervention seam.
 
-Until now every injector edited a *finished* trajectory, and everything after
-`t_event` was re-integrated by our own resolver against sphere and box
+An *edited* injector rewrites a finished trajectory and re-integrates
+everything after `t_event` with our own resolver, against sphere and box
 approximations taken from the scene spec. That resolver does not know about
 `scale_mul`, does not know that a teleported body is already past the wall, and
-does not produce real contacts. So a clip could show a ball bouncing off a
+does not produce real contacts -- a clip could show a ball bouncing off a
 barrier it had been moved beyond, or two bodies "colliding" without touching.
 
 Kubric's `simulator.run(frame_start, frame_end)` continues from whatever state
-the physics client is currently in rather than resetting it, so the honest fix
-was available all along: put the world back to the valid state at `t_event`,
+the physics client is currently in rather than resetting it, so a *staged*
+injector does better: put the world back to the valid state at `t_event`,
 make the intervention a change the *simulator* honours, and let PyBullet run.
 Prefix identity is untouched, because frames before `t_event` are copied from
 the valid rollout verbatim.
@@ -539,14 +539,11 @@ class ShapeSwap:
             shape = pb.createCollisionShape(pb.GEOM_BOX,
                                             halfExtents=half.tolist())
         else:
-            # THE HULL HAS TO MATCH THE SHAPE THAT IS DRAWN. A unit-sphere
-            # hull was right while actors were only spheres and cubes, and
-            # became wrong the moment cylinders, cones and tori joined the
-            # actor set: a cone inside a spherical collider FLOATS. Measured in
-            # the pinned image at scale 0.5, dropped on a plane -- the KuBasic
-            # cone rests at z = 0.156 and the sphere proxy at 0.397, which is
-            # the pair of halves you saw hanging in the air on `drop x
-            # fission`. Following the asset's own bounds brings it to 0.124.
+            # THE HULL HAS TO MATCH THE SHAPE THAT IS DRAWN. A cone inside a
+            # spherical collider FLOATS: measured in the pinned image at scale
+            # 0.5, dropped on a plane, the KuBasic cone rests at z = 0.156 and
+            # a unit-sphere proxy at 0.397. Following the asset's own bounds
+            # brings it to 0.124.
             #
             # `self.obj.bounds` is the live mesh extent, which is the authority;
             # `KIND_BOUNDS` is the same numbers for anything that has no asset.
@@ -610,13 +607,10 @@ class Vanish:
     anything, and those consequences belong to the solver rather than to a
     correction applied afterwards.
 
-    Both families used to edit the trajectory and then repair the scene by hand
-    -- `_settle_bystanders` re-integrating whatever the vanished body would have
-    struck. That produces a different answer from the simulator's, and on
-    `pyramid_impact` you could see the difference: `dissolve` displaced three
-    spheres by 0.12 to 0.49 m through the hand correction while the staged
-    families displaced a different set by different amounts. Same scene, same
-    claim, two mechanisms.
+    Staged rather than edited: editing the trajectory and repairing the scene
+    by hand (`_settle_bystanders` re-integrating whatever the vanished body
+    would have struck) gives a different answer from the simulator's, so the
+    same scene and the same claim would come out of two mechanisms.
 
     Parked rather than removed, for the reason `ShapeSwap` parks: Kubric's
     traitlet setters close over the body's index, so removing it makes the next

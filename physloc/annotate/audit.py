@@ -57,8 +57,8 @@ def measure_sample(sample_dir: str, twin=None) -> Dict[str, object]:
     out["peak_severity"] = float(np.asarray(tl["severity"]).max())
     out["observable_frames"] = int(np.asarray(tl["observable"]).sum())
 
-    # Divergence is no longer shipped; it is computed from the two videos, which
-    # is what it always was -- so this needs the valid twin beside the clip.
+    # Divergence is not shipped; it is computed from the two videos, so this
+    # needs the valid twin beside the clip.
     mask = sample.violation.mask
     if mask.any() and sample.twin is not None:
         out["evidence"] = float(sample.divergence[mask].max())

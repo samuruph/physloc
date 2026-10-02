@@ -6,8 +6,8 @@
 # says "the room is not in sampling" -- 74% of every frame is something else,
 # and nobody has ever measured what. This sweep names it.
 #
-#   bash scripts/probe_backend.sh              # L0 at release geometry
-#   bash scripts/probe_backend.sh L2 512 64    # level, resolution, spp
+#   bash scripts/probes/probe_backend.sh              # L0 at release geometry
+#   bash scripts/probes/probe_backend.sh L2 512 64    # level, resolution, spp
 #
 # THE BOX MUST BE IDLE. Blender takes every core it can get, so a probe run
 # beside a generation job measures the contention, not the render. Check first:
@@ -42,7 +42,7 @@
 # pair are rendered by one process with one setting.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 LEVEL="${1:-L0}"
 RES="${2:-512}"
@@ -64,7 +64,7 @@ run() {
   # `env -u` so an unset dial is genuinely unset inside the container rather
   # than an empty string -- docker/kubric.sh forwards by name, and "" and unset
   # mean different things to _render_backend.
-  env "$@" bash docker/kubric.sh physloc/render/probe_cost.py \
+  env "$@" bash docker/kubric.sh scripts/probes/probe_cost.py \
       --complexity "$LEVEL" --resolution "$RES" --spp "$SPP" \
       --frames "$FRAMES" 2>/dev/null | grep '^COST' || echo "FAILED"
 }

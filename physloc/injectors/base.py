@@ -106,15 +106,13 @@ class InterventionPlan:
     def _detectable_windows(self) -> List[Tuple[int, int]]:
         """`windows` is WHERE THE EVIDENCE IS, not the union of the two.
 
-        It used to be the union, and that quietly contradicted the annotation
-        shipped beside it. `annotate.pipeline` paints the mask and the severity
-        on the *scored* window, which for a family whose evidence is the change
-        itself (`detectable == "event"`) is the intervention: a cube that has
-        finished turning green is an ordinary green cube, and no later frame
-        contains anything to see. So `drop x colour_shift` declared
-        `violation_windows [[7, 24]]` and shipped a mask with pixels on 7-12,
-        and `validate` was right to call it -- for all seventeen `event`
-        families, on every clip.
+        The union would contradict the annotation shipped beside it.
+        `annotate.pipeline` paints the mask and the severity on the *scored*
+        window, which for a family whose evidence is the change itself
+        (`detectable == "event"`) is the intervention: a cube that has finished
+        turning green is an ordinary green cube, and no later frame contains
+        anything to see. A union would declare `violation_windows [[7, 24]]`
+        beside a mask with pixels only on 7-12, which `validate` rejects.
 
         Reporting the union asks a model to flag frames that provably contain
         no evidence, which is worse than the narrower claim being occasionally
@@ -341,17 +339,15 @@ class Injector:
         The worker refuses the staged path for a plan whose causal body is
         `scripted`, and it is right to: such a body is pinned at mass 0, so
         resetting the world and running forward leaves it sitting exactly where
-        it was, and five families on `pendulum_swing` all shipped the same
-        picture of a stopped pendulum that way.
+        it was -- a picture of a stopped pendulum on `pendulum_swing`.
 
-        `fission` is the exception the rule did not know about. Its understudy
-        is *deliberately* scripted -- parked and invisible from frame 0 -- and
-        `ShapeSwap(dynamic=True)` exists precisely to stand a genuinely dynamic
-        proxy in its place. So the blanket guard silently sent the one family
-        equipped to overcome it down the edited path instead, where the halves
-        were re-integrated by hand and came to rest 0.41 m in the air: the
-        floating cones you reported. Nothing failed and nothing was logged --
-        `_apply` is a legitimate fallback, just not this family's.
+        `fission` is the exception. Its understudy is *deliberately* scripted
+        -- parked and invisible from frame 0 -- and `ShapeSwap(dynamic=True)`
+        exists precisely to stand a genuinely dynamic proxy in its place. A
+        blanket guard would silently send it down the edited path instead,
+        where the halves are re-integrated by hand and come to rest 0.41 m in
+        the air. Nothing would fail and nothing would be logged -- `_apply` is
+        a legitimate fallback, just not this family's.
 
         Declared here rather than inferred, so the worker asks the injector
         what it is going to do instead of guessing from the spec.
@@ -505,7 +501,6 @@ class Injector:
             return out
 
         contacts = _geom.geometric_contacts(spec, out)
-        T = out.num_frames
         for body in movers:
             bid = int(body.segmentation_id)
             bi = out.index_of(bid)
@@ -738,13 +733,11 @@ class Injector:
             if chosen:
                 return chosen
         frac = float(spec.notes.get("group_fraction") or 0.0)
-        # TWO, not four. The threshold used to be four live actors, from when
-        # the only caller was `pour` asking for a share of forty grains -- but
-        # the `multi` condition draws its object count from three upward, and
-        # at N = 3 the guard silently handed back ONE violator on a clip whose
-        # metadata said two. A fraction is only ever set deliberately (by a
-        # scenario, or by the condition), so where one exists it should be
-        # honoured rather than second-guessed.
+        # TWO live actors, not more: the `multi` condition draws its object
+        # count from three upward, and a higher threshold would silently hand
+        # back ONE violator on a clip whose metadata says two. A fraction is
+        # only ever set deliberately (by a scenario, or by the condition), so
+        # where one exists it should be honoured rather than second-guessed.
         if frac <= 0.0 or len(live) < 2:
             if spec.notes.get("randomize_violation_target"):
                 return [live[int(self._instance_rng(spec).randint(len(live)))]]
@@ -770,13 +763,11 @@ class Injector:
 
         A scene of many interchangeable falling bodies has a moment, and it is
         not "a third of the way in". Measured on `pour` at the debug tier, the
-        grains reach the floor between frames 3 and 8 of 25 -- so every family
-        whose event frame came from a fraction of the clip was intervening on a
-        pile that had already settled. You reported the consequences one by
-        one: `continuity` teleporting grains that were lying on the floor,
-        `newton1_inertia` stopping bodies that had already stopped,
-        `global_gravity` bending gravity for a pile at rest, `newton2_mass`
-        exchanging momentum between two grains in a heap. A pour that
+        grains reach the floor between frames 3 and 8 of 25 -- so a family
+        whose event frame came from a fraction of the clip would intervene on a
+        pile that had already settled: `continuity` teleporting grains lying on
+        the floor, `newton1_inertia` stopping bodies that had already stopped,
+        `global_gravity` bending gravity for a pile at rest. A pour that
         misbehaves in flight is visible; a pile that twitches is not.
 
         Only for a genuine medium -- two bodies or fewer keep whatever moment
@@ -977,12 +968,10 @@ class Injector:
 
     #: Fractions of the nominal intervention to try, strongest first.
     #:
-    #: Finer than the 1.0 / 0.72 / 0.52 / 0.36 / 0.24 it started as, and that
-    #: coarseness was costing real strength: a clip whose geometry could host
-    #: 0.70 of the nominal shove was offered 0.72, failed it by one frame, and
-    #: got 0.52 -- a quarter of the violation thrown away to a rounding of the
-    #: search grid. You reported `phantom_impulse` as barely visible at its
-    #: strongest bin, which is what that looks like from the outside.
+    #: Fine-grained, because coarseness costs real strength: on a grid of
+    #: 1.0 / 0.72 / 0.52 / ..., a clip whose geometry could host 0.70 of the
+    #: nominal shove is offered 0.72, fails it by one frame, and gets 0.52 --
+    #: a quarter of the violation thrown away to a rounding of the grid.
     FIT_LADDER = (1.0, 0.90, 0.80, 0.71, 0.63, 0.55, 0.48, 0.41, 0.34, 0.28)
 
     #: A further multiplier on whatever `_fit_to_frame` settles on, set by the
@@ -1009,7 +998,7 @@ class Injector:
 
         The three severity bins of a cell all fit on the STRONGEST bin -- that
         is what keeps them comparable -- so their fits are the same fit, and
-        each used to be recomputed from scratch. `memo` is the caller's name
+        are computed once. `memo` is the caller's name
         for what `build` does (its knob and direction); the scene, trajectory,
         bodies, frame, tolerance and search space complete the key. The spec
         and trajectory are identified by object and kept alive in the entry,
@@ -1051,10 +1040,10 @@ class Injector:
     def _fit_gate(self, spec, traj, bodies, t0: int) -> bool:
         """Would the worker's visibility gate accept `traj` for these bodies?
 
-        The fits used to count frames off screen against a budget, which is
-        not the question the worker asks: it wants the opening moments after
-        the event in shot and a share of the span after it. A fit that passed
-        its budget and failed the gate declined the whole variant.
+        Not a count of frames off screen against a budget, which is not the
+        question the worker asks: it wants the opening moments after the event
+        in shot and a share of the span after it. A fit that passed a budget
+        and failed that gate would decline the whole variant.
         """
         movers = [b for b in bodies if not getattr(b, "static", False)]
         if spec is None or not movers or not isinstance(traj, Trajectory):
@@ -1151,8 +1140,8 @@ class Injector:
         The counterpart to `_fit_to_frame`, and the right one whenever the bin
         is a *qualitative* claim. Weakening the knob to keep a body on screen
         turns "gravity reverses" into "gravity is slightly reduced" -- the clip
-        no longer shows what its label says, which is the failure the user
-        reported on `antigravity`. Shortening the window keeps the reversal and
+        no longer shows what its label says (on `antigravity`, for example).
+        Shortening the window keeps the reversal and
         just gives it less time to carry the body out of frame.
 
         Never goes below `floor` frames, because `_pulse` needs a ramp on each
@@ -1326,13 +1315,12 @@ class Injector:
         vel = np.zeros((len(idx), n, 3), np.float64)
         radii = np.asarray(rad, np.float64)
         reach_all = radii[:, None] + radii[None, :]
-        # BROAD PHASE, vectorised. The pairwise pass below used to visit every
-        # pair on every substep in Python -- 22,366 pairs for `pour`'s 212
-        # grains, 24 substeps a frame, 33 million norm() calls and 175 s per
-        # rollout at release geometry, which a frustum fit then repeated tens
-        # of times per bin. Only pairs within a margin of touching can collide,
-        # so they are found with one distance matrix and resolved exactly as
-        # before, in the same (a, b) order. The margin is one of the largest
+        # BROAD PHASE, vectorised. Visiting every pair on every substep in
+        # Python is 22,366 pairs for 212 grains at 24 substeps a frame -- 175 s
+        # per rollout at release geometry, repeated tens of times per bin by a
+        # frustum fit. Only pairs within a margin of touching can collide, so
+        # they are found with one distance matrix and resolved exactly, in the
+        # same (a, b) order as a full pass. The margin is one of the largest
         # radius: a pair apart by more than that cannot be pushed into contact
         # by the pushes of earlier pairs in the same substep, each of which
         # moves a body by at most half an overlap.

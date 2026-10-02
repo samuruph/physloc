@@ -481,7 +481,7 @@ def body_state(traj, spec) -> Dict[str, np.ndarray]:
         "body_ids": np.asarray(traj.body_ids, np.int32),
         # Names beside ids so the file is self-describing: `seg == body_ids[j]`
         # is the mask for `body_names[j]` over the whole clip, without having to
-        # cross-reference meta.json.
+        # cross-reference sample.json.
         "body_names": np.asarray([str(n) for n in traj.body_names], dtype="U32"),
         "static": is_static,
         "present": np.asarray(traj.present, bool),

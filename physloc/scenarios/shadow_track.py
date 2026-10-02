@@ -5,7 +5,7 @@ hidden from camera rays and visible only to shadow rays; the visible actor has
 its shadow ray disabled.  Optical interventions move or deform that internal
 caster, so Cycles still performs the light transport while the RGB actor stays
 unchanged.  The caster is renderer-only and is removed from public object,
-segmentation, physics and energy annotations by the v3 writer.
+segmentation, physics and energy annotations by the schema writer.
 """
 from __future__ import annotations
 

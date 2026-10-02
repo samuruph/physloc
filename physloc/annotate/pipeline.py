@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -176,9 +176,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # Pixel-level prefix identity, measured here because this is the only place
     # both renders are in memory at once. The trajectory-level check runs in the
-    # worker and is exact; it passed on all 176 cells of the review sweep while
-    # 29 of them rendered differently before `t_event` anyway, because the
-    # divergence was in the replay, downstream of the trajectory.
+    # worker and is exact, but a render can still differ before `t_event` when
+    # the divergence is in the replay, downstream of the trajectory.
     _te = int((plan_d or {}).get("t_event_frame", 0))
     prefix_diff = 0
     if _te > 0:
@@ -369,9 +368,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "s_invalid": _weighted("s_invalid"),
             "s_valid": _weighted("s_valid"),
         }
-    r_valid, r_invalid = primary["r_valid"], primary["r_invalid"]
+    r_invalid = primary["r_invalid"]
     floor, r_strong = primary["floor"], primary["r_strong"]
-    s_invalid, s_valid = primary["s_invalid"], primary["s_valid"]
+    s_invalid = primary["s_invalid"]
 
     # ---- 3.2 windows and timelines ---------------------------------------
     plan_windows = [tuple(w) for w in plan_d["violation_windows"]]
@@ -635,9 +634,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         # the violators are ON SCREEN; this is the stricter question of
         # whether the violation ever shows in the pixels, and a body can be in
         # shot while what it does wrong is hidden -- `support` failing behind
-        # the `occluder_pass` screen. These used to reach the schema writer
-        # and fail its window check with a bare ValueError (17 of them in the
-        # v0 release); they are a decline, said as one.
+        # the `occluder_pass` screen. Such a clip is a decline, said as one,
+        # rather than a bare ValueError from the schema writer's window check.
         raise NotObservable("violation never observable: no violator has an "
                             "observable frame in the invalid clip")
 
@@ -790,7 +788,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         #
         # A shadow is in view when the shadow is, not when a causal body has
         # segmentation: its causal id is the renderer-only caster, which never
-        # has any, so every shadow clip used to measure as fully occluded.
+        # has any, so a shadow clip would measure as fully occluded.
         seen = seen_all if shadow_component and label == "invalid" else None
         if meta.get("violation"):
             meta["violation"]["difficulty_inputs"] = diff_mod.inputs_for_meta(
@@ -1134,11 +1132,9 @@ def _params_block():
 def _condition_of(spec_d) -> str:
     """The condition a clip carries.
 
-    Read off the SPEC, which resolved it once. It used to be recomputed here
-    from the variant index alone, and that stopped being enough the moment the
-    condition began depending on how many variants the level was given -- the
-    metadata would have said `standard` for clips that were built with
-    distractors. One decider, recorded, and everything else reads it.
+    Read off the SPEC, which resolved it once. The variant index alone is not
+    enough to recompute it: the condition also depends on how many variants
+    the level was given. One decider, recorded, and everything else reads it.
     """
     got = spec_d.get("condition")
     if got:
@@ -1270,11 +1266,9 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "generator_commit": os.environ.get("PHYSLOC_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",
             "render_seed": seed,
-            # MEASURED, not asserted. This was a hardcoded `True` and the
-            # validator has been checking it ever since, which is how 29 of 176
-            # clips shipped with renders that differed *before* t_event
-            # (`replay()` was not idempotent -- see worker._clear_animation).
-            # A provenance field that cannot be false is not provenance.
+            # MEASURED, not asserted: renders can differ *before* t_event even
+            # when trajectories do not (see worker._clear_animation). A
+            # provenance field that cannot be false is not provenance.
             "prefix_identical_verified": bool(prefix_diff == 0),
             "prefix_differing_pixels": int(prefix_diff),
             "prefix_identical_upto_frame": tinfo["t_event_frame"],

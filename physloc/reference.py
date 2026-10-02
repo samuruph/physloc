@@ -43,7 +43,7 @@ def domains() -> str:
     for name, fam in FAMILIES.items():
         by_dom[fam.domain].append(name)
     cells = collections.Counter()
-    for scen, fam in build_cells():
+    for _scen, fam in build_cells():
         cells[FAMILIES[fam].domain] += 1
     rows = [["**%s**" % d, q, len(by_dom[d]), cells[d],
              ", ".join("`%s`" % f for f in sorted(by_dom[d]))]

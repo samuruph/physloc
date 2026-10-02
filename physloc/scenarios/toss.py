@@ -57,10 +57,9 @@ class Toss(Scenario):
         # pictures of the same physics. Drawn off the appearance
         # stream -- see `C.pick_shape`.
         kind = C.pick_shape(arng)
-        # THROWN WITH SPIN, which is what `tumble` used to be for. Retiring that
-        # scenario left this one as the only free-flight throw, and a body
-        # thrown without any rotation at all is the less interesting half of
-        # what a throw looks like.
+        # THROWN WITH SPIN: this is the only built free-flight throw (`tumble`
+        # is unbuilt), and a body thrown without any rotation at all is the
+        # less interesting half of what a throw looks like.
         #
         # A SPHERE gets none, and that is not an oversight: with the v0 asset
         # set the primitives are untextured, so a spinning ball is

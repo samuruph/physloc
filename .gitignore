@@ -20,7 +20,6 @@ env/
 data/
 renders/
 out*/
-out_review_old/
 clips/
 physviol_v0/
 *.npz

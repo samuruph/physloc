@@ -19,7 +19,7 @@ One measurement per invocation -- a PyBullet connection does not survive a
 second scene in the same interpreter -- so loop over the points outside:
 
     for L in L0 L2; do for S in 16 64; do
-      bash docker/kubric.sh physloc/render/probe_cost.py \
+      bash docker/kubric.sh scripts/probes/probe_cost.py \
            --complexity $L --spp $S --resolution 512 --frames 2
     done; done
 
@@ -35,7 +35,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
-import numpy as np
 
 
 def main() -> int:

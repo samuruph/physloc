@@ -189,7 +189,7 @@ defaults:
 As shipped these restate the tier and change nothing. Change one and only that field moves:
 every clip records it in its tier name (e.g. `release+f49`), and `taxonomy` scales its price
 with `frames`. Resolution and spp change the per-frame cost itself, so re-measure it with
-`physloc/render/probe_cost.py` before trusting a price at a new size.
+`scripts/probes/probe_cost.py` before trusting a price at a new size.
 
 ## Generation knobs
 

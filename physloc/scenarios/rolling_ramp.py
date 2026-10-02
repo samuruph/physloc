@@ -84,11 +84,11 @@ class RollingRamp(Scenario):
         mu = float(rng.uniform(0.25, 0.38))
         d, _ = C.ramp_axes(tilt)
         # NEAR THE TOP, so the slide is a visible stretch of the clip rather
-        # than a few frames before the lip. It used to start 0.55-0.78 m above
-        # the lip at a launch speed of ~2 m/s, which had the block off the slab
-        # within the opening frames: every contact-phase violation (`friction`,
-        # `newton1_inertia`) had almost nothing to act on, and what it did act
-        # on was over before a viewer had seen what lawful sliding looks like.
+        # than a few frames before the lip. Starting just above the lip at
+        # ~2 m/s has the block off the slab within the opening frames: every
+        # contact-phase violation (`friction`, `newton1_inertia`) would have
+        # almost nothing to act on, over before a viewer has seen what lawful
+        # sliding looks like.
         # The longer ramp is what keeps the airborne stretch after the lip that
         # `angular_momentum` needs within reach of the debug tier.
         start_along = -half_len + half + float(rng.uniform(0.10, 0.45))

@@ -3,7 +3,7 @@
 `ShapeSwap` is the only way a body changes size mid-run -- `immutability`,
 `deformation` and `fission` all go through it -- and it builds a convex hull
 from these vertices. Every number below was measured in the pinned image by
-`physloc/render/probe_fission.py`, dropping the real KuBasic asset and the
+`scripts/probes/probe_fission.py`, dropping the real KuBasic asset and the
 proxy onto the same plane and reading where each came to rest.
 
 The bug this exists for: the hull was a unit sphere spanning [-1, +1] for every

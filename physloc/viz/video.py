@@ -6,7 +6,7 @@ arrays and all video is produced here.
 from __future__ import annotations
 
 import os
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 

@@ -41,7 +41,7 @@
 #
 #   PHYSLOC_DENOISER=OPENIMAGEDENOISE bash scripts/run_fast.sh review_L0
 #
-# `scripts/probe_backend.sh` reproduces every number above on your own box.
+# `scripts/probes/probe_backend.sh` reproduces every number above on your own box.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

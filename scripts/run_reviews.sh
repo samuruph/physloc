@@ -16,7 +16,7 @@
 # `PHYSLOC_PUSH_OWNER` makes each run publish to <owner>/physloc-<config>;
 # leave it unset to keep everything local.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 DIALS=()
 SUFFIX=""

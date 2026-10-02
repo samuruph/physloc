@@ -7,8 +7,8 @@ it. Comparing those needs the STAGED rollout, because a granular scene is
 exactly where the host-side preview stops describing what the solver does, and
 it does not need a single frame rendered.
 
-    bash docker/kubric.sh physloc/render/probe_disturbance.py --scenario pour
-    bash docker/kubric.sh physloc/render/probe_disturbance.py \
+    bash docker/kubric.sh scripts/probes/probe_disturbance.py --scenario pour
+    bash docker/kubric.sh scripts/probes/probe_disturbance.py \
         --scenario collision --families superelastic,dissolve --verbose
 
 Reports, per family, how far the violator bodies end up from where the lawful

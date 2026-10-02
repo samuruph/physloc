@@ -1,11 +1,11 @@
 """Each violator on its own clock, in clips with several.
 
-A `multi` clip makes two or more of its actors violate. They used to share one
-plan: one `t_event`, one window list, one severity timeline painted into every
-violator -- so every violator in the clip broke the law on the same frame, and a
-model could find all of them by finding one.
+A `multi` clip makes two or more of its actors violate. Sharing one plan --
+one `t_event`, one window list, one severity timeline painted into every
+violator -- would have every violator in the clip break the law on the same
+frame, and a model could find all of them by finding one.
 
-Now, for most such clips, each violator is planned on its own -- the family is
+So, for most such clips, each violator is planned on its own -- the family is
 asked to act on that body alone, with an event draw keyed on it -- and the
 plans are merged into one whose `violators` carry each body's own moment,
 windows and magnitude. A share of clips (`MULTI_SYNC_SHARE`) keeps the shared

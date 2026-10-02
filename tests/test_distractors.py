@@ -221,7 +221,7 @@ def test_adding_distractors_changes_nothing_else(name):
     import physloc.scenarios.base as B
 
     sc = scenarios.get(name)
-    clean_v, dirty_v = min(CLEAN), min(CLUTTERED)
+    clean_v = min(CLEAN)
     for seed in (777, 812, 4242):
         a = sc.sample(seed, TIERS["debug"], LEVEL, variant=clean_v)
         # Same variant index, so every other draw matches; only the condition

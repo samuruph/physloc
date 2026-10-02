@@ -21,7 +21,7 @@ from .. import loader as _loader
 
 
 #: The implementation lives in `physloc/loader.py`, which a consumer imports
-#: without the generator. Schema v3 derives token grids on demand instead of
+#: without the generator. The schema derives token grids on demand instead of
 #: publishing another dense file; these aliases keep generator and loader math
 #: identical.
 temporal_bins = _loader.temporal_bins

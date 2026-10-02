@@ -117,17 +117,15 @@ class _Squash(Injector):
     #: the mechanism and the reason for it. A squashed body is an *ellipsoid*,
     #: which PyBullet has no primitive for, so the proxy is built as a convex
     #: hull of a per-axis-scaled unit sphere; a cube gets exact half-extents.
-    #: Before this the cube in `barrier_pass`, `collision`, `drop` and
-    #: `occluder_pass` alike stopped touching the floor the moment it squashed,
-    #: because the render shortened it and the physics never heard.
+    #: Shortening the body in the render only would leave a squashed cube no
+    #: longer touching the floor, because the physics never heard.
     #:
     #: One consequence worth being explicit about, because it changes what this
     #: family claims: a shape change the physics honours **cannot** leave the
     #: path untouched. A rolling ball stretched to 2.8x along one axis is an
-    #: ellipsoid, and an ellipsoid tumbles rather than rolls. The old docstring
-    #: promised a perfectly lawful trajectory, and it could only promise that by
-    #: not telling the simulator anything had happened -- which is exactly the
-    #: bug you found. The law scored here is still `shape_continuity`, so the
+    #: ellipsoid, and an ellipsoid tumbles rather than rolls. A perfectly
+    #: lawful path could only be kept by not telling the simulator anything had
+    #: happened. The law scored here is still `shape_continuity`, so the
     #: severity measures the deformation and not its consequences.
     simulated = True
     #: How many times within a frame the collision shape is rebuilt -- see the
@@ -227,10 +225,9 @@ class _Squash(Injector):
                 continue
             # The body's FOOTPRINT moved, so its pose has to move with it. A
             # volume-preserving stretch shortens two axes, and the vertical one
-            # is usually among them: leaving the centre where it was lifted a
-            # resting cube clear of the ground by the difference, which is what
-            # you saw on `barrier_pass`, `collision`, `drop` and
-            # `occluder_pass` alike. `reseat` preserves the *clearance* the
+            # is usually among them: leaving the centre where it was would lift
+            # a resting cube clear of the ground by the difference. `reseat`
+            # preserves the *clearance* the
             # lawful rollout had rather than the centre height, so a seated body
             # stays seated and an airborne one still lands when it lawfully
             # landed.
@@ -378,25 +375,21 @@ class ColourShift(Injector):
     #: Target perceptual separation, in CIE-Lab distance over 100. Specified
     #: here and *solved for* per body, rather than specified as a hue rotation.
     #:
-    #: Setting the bins in hue was the first attempt and it is not monotone in
-    #: what it claims to measure: from red, a 0.30 turn lands on green and a
-    #: 0.50 turn lands on cyan, and green is the further of the two in Lab. So
-    #: `medium` came out more different than `strong` on some colours and less
-    #: on others, and the severity ordering the whole bin system rests on held
-    #: only by luck. Solving for the distance makes the bins mean the same thing
-    #: whatever colour a body started as.
-    #: Strong pushed to the far end of what a hue rotation can reach. It was
-    #: 0.95, and `_shift_to_distance` bisects for the turn that lands there --
-    #: so on colours whose antipode is closer than that, strong quietly came out
-    #: no further than medium. Asking for more makes the solver take the
-    #: furthest turn available on every starting colour.
+    #: Bins set in hue are not monotone in what they claim to measure: from
+    #: red, a 0.30 turn lands on green and a 0.50 turn lands on cyan, and green
+    #: is the further of the two in Lab. Solving for the distance makes the
+    #: bins mean the same thing whatever colour a body started as.
     #:
-    #: Weak raised from 0.25, medium from 0.60. The distance is asked of the
-    #: MATERIAL, and shading and lighting compress it on the way to the pixel:
-    #: measured on the review sweep, weak moved the body's pixels by a median
-    #: 6-9 of 255 -- a change nobody watching the clip would see -- while
-    #: medium and strong both landed near 30. Every one of 23 weak clips was
-    #: too faint to find.
+    #: Strong is at the far end of what a hue rotation can reach:
+    #: `_shift_to_distance` bisects for the turn that lands on the target, so
+    #: a target some colours cannot reach would leave strong no further than
+    #: medium on them. Asking for more makes the solver take the furthest turn
+    #: available on every starting colour.
+    #:
+    #: The distance is asked of the MATERIAL, and shading and lighting compress
+    #: it on the way to the pixel: at a weak target of 0.25, the body's pixels
+    #: moved by a median 6-9 of 255 -- a change nobody watching the clip would
+    #: see.
     DISTANCE_BY_BIN = {"weak": 0.45, "medium": 0.75, "strong": 1.30}
     RAMP_FRACTION = 0.22
     RAMP_MIN = 3
@@ -436,8 +429,7 @@ class ColourShift(Injector):
         # steel, aluminium, rubber, stone and ice reach 0.15-0.22 Lab at EVERY
         # bin -- `medium` no further than `weak` -- and ten of fourteen
         # materials top out between 0.38 and 0.52 against a `strong` target of
-        # 1.30. Only saturated plastic reached it. You reported that on some
-        # materials the strongest bin showed nothing at all, and this is why.
+        # 1.30. Only saturated plastic reaches it.
         #
         # A grey body can only become perceptually far by gaining colour, so
         # the candidate may saturate as the turn grows. It is also the change

@@ -39,7 +39,7 @@
 #     docker build -f docker/Dockerfile.gpu -t physloc-kubric:gpu .
 #
 #     PHYSLOC_IMAGE=physloc-kubric:gpu PHYSLOC_GPU=1 \
-#       bash docker/kubric.sh physloc/render/probe_cost.py \
+#       bash docker/kubric.sh scripts/probes/probe_cost.py \
 #            --complexity L0 --resolution 512 --frames 4
 #
 # `PHYSLOC_GPU=1` makes docker/kubric.sh add `--gpus all` and makes the worker

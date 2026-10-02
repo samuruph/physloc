@@ -14,7 +14,6 @@ normalising the longest axis to a chosen size in metres
     bash docker/kubric.sh scripts/refresh_gso_ids.py --write --count 48
 """
 import argparse
-import json
 import os
 import sys
 

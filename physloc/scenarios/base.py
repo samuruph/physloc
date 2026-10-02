@@ -23,7 +23,7 @@ import numpy as np
 #: The LOCAL-MESH BOUNDS of every kind a body can be -- the extent of the mesh
 #: itself, before `scale` multiplies it. Measured in the pinned image with
 #: `AssetSource.from_manifest(KUBASIC).create(...).bounds`, reproduced by
-#: `physloc/render/probe_fission.py`.
+#: `scripts/probes/probe_fission.py`.
 #:
 #: `scale` is NOT a half-extent for anything but a cube and a sphere. A KuBasic
 #: cylinder's mesh is half the size of the [-1, +1] cube everything assumed, a
@@ -68,10 +68,10 @@ class Tier:
     def from_dict(d: Dict[str, Any]) -> "Tier":
         """Rebuild a tier from a spec, overrides and all.
 
-        Annotation used to recover the tier with `TIERS[spec["tier"]]`, which
-        works only while every tier is one of the three named ones. The moment
-        `--frames`/`--resolution` produce a `v0+f25`, that lookup raises -- so
-        the spec carries the whole record and the name is just a label.
+        Not recovered by name with `TIERS[spec["tier"]]`: once
+        `--frames`/`--resolution` override a tier, its name is no longer a
+        key, so the spec carries the whole record and the name is just a
+        label.
         """
         return Tier(**{k: d[k] for k in
                        ("name", "resolution", "fps", "num_frames",
@@ -89,7 +89,7 @@ class Tier:
         align to the VAE stride fails here with an explanation instead of
         silently shipping clips no latent model can consume evenly.
 
-        The name records what was changed, so it lands in `meta.json` as e.g.
+        The name records what was changed, so it lands in `sample.json` as e.g.
         `v0+f25` and two clips from different overrides are never confused.
 
         A dial equal to the tier's own value is NOT a change. Every config spells
@@ -136,20 +136,11 @@ class Tier:
         return out
 
 
-# Named for what they are, not lettered. The letters were inherited and made no
-# sense: A was the first release, B the second, D the debug size, and there was
-# no C at all -- so the ordering implied by the alphabet was backwards from the
-# ordering that matters, and every reader had to memorise a lookup. These are
-# the release names already used for the output directories.
-#: TWO GEOMETRIES, because there are only two. `v0` and `v1` used to sit here
-#: as separate tiers and differed in NOTHING but their name -- both 512 x 512,
-#: 30 fps, 89 frames -- because what actually separated them was complexity,
-#: which is its own axis and now its own ladder. A tier that encodes a release
-#: number is a tier that has to be renamed every release.
-#:
-#: So the tier says how big and how long, the complexity ladder says how hard,
-#: and `v0`/`v1` are what a published DATASET is called -- set by the outdir,
-#: recorded as `release` in every `meta.json`.
+#: TWO GEOMETRIES, because there are only two. A tier says how big and how
+#: long; the complexity ladder says how hard; and `v0`/`v1` are what a
+#: published DATASET is called -- set by the outdir, recorded as
+#: `sample.release` in every `sample.json`. A tier that encoded a release
+#: number would have to be renamed every release.
 TIERS: Dict[str, Tier] = {
     #                          res  fps  frames  spp  F_lat  HW_lat  publish
     "debug":   Tier("debug",   128, 12,  25,     16,  7,     8,      False),
@@ -264,12 +255,11 @@ class Complexity:
 #:   L2  + a real environment, lit by an HDRI
 #:   L3  + GSO objects in that environment              -- the hardest
 #:
-#: **Camera motion and distractors are NOT levels.** They used to be, and it was
-#: wrong twice over. A level whose axis fires on only some of its clips is not a
-#: stratum at all: with camera motion on 1 variant in 5, "L2 minus L1" was not
-#: measuring materials, it was measuring materials plus whichever variants
-#: happened to draw a camera move. And making them levels forced a choice nobody
-#: wants -- either every realistic clip moves its camera, or none does.
+#: **Camera motion and distractors are NOT levels.** A level whose axis fires
+#: on only some of its clips is not a stratum at all: with camera motion on 1
+#: variant in 5, "L2 minus L1" would measure materials plus whichever variants
+#: happened to draw a camera move. And making them levels forces a choice
+#: nobody wants -- either every realistic clip moves its camera, or none does.
 #:
 #: They are DIFFICULTY CONDITIONS, one per clip, applied identically inside
 #: every level -- see `CONDITION_CYCLE`. So the dataset answers "how much does
@@ -558,7 +548,7 @@ class SceneSpec:
     camera_motion: bool = True
 
     #: Which motion this clip uses: "static", "track", "orbit" or "dolly".
-    #: Shipped in `meta.json` so a consumer can condition on it.
+    #: Shipped in `sample.json` so a consumer can condition on it.
     camera_motion_kind: str = "static"
 
     #: Which randomisation of this cell this is: variant 0 is the first. Needed
@@ -577,7 +567,7 @@ class SceneSpec:
 
         The single source of truth for where the camera was: the renderer
         keyframes from it, the framing guards evaluate against it, and
-        `meta.json` ships what it returns. If any of those computed the path
+        `sample.json` ships what it returns. If any of those computed the path
         separately they could disagree, and a violation would be fitted to a
         frustum the clip never had.
 
@@ -801,11 +791,10 @@ def _match_understudies(spec: SceneSpec) -> None:
 def _material_scenery(spec: SceneSpec, seed: int) -> None:
     """From L1 up, the STAGING is made of something too.
 
-    Materials arrived on actors alone, and you reported the consequence: L1
-    looked like L0. Half of what is on screen is a ramp, a barrier, a table, a
-    pendulum post and a floor -- and every one of them stayed an untextured
-    block of flat colour while one object in the middle got a material. The
-    level changed a fraction of the frame.
+    Materials on actors alone leave L1 looking like L0. Half of what is on
+    screen is a ramp, a barrier, a table, a pendulum post and a floor -- left
+    untextured blocks of flat colour while one object in the middle gets a
+    material, the level changes a fraction of the frame.
 
     Two different treatments, because the two kinds of scenery answer to
     different constraints:
@@ -845,7 +834,6 @@ def _material_scenery(spec: SceneSpec, seed: int) -> None:
         palette = (M.FLOOR_MATERIALS if body.role == "floor"
                    else M.SCENERY_MATERIALS)
         name = M.pick(rng, palette)
-        m = M.get(name)
         rgb, rough, metal, spec_, trans, ior = M.appearance(name, rng)
         keep = body.role == "floor"
         body.material = name
@@ -881,17 +869,16 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     primitive's size -- a pyramid of touching spheres, a table of props -- have
     no room for a scan that is longer on some axis. Where a swapped body
     overlaps another more than the primitives did, its look steps down
-    `GSO_FIT_RUNGS` towards the old longest-axis scale, which by construction
+    `GSO_FIT_RUNGS` towards the MOVi longest-axis scale, which by construction
     fits wherever the primitive did. Granular media keep that scale outright:
     grain size is bounded by the residual laws (CLAUDE.md, `pour`).
 
-    EVERY MOVING BODY, not only the violator. This used to be `actor` and
-    `distractor` alone, which left `stack_topple` scanning one block and
-    stacking it on two plastic cubes, `pyramid_impact` dropping a scan onto
-    four primitive spheres, and `resting_table` putting a scanned mug beside
-    two primitive props. One scanned object in a scene of primitives is not the
-    level this is trying to build. So the rule is now about what the body IS,
-    not what it is for: if it moves, it is an object and it gets a scan.
+    EVERY MOVING BODY, not only the violator. Scanning `actor` and
+    `distractor` roles alone would leave `stack_topple` stacking one scanned
+    block on two plastic cubes and `pyramid_impact` dropping a scan onto four
+    primitive spheres. One scanned object in a scene of primitives is not the
+    level this is trying to build, so the rule is about what the body IS, not
+    what it is for: if it moves, it is an object and it gets a scan.
 
     STATIC STAGING IS STILL LEFT ALONE -- the floor, the ramp, the barrier, the
     occluding screen, the table top, the pour's walls. Those are what the
@@ -910,9 +897,8 @@ def _swap_in_gso(spec: SceneSpec, seed: int) -> None:
     scan off whatever it was standing on: measured on `resting_table` at seed
     777 the mug's half height fell from 0.238 to 0.092 and it started 0.18 m
     above the table, dropping onto it during the clip; on `collision` both
-    balls started 0.034 m up and the left one toppled. You reported it as
-    objects passing through the floor at L3, and the frames show a body
-    settling through the opening second of clips that claim to be lawful.
+    balls started 0.034 m up and the left one toppled -- a body settling
+    through the opening second of a clip that claims to be lawful.
 
     The seat is looked up rather than assumed, because a stack CASCADES:
     `stack_topple`'s middle block rests on the base, and if the base's scan is
@@ -1074,7 +1060,7 @@ def _gso_name(asset_id: str) -> str:
 GSO_MAX_ELONGATION = 1.5
 
 #: Steps from the volume-matched scale down to the longest-axis scale. The last
-#: rung is the old MOVi rule, which fits anywhere the primitive fitted.
+#: rung is the MOVi rule, which fits anywhere the primitive fitted.
 GSO_FIT_RUNGS = 5
 
 #: How much deeper a swapped pair may overlap than the primitives did, in
@@ -1349,7 +1335,6 @@ def _add_distractors(spec: SceneSpec, seed: int) -> None:
 
     from . import _common as C
 
-    cx = COMPLEXITY[spec.complexity]
     if not has_distractors(spec.condition):
         # Recorded as zero rather than left absent: a clip with no distractors
         # is a fact about that clip, and a reader filtering on the axis needs
@@ -1736,14 +1721,8 @@ def _recolour_scenery(spec: SceneSpec, seed: int) -> None:
     TWO SURFACES, TWO COLOURS. Below L2 the scene is a 6 m slab in front of a
     void, so the horizon is a real edge and something has to make it read. Both
     are drawn here and both are held clear of every actor; the void is drawn
-    from its own, darker band so the ground does not dissolve into the sky.
-
-    This was one colour for a while, and correctly so: the ground was a dome
-    that curved up behind the scene and WAS the backdrop, so a second colour
-    would have had nothing to paint. When the dome went back to being a
-    render-only backdrop at the HDRI levels, that left `BACKDROP_VALUE` unused
-    and every L0 clip with a floor and a void the same shade -- 0.795, 0.812,
-    0.82 for both, on `drop` at seed 91731, which reads as fog.
+    from its own, darker band so the ground does not dissolve into the sky --
+    a floor and a void of the same shade read as fog.
     """
     import colorsys
 
@@ -1845,11 +1824,9 @@ class Scenario:
         the scene is lit -- is applied here so it cannot drift between thirteen
         files.
         """
-        # THE UNBUILT-LEVEL GUARD LIVES HERE, not in a scenario. It was in
-        # `drop` alone, referencing a `Complexity` field that no longer exists,
-        # so twelve scenarios would have quietly sampled a level that cannot
-        # render and one would have raised an AttributeError explaining
-        # nothing.
+        # THE UNBUILT-LEVEL GUARD LIVES HERE, not in a scenario, so every
+        # scenario refuses a level that cannot render, with a message that
+        # says why.
         cx = COMPLEXITY.get(complexity)
         if cx is None:
             raise KeyError("unknown complexity %r; known: %s"
@@ -1950,14 +1927,12 @@ class Scenario:
         actor, so a clip that teleports the actor, grows it, pushes it or
         removes it must move, grow, push or remove the shadow with it.
 
-        It did not. Measured on the review sweep: under `continuity` the ball
-        jumped 1.4 m and its shadow carried on down its lawful track; under
-        `phantom_impulse` the ball accelerated away and the shadow did not
-        follow; under `immutability` the ball grew to 2.3x and its shadow
-        stayed the original size; under `permanence` the ball vanished and its
-        shadow stayed. Every one of those clips shipped a detached shadow --
-        which is the `shadow` family -- inside a clip claiming something else,
-        and annotated only the something else.
+        Without this, a ball teleported by `continuity` leaves its shadow on
+        its lawful track, one grown by `immutability` keeps a shadow of the
+        original size, and one removed by `permanence` leaves its shadow
+        behind. Each would ship a detached shadow -- which is the `shadow`
+        family -- inside a clip claiming something else, and annotated only
+        the something else.
 
         Called on every invalid trajectory, after the intervention and before
         the prefix check. `plan` is passed so a scenario can leave alone

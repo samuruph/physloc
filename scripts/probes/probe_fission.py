@@ -1,9 +1,10 @@
 """Where does a fission half actually come to rest?
 
-You reported the two cones floating. The cause is an ORIGIN and EXTENT
-mismatch, not a hull-shape one: `ShapeSwap` built its proxy from a hull in unit
-coordinates spanning [-1, +1] on every axis, and stood it at the pose the
-declared body had. No KuBasic mesh spans that. A cylinder is half of it, a
+Checks `ShapeSwap`'s proxy collider against the mesh it stands in for. The
+failure it guards against is an ORIGIN and EXTENT mismatch, not a hull-shape
+one: a proxy built from a hull in unit coordinates spanning [-1, +1] on every
+axis, stood at the declared body's pose, floats, because no KuBasic mesh spans
+that. A cylinder is half of it, a
 torus is a disc a fifth as thick as it is wide, and a cone is not centred on
 its own origin at all -- base at z = -0.306, apex at +0.900.
 
@@ -13,11 +14,11 @@ Measured here, in the pinned image, dropping onto a plane at scale 0.5 from
     native  rest z = 0.1560     the KuBasic cone itself
     table1  rest z = 0.1541     `hull_for("cone")` at scale 1  -- agrees
     proxyk  rest z = 0.1225     the same at the cleave scale, correct 0.1238
-    sphere  rest z = 0.3948     the OLD hull -- 3.2x too high, the float
+    sphere  rest z = 0.3948     a unit-sphere hull -- 3.2x too high, it floats
 
 Run it:
 
-    bash docker/kubric.sh physloc/render/probe_fission.py --drop-from 0.30
+    bash docker/kubric.sh scripts/probes/probe_fission.py --drop-from 0.30
 
 `--drop-from 2.0` is the original release height and is worth watching too, but
 a cone dropped that far topples, and a toppled cone's resting height says

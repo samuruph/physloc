@@ -228,11 +228,11 @@ with collisions disabled; the ground is the same slab at every level.
 
 ```bash
 # Per-frame cost of one container. Needs an idle box: check `docker ps` first.
-bash docker/kubric.sh physloc/render/probe_cost.py --complexity L0 --spp 64 --resolution 512 --frames 4
-bash docker/kubric.sh physloc/render/probe_cost.py --complexity L2 --spp 64 --resolution 512 --frames 4
+bash docker/kubric.sh scripts/probes/probe_cost.py --complexity L0 --spp 64 --resolution 512 --frames 4
+bash docker/kubric.sh scripts/probes/probe_cost.py --complexity L2 --spp 64 --resolution 512 --frames 4
 
 # The same with a render setting changed; refuses to run while a container is up.
-bash scripts/probe_backend.sh L2 512 64
+bash scripts/probes/probe_backend.sh L2 512 64
 ```
 
 Each probe renders into its own scratch folder. Kubric's post-processing reads back every EXR in

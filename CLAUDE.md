@@ -6,7 +6,7 @@ A spatio-temporally annotated physics-violation video dataset: every invalid cli
 **Read [README.md](README.md) first** — it is the operational reference and the one kept
 current. [docs/PLAN.md](docs/PLAN.md) is the design document: its *reasoning* is sound, its
 *numbers* have drifted, so trust the code over any count you read there.
-[docs/schema.md](docs/schema.md) holds the clip layout and `metadata.json` reference. The IntPhys 2 and
+[docs/schema.md](docs/schema.md) holds the sample layout and `sample.json` reference. The IntPhys 2 and
 LikePhys mapping is DATA, on each family in `physloc/taxonomy.py` — the prose copy of it was
 deleted because it drifted from the data it described.
 
@@ -32,8 +32,8 @@ publication. Nothing has been published yet.
   what actually separated them was complexity, which is its own axis and its own ladder. A
   tier that encodes a release number has to be renamed every release. So: the tier says how
   big and how long, the **complexity ladder (L0–L3)** says how hard, and `v0`/`v1` are what
-  a published dataset is CALLED — set by `--outdir`, recorded as `metadata.release` in every
-  `metadata.json`. **Debug at the debug tier; a bug found there is fixed for both.**
+  a published dataset is CALLED — set by `--outdir`, recorded as `sample.release` in every
+  `sample.json`. **Debug at the debug tier; a bug found there is fixed for both.**
 - **The complexity ladder is SCENE REALISM, and nothing else.** Four levels -- L0 baseline,
   L1 materials, L2 HDRI, L3 GSO -- each with a declared `share` of a full generation
   (1.00/0.50/0.30/0.20). **Difficulty is FIVE NAMED CONDITIONS, one per clip**, applied
@@ -325,7 +325,7 @@ Kubric is **not** a Python dependency — it lives in the docker image. Pattern 
 script, their container*:
 
 ```bash
-bash docker/kubric.sh physloc/render/worker_smoke.py --frames 4
+bash docker/kubric.sh scripts/probes/worker_smoke.py --frames 4
 ```
 
 `refs/kubric` is a **pinned, gitignored, read-only reference checkout** (`bash

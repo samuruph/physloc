@@ -119,10 +119,9 @@ class Support(Injector):
         _, top = _geom.support_under_any(spec, actor, traj, 0)
         bi = traj.index_of(int(actor.segmentation_id))
         # HORIZONTAL speed, not total. A body in free fall has a large speed and
-        # no horizontal motion at all, and calling that "moving" is what put
-        # `drop` into the wrong branch: it kept the downward velocity it had,
-        # drifted into the floor at a constant rate and bounced -- the up and
-        # down you reported. A body nothing is holding up does not carry on
+        # no horizontal motion at all; treated as "moving", a `drop` actor
+        # would keep its downward velocity, drift into the floor at a constant
+        # rate and bounce. A body nothing is holding up does not carry on
         # falling; that is `antigravity`. It hangs.
         speed = float(np.linalg.norm(traj.lin_vel[t0, bi][:2]))
         mode = "hover_still" if speed < 0.3 else "hover_moving"
@@ -311,8 +310,8 @@ class Support(Injector):
         #
         # A resting body therefore hovers where it stood, a sliding one keeps
         # sliding with nothing under it, and a falling one stops falling and
-        # hangs. That last case is the one you reported: it used to keep its
-        # downward velocity, so it sank to the floor and bounced.
+        # hangs (rather than keeping its downward velocity, sinking to the
+        # floor and bouncing).
         held = traj.pos[t0:, bi, :].astype(np.float64).copy()
         if plan.notes["mode"] == "hover_still":
             held[:, 0:2] = start[None, 0:2]
@@ -334,15 +333,12 @@ class Support(Injector):
 class Friction(Injector):
     """A moving body is dragged to a halt by a surface that should barely grip.
 
-    **The direction of this family changed, and it is worth saying why.** It
-    used to claim the other half of the axis -- *less* grip than declared, so a
-    body fails to slow as it should -- on the reasoning that "more grip" at its
-    limit is a body stopping dead, which is `newton1_inertia`. Measured in the
-    pinned image, the half it kept is not available: `barrier_pass`,
-    `collision` and `occluder_pass` all give their actor a friction of 0.02 to
-    0.05 so that it rolls freely, and taking that to 0.001 moves the ball by
-    0.11 m over three seconds. You reported all three as barely visible, and
-    that is the number behind it -- there is no headroom below a coefficient
+    **Why more grip, not less.** The other half of the axis -- *less* grip than
+    declared, so a body fails to slow as it should -- is not available in
+    practice: `barrier_pass`, `collision` and `occluder_pass` all give their
+    actor a friction of 0.02 to 0.05 so that it rolls freely, and taking that
+    to 0.001 moves the ball by 0.11 m over three seconds (measured in the
+    pinned image) -- barely visible. There is no headroom below a coefficient
     that is already almost zero.
 
     The other half has plenty, and it is not `newton1_inertia`. That family
@@ -377,14 +373,13 @@ class Friction(Injector):
     #: coefficient, and that is what keeps this family distinguishable from
     #: `newton1_inertia`.
     #:
-    #: You reported the two as near-identical on `barrier_pass`, and they were:
-    #: a fixed coefficient stopped the ball inside two frames, which is a step
-    #: to zero -- exactly newton-1's picture. Friction is not a step, it is a
-    #: curve, and a curve needs room. Solving for the distance gives the body
-    #: that room and adapts to whatever speed the scenario happens to give it,
-    #: which also answers the other half of your report: `collision`'s friction
-    #: clip looked like its valid twin because the same coefficient that halts a
-    #: fast ball barely touches a slow one.
+    #: A fixed coefficient stops a ball on `barrier_pass` inside two frames,
+    #: which is a step to zero -- exactly newton-1's picture. Friction is not a
+    #: step, it is a curve, and a curve needs room. Solving for the distance
+    #: gives the body that room and adapts to whatever speed the scenario
+    #: happens to give it -- the same coefficient that halts a fast ball barely
+    #: touches a slow one, so a fixed one leaves a slow `collision` clip looking
+    #: like its valid twin.
     #:
     #: Even `strong` leaves a third of the lawful travel, so the body is still
     #: sliding when the deceleration becomes obvious. A body that stops dead in
@@ -394,11 +389,10 @@ class Friction(Injector):
     #: difference: see `severity.bounded_score`.
     SCORE_EXCESS_ONLY = True
     #: Ceilings, so a solved coefficient stays inside what Bullet handles well.
-    #: Raised from 1.2 / 0.40, which was BINDING and collapsing the ladder: the
-    #: per-bin floor below is `MIN_RATIO_BY_BIN * mu`, so on a surface declared
-    #: at mu = 0.5 medium wanted 1.3 and strong 2.0 and the old ceiling handed
-    #: both of them 1.2 -- two bins, one coefficient, one clip. That is the
-    #: "strengths appear all the same" you saw on `pour`. A coefficient above 1
+    #: High enough not to bind: the per-bin floor below is
+    #: `MIN_RATIO_BY_BIN * mu`, so on a surface declared at mu = 0.5 medium
+    #: wants 1.3 and strong 2.0, and a ceiling of 1.2 would hand both the same
+    #: coefficient -- two bins, one clip. A coefficient above 1
     #: is unusual but perfectly ordinary for Bullet; it means the contact grips
     #: harder than the normal force, which is exactly the claim the family
     #: makes.
@@ -412,14 +406,13 @@ class Friction(Injector):
     #:
     #: Per bin, not one number, because on a slope the floor IS the knob: the
     #: stopping-distance solve is below it for every bin there, so a single
-    #: floor made weak, medium and strong the same clip three times.
-    #: `weak` lowered from 1.6, because on a MEDIUM the floor is what binds and
-    #: 1.6x of a declared 0.5 is already enough grip to lock a pile where it
-    #: lands. Measured on `pour`: the lawful pile spreads to 0.51 m and all
-    #: three bins came out between 0.216 and 0.232 -- the change against the
-    #: valid twin was large and the change *between bins* was not, which is the
-    #: "strengths appear all the same" you saw. At 1.15 the weak bin still
-    #: grips harder than the surface declares, and it still spreads.
+    #: floor would make weak, medium and strong the same clip three times.
+    #: `weak` is low because on a MEDIUM the floor is what binds, and 1.6x of a
+    #: declared 0.5 is already enough grip to lock a pile where it lands
+    #: (measured on `pour`: the lawful pile spreads to 0.51 m and all three
+    #: bins came out between 0.216 and 0.232, a large change against the valid
+    #: twin and none *between bins*). At 1.15 the weak bin still grips harder
+    #: than the surface declares, and it still spreads.
     MIN_RATIO_BY_BIN = {"weak": 1.15, "medium": 2.6, "strong": 4.0}
 
     def strong_residual_reference(self, spec) -> float:
@@ -450,9 +443,9 @@ class Friction(Injector):
         #
         # Asked of the WHERE, not of the scenario's `occluded_frames`. That list
         # is computed from the lawful rollout, so it describes the path the body
-        # does not take: on the review sweep's `occluder_pass` seed it was empty
-        # -- a ball that keeps rolling never dwells behind the screen -- while
-        # the friction clip parked it squarely behind. So the stopping point is
+        # does not take: it can be empty -- a ball that keeps rolling never
+        # dwells behind the screen -- while the friction clip parks it squarely
+        # behind. So the stopping point is
         # predicted and tested against the actual geometry, and if it is hidden
         # the violation fires earlier, until the body comes to rest in view.
         t0 = int(max(moving[0] + 1, min(moving[-1] - 1, T // 3)))
@@ -565,11 +558,11 @@ class Friction(Injector):
         # weak, medium and strong -- so all three bins are scored against one
         # yardstick without depending on which bin's own render produced it.
         #
-        # A THEORETICAL yardstick used to stand in for it on a slope: total
-        # grip needed to stop over distance `d` at tilt `t` is
-        # `(v^2/2d + g sin t) / g`, `g sin t` being what it takes just to hold
-        # position. That is correct physics, and it was also useless as a
-        # REFERENCE: rescaled per bin by `measured * model(d_strong)/model(d_bin)`,
+        # Not a THEORETICAL yardstick. On a slope the total grip needed to
+        # stop over distance `d` at tilt `t` is `(v^2/2d + g sin t) / g`,
+        # `g sin t` being what it takes just to hold position. That is correct
+        # physics, and useless as a REFERENCE: rescaled per bin by
+        # `measured * model(d_strong)/model(d_bin)`,
         # the render's own measurement cancels out of the final score
         # algebraically -- `peak = measured / r_strong` reduces to exactly
         # `model(d_bin) / model(d_strong)`, a function of the travel-fraction

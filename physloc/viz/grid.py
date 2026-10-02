@@ -468,10 +468,10 @@ def coverage(release_root: str, out_path: Optional[str] = None,
              severity: str = "strong") -> Dict[str, object]:
     """The whole release at once: **a row per scenario, a column per family**.
 
-    The "is all of this working" view. It used to reflow every invalid clip into
-    a roughly square block, which put unrelated cells next to each other and
-    made a missing one invisible -- the tiles simply closed up around the gap.
-    On a fixed scenario x family lattice a cell that was never built is a black
+    The "is all of this working" view. Reflowing every invalid clip into a
+    roughly square block would put unrelated cells next to each other and make
+    a missing one invisible. On a fixed scenario x family lattice a cell that
+    was never built is a black
     square in a known place, so the shape of the coverage is legible rather than
     something you count.
     """

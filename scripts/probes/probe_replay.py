@@ -3,12 +3,11 @@
 The valid render is the first replay a scene ever sees; every invalid render is
 a replay laid on top of one. If replaying identical values a second time does
 not reproduce the first render, that difference is present in every invalid
-clip whether or not its injector touched anything -- which is exactly the shape
-of the prefix-identity failures found in the review sweep (29 of 176 clips
-differing a frame or two *before* t_event, on families that touch no material
-channel at all).
+clip whether or not its injector touched anything -- a prefix-identity failure
+a frame or two *before* t_event, even on families that touch no material
+channel at all. `render.worker` clears and re-keys every curve for this reason.
 
-    bash docker/kubric.sh physloc/render/probe_replay.py --scenario pendulum_swing
+    bash docker/kubric.sh scripts/probes/probe_replay.py --scenario pendulum_swing
 """
 import argparse
 import json

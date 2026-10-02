@@ -106,7 +106,6 @@ def test_a_clip_that_fails_twice_is_reported_and_the_run_continues(monkeypatch):
 
 def test_annotation_child_runs_in_a_fresh_process(tmp_path, monkeypatch):
     """Native allocator caches cannot survive from one annotation to the next."""
-    import json
     package = tmp_path / "physloc" / "annotate"
     package.mkdir(parents=True)
     (package.parent / "__init__.py").write_text("")

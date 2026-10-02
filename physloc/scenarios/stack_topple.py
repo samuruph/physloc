@@ -29,9 +29,8 @@ class StackTopple(Scenario):
         # Each block overhangs the one below by a fraction of its width. The
         # stack falls once the combined centre of mass of everything above the
         # base clears the base's support polygon, which for three blocks means
-        # `1.5 * lean > half`. The old range straddled that threshold, so the
-        # "topple" scenario shipped a stack that stood there for the whole clip
-        # -- and a scenario whose event never happens is not a control for
+        # `1.5 * lean > half`. The range stays above that threshold: a stack
+        # that stands there for the whole clip is not a control for
         # surprising-but-lawful, it is just furniture.
         lean = float(rng.uniform(0.80, 1.00)) * half
         side = float(rng.choice([-1.0, 1.0]))

@@ -104,11 +104,11 @@ def _blender_argv():
 #: argument. `docker/kubric.sh` forwards each one with a bare `--env NAME`, so
 #: an unset dial stays unset inside the container rather than becoming "".
 #:
-#: EVERY DEFAULT IS TODAY'S BEHAVIOUR. Nothing here changes a render until it
-#: is asked for, so a run started before this existed and one started after
-#: produce the same pixels.
+#: EVERY DEFAULT IS KUBRIC'S OWN BEHAVIOUR. Nothing here changes a render
+#: until it is asked for, so a run with no dial set produces the same pixels
+#: as the unmodified renderer.
 #:
-#: WHY THESE THREE. `physloc/render/probe_cost.py` fits `T = a + b*spp` and
+#: WHY THESE THREE. `scripts/probes/probe_cost.py` fits `T = a + b*spp` and
 #: finds only ~26% of a frame is sampling, which was read as "there is no room
 #: to speed a render up". It is really "the room is not in SAMPLING":
 #:
@@ -226,7 +226,7 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
     # engine kept its default 1/240 s: right at the debug tier (12 fps, 240 Hz),
     # and 2.5x too long at release (30 fps, 600 Hz) -- every release clip
     # showed 5 s of physics in 2 s of video, things falling and rolling 2.5x
-    # too fast. Measured with `render/probe_timestep.py`.
+    # too fast. Measured with `scripts/probes/probe_timestep.py`.
     import pybullet as _pb
     _pb.setTimeStep(1.0 / float(scene.step_rate))
     renderer = None
@@ -376,8 +376,8 @@ def build_scene(spec: SceneSpec, scratch, render: bool = True):
 def _fade_controls(renderer, obj):
     """Mix every body material with a Transparent BSDF; return the blends.
 
-    Cycles renders the Principled BSDF's own `Alpha` input as opaque here --
-    measured, see `probe_opacity.py` -- so fading has to be done by mixing in a
+    Cycles renders the Principled BSDF's own `Alpha` input as opaque here
+    (measured in the pinned image), so fading has to be done by mixing in a
     transparent shader. The returned sockets are 1 for solid and 0 for
     invisible, and they keyframe like anything else.
 
@@ -427,15 +427,15 @@ def _fade_controls(renderer, obj):
 def _clear_animation(renderer, obj) -> None:
     """Drop every existing keyframe on a body before re-keying it.
 
-    **`replay()` is not idempotent without this**, and that was a prefix-identity
-    bug in 29 of 176 clips in the review sweep. The valid clip is the first
+    **`replay()` is not idempotent without this**, which breaks prefix
+    identity. The valid clip is the first
     replay a scene ever sees, so its curves are built from empty; every invalid
     clip is a replay laid on top of a fully populated curve. Blender re-solves
     each key's Bezier handles against whatever keys exist at insert time, so the
     two orders do not converge on the same F-curve even when every keyed value
     is identical -- and the render then differs by a few levels on scattered
     frames *before* `t_event`, on families that touch no material channel at
-    all. `probe_replay.py` renders the same trajectory twice and measures it:
+    all. `scripts/probes/probe_replay.py` renders the same trajectory twice:
     53 levels on `pendulum_swing` before this, 0 after.
 
     Cheap: clearing and re-keying costs a fraction of one frame's render.
@@ -1032,7 +1032,7 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     # A `multi` CLIP HAS SEVERAL VIOLATORS, or it is not one. `injectors.multi`
     # gives every family a plan per member of the group; a family that finds
     # only one body it can act on -- `newton2_mass` where the peers never
-    # collide, a shadow family with one shadow -- used to ship that single
+    # collide, a shadow family with one shadow -- would ship that single
     # violator under a label promising several. Declined instead, and not as
     # "no plan": a fresh seed would not change what the family needs.
     if has_multi(spec.condition) and plan.notes.get("multi_shortfall"):
@@ -1212,8 +1212,8 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
     # The scenario's own driven bodies, re-derived from the trajectory
     # the intervention actually produced. `shadow_track`'s cast shadow
     # is a projection of the actor, so every family that moves, resizes
-    # or removes the actor moves, resizes or removes the shadow too --
-    # and before this ran, none of them did. See `Scenario.rescript`.
+    # or removes the actor moves, resizes or removes the shadow too.
+    # See `Scenario.rescript`.
     scenario.rescript(spec, traj_invalid, plan)
 
     ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
@@ -1280,9 +1280,13 @@ def falls_out_of_world(spec, family, plan, traj_valid, traj_invalid) -> bool:
     edge sent a peer off it and falling for the rest of the clip -- measured on
     `collision` 20260833 camera+multi, z = -3.7 m and still accelerating --
     which renders as an object sinking out of sight. Judged per body against
-    its own lawful lowest point, so a body the lawful clip already lowers (a
-    pendulum, a ramp) is not mistaken for one falling out.
+    the LOWER of its own lawful lowest point and the floor's top surface:
+    the first so a body the lawful clip already lowers (a pendulum, a ramp)
+    is not mistaken for one falling out, the second so a body that merely
+    ends up lower than it lawfully did -- a grain that sat high in a `pour`
+    pile now lying on the floor, a prop knocked off a table -- is not either.
     """
+    floor_top = float(getattr(spec, "floor_level", 0.0))
     T = int(traj_valid.num_frames)
     t0 = int(plan.t_event)
     floors = {int(b.segmentation_id) for b in spec.bodies if b.role == "floor"}
@@ -1305,7 +1309,7 @@ def falls_out_of_world(spec, family, plan, traj_valid, traj_invalid) -> bool:
             if floors.intersection(pair) or p.get("mode") == "sink_group":
                 through.update(owners)
                 through.update(i for i in pair if i not in floors)
-    for j, b in enumerate(spec.bodies):
+    for b in spec.bodies:
         if b.static or b.dormant or int(b.segmentation_id) in through:
             continue
         try:
@@ -1325,7 +1329,8 @@ def falls_out_of_world(spec, family, plan, traj_valid, traj_invalid) -> bool:
                   - r * s)[here]
         if not bottom.size:
             continue
-        lowest = float(np.asarray(traj_valid.pos[:, bi, 2]).min()) - r
+        lowest = min(float(np.asarray(traj_valid.pos[:, bi, 2]).min()) - r,
+                     floor_top)
         # HALF a radius: a body sinking out of sight is hidden by the floor
         # once fully under it, but it passes through half-sunk -- still in
         # view -- on the way down, and that is what is caught.
@@ -1466,7 +1471,7 @@ def main() -> int:
     traj_valid = simulate(spec, scene, simulator, objs, scen_hooks)
     # Bodies whose pose is drawn rather than solved -- `shadow_track`'s cast
     # shadow, which is not an object and has no dynamics to get right. A
-    # CONSTRAINED scenario no longer comes through here: a pendulum is a real
+    # CONSTRAINED scenario does not come through here: a pendulum is a real
     # body held by a real constraint (`sim_hooks`), so the simulator produces
     # its arc like any other.
     scenario.script(spec, traj_valid)

@@ -19,8 +19,6 @@ labels move between releases cannot be compared with itself, so these are
 frozen once published -- refitting is a new release, not a bug fix.
 """
 import argparse
-import glob
-import json
 import os
 import sys
 
@@ -32,19 +30,21 @@ from physloc.annotate import difficulty as D  # noqa: E402
 
 
 def load(root):
-    """Every invalid clip under `root`, as (meta, vmask, seg)."""
+    """Every invalid sample under `root`, as (meta, vmask, seg, seen) -- the
+    inputs `difficulty.measure` and `difficulty.assess` read, rebuilt from the
+    shipped schema-v4 sample exactly as `difficulty.relabel` rebuilds them."""
     from physloc import loader
     from physloc.annotate import layout
 
     for meta_path in layout.find(root):
-        with open(meta_path) as fh:
-            meta = json.load(fh)
-        if not meta.get("violation"):
-            continue
-        clip = loader.Clip.from_dir(os.path.dirname(meta_path))
-        vmask = clip.violation_mask if clip.has(loader.MASKS) else None
-        seg = clip.segmentations if clip.has(loader.SEGMENTATIONS) else None
-        yield meta, vmask, seg
+        sample = loader.Sample.from_dir(os.path.dirname(meta_path))
+        try:
+            if sample.info.is_valid or not sample.violation.present:
+                continue
+            yield (D.meta_from_sample(sample), sample.violation.mask,
+                   sample.observations.segmentation, D.shadow_seen(sample))
+        finally:
+            sample.release()
 
 
 def main() -> int:
@@ -54,8 +54,8 @@ def main() -> int:
 
     rows = []
     for root in a.roots:
-        for meta, vmask, seg in load(root):
-            rows.append(D.measure(meta, vmask, seg))
+        for meta, vmask, seg, seen in load(root):
+            rows.append(D.measure(meta, vmask, seg, seen))
     if not rows:
         print("no invalid clips found", file=sys.stderr)
         return 1
@@ -83,8 +83,8 @@ def main() -> int:
     print()
     counts = {lv: 0 for lv in D.LEVELS}
     binding = {}
-    for meta, vmask, seg in (x for root in a.roots for x in load(root)):
-        got = D.assess(meta, vmask, seg)
+    for meta, vmask, seg, seen in (x for root in a.roots for x in load(root)):
+        got = D.assess(meta, vmask, seg, seen)
         counts[got["level"]] += 1
         for name in got["binding_factors"]:
             binding[name] = binding.get(name, 0) + 1

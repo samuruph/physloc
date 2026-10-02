@@ -8,7 +8,7 @@ the opening `EVIDENCE_SECONDS` were all on screen (`head`) and the share of the
 `min_visible_frames` span that was (`share`). That is what a threshold change
 would act on.
 
-    bash docker/kubric.sh physloc/render/probe_visibility.py \
+    bash docker/kubric.sh scripts/probes/probe_visibility.py \
         --scenario drop --seed 20260824 --variant 0 --n-variants 10 \
         --complexity L0 --frames 61 --params /path/params.json \
         --cells non_parabolic/strong,antigravity/strong

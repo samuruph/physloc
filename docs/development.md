@@ -32,7 +32,7 @@ functions (`reference.hf_card`), minus the cost tables, which price configs by r
 ## Tests
 
 ```bash
-python -m pytest tests                 # the full suite: about 40 minutes, pour cells are slowest
+python -m pytest tests                 # the full suite: about 11 minutes, pour cells are slowest
 python -m pytest tests/test_reference.py tests/test_cpu_slots.py   # a quick subset
 ```
 
@@ -41,7 +41,7 @@ python -m pytest tests/test_reference.py tests/test_cpu_slots.py   # a quick sub
 ```
 physloc/scenarios/    scenario builders, the complexity ladder and conditions (base.py)
 physloc/injectors/    the violation families, one file per domain
-physloc/render/       the container worker, and probes for render cost
+physloc/render/       the container worker and the staged-simulation stepper
 physloc/sim/          trajectories and the simulation seam
 physloc/residuals/    the physical residuals severity is measured from
 physloc/annotate/     residuals -> masks, severity, clocks, and schema-v4 samples
@@ -51,7 +51,8 @@ physloc/viz/          the overlay renderer, browser viewer, grids, sheets; every
 test_dataset_loader.py  load a dataset, print its structure, look at it
 physloc/cli.py        the `physloc` command line
 configs/              common.yaml and one file per run
-scripts/              run.sh, run_fast.sh, probes and refresh tools
+scripts/              run.sh, run_fast.sh, stop.sh, checks and asset-list refresh tools
+scripts/probes/       container-side measurement probes (render cost, timestep, ...)
 docs/schema.md        the sample layout, fields, axes, units, and loader contract
 docs/performance.md   how cost and performance were measured
 docs/PLAN.md          the design document

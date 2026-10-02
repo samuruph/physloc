@@ -71,15 +71,12 @@ class BarrierPass(Scenario):
 
         # Solve the approach for the ARRIVAL, not the launch.
         #
-        # It used to pick a launch speed from the frame width and set the gap
-        # to `speed * 0.45 * flight` -- constant-velocity arithmetic on a ball
-        # that is being slowed by friction the whole way. The error grows with
-        # the clip: at the debug tier's 25 frames the ball reached the wall at
-        # 0.93 m/s, at the release tier's 89 it arrived at 0.26 and hit on frame 61 of
-        # 89 rather than "just under halfway". Below 0.3 m/s `_geom.first_impact`
-        # stops calling it an impact at all, so `superelastic x barrier_pass`
-        # planned nothing on any seed at v0 -- a cell the matrix claims and the
-        # release never contained.
+        # Constant-velocity arithmetic (a launch speed from the frame width, a
+        # gap of `speed * 0.45 * flight`) ignores that friction slows the ball
+        # the whole way, and the error grows with the clip: at the release
+        # tier's 89 frames the ball would arrive at 0.26 m/s on frame 61.
+        # Below 0.3 m/s `_geom.first_impact` stops calling it an impact at all,
+        # so `superelastic x barrier_pass` could plan nothing.
         #
         # So: choose WHEN it should hit and HOW FAST it should still be going,
         # then integrate backwards through the deceleration to get the launch.

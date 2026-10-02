@@ -4,9 +4,7 @@ The bob is SIMULATED: an ordinary dynamic body that falls under gravity, held
 on its arc by a rod the solver enforces every substep (`sim_hooks`). Kubric
 exposes no joints, so the rod is a distance constraint applied by hook rather
 than a PyBullet joint. Only the rod's VISUAL is scripted -- it is carried
-between pivot and bob and collides with nothing. (This docstring used to say
-the arc was written analytically and replayed as keyframes; that stopped
-being true when the constraint replaced the analytic arc.)
+between pivot and bob and collides with nothing.
 
 Constrained periodic motion is what `angular_momentum` needs: on a free body a
 spin reversal is a curiosity, but on a pendulum it is a swing that turns around
@@ -90,13 +88,12 @@ class PendulumSwing(Scenario):
 
         bob = C.with_material(bob, M.pick(arng), arng)
 
-        # THE POST STANDS CLEAR OF THE SWING. It sat a fixed 0.28 m behind the
-        # swing plane, front face at 0.22 m, while the bob reaches 0.25-0.57 m
-        # (a scaled sphere, or a cube's corner): measured, the bob struck the
-        # post at the bottom of every swing, and the lawful clip kept 8% of its
-        # energy over two seconds -- the unrealistic swing you saw. Now placed
-        # behind the bob's own extent, with an AXLE from its top to the pivot,
-        # so the rod hangs from the bar instead of in front of it.
+        # THE POST STANDS CLEAR OF THE SWING. The bob reaches 0.25-0.57 m from
+        # the swing plane (a scaled sphere, or a cube's corner); a post at a
+        # fixed 0.28 m is struck at the bottom of every swing, and the lawful
+        # clip keeps 8% of its energy over two seconds. So it is placed behind
+        # the bob's own extent, with an AXLE from its top to the pivot, so the
+        # rod hangs from the bar instead of in front of it.
         y_post = (float(bob.bounding_radius) + self.POST_CLEARANCE
                   + self.POST_HALF_DEPTH)
         post = BodySpec(name="post", kind="cube",
@@ -136,10 +133,8 @@ class PendulumSwing(Scenario):
         places and the swing keeps 97% of its amplitude over three seconds, at
         0.19 ms/frame.
 
-        This replaces an analytic arc -- `theta0 * cos(omega * t)`, the
-        SMALL-ANGLE solution, which the scenario was using at angles up to 57
-        degrees. So the swing is not merely differently produced, it is right
-        where it used to be approximate.
+        Not an analytic arc: `theta0 * cos(omega * t)` is the SMALL-ANGLE
+        solution, and the scenario swings at angles up to 57 degrees.
 
         What it buys is uniformity. The bob is now an ordinary dynamic body, so
         every staged family acts on it the way it acts on any other body: no
@@ -321,7 +316,7 @@ class PendulumSwing(Scenario):
         # Local +Z onto the arm direction, whatever it is. The hinge keeps it
         # in the swing plane, but the rod is drawn along the real direction
         # rather than assuming that plane: a rod rotated only about +Y while
-        # its centre followed a bob out of plane is the detached rod you saw.
+        # its centre follows a bob out of plane looks detached from it.
         d = _np.asarray(direction, _np.float64)
         d = d / max(float(_np.linalg.norm(d)), 1e-12)
         z = _np.array([0.0, 0.0, 1.0])

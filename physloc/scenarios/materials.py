@@ -1,8 +1,7 @@
 """What a body is made of -- appearance and density, kept consistent.
 
-Mass used to be the literal `1.0` on almost every body in the project, and a
-benchmark whose objects all weigh the same teaches a model that mass is not a
-variable. The obvious fix -- draw a random mass -- makes a different problem:
+A benchmark whose objects all weigh the same teaches a model that mass is not
+a variable. The obvious fix -- draw a random mass -- makes a different problem:
 a viewer has no way to see that one ball is four times heavier than another,
 so a clip where the heavy one barely moves reads as a violation when it is
 lawful physics. The label would say "valid" and the picture would say
@@ -68,12 +67,11 @@ class Material:
     transmission: float = 0.0
     ior: float = 1.45
     #: How often this material is drawn, relative to the others. NOT uniform,
-    #: because the palette is not uniform in density: adding three dense metals
-    #: to make L1 legible also pushed the mean density from 2313 to 3458 and
-    #: doubled the median, so a uniform draw would have quietly made the whole
-    #: dataset heavier than the one the scenarios were tuned against. Weighting
-    #: the light end back up restores the old centre of mass while keeping the
-    #: wider palette -- see `pick`.
+    #: because the palette is not uniform in density: the three dense metals
+    #: that make L1 legible would push the mean density from 2313 to 3458 under
+    #: a uniform draw, making the whole dataset heavier than the one the
+    #: scenarios were tuned against. Weighting the light end back up keeps the
+    #: tuned centre of mass with the wider palette -- see `pick`.
     weight: float = 1.0
 
 

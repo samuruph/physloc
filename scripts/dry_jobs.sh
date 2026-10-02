@@ -2,11 +2,17 @@
 # Run the worker's full decision path (no rendering) on named release jobs,
 # writing trajectories + plans for scripts/check_multi.py.
 #   bash scripts/dry_jobs.sh <outroot> L0_barrier_pass_20260832_v8 ...
-# The family list is the job's own, from the v0 ledger, in the worker's order.
+# The family list is the job's own, from the release's job ledger
+# (PHYSLOC_LEDGER, default the v0 release's), in the worker's order; a job not
+# in the ledger runs every family its scenario supports.
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+if [ $# -lt 2 ]; then
+  echo "usage: bash scripts/dry_jobs.sh <outroot> <job> [<job> ...]" >&2
+  exit 64
+fi
 OUT=$1; shift
-LEDGER=/mnt/physloc/physloc_v0/.jobs
+LEDGER=${PHYSLOC_LEDGER:-/mnt/physloc/physloc_v0/.jobs}
 PARAMS=${PHYSLOC_PARAMS:-/mnt/physloc/work_v0/params.json}
 declare -A NV=([L0]=10 [L1]=5 [L2]=3 [L3]=2)
 for job in "$@"; do

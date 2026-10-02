@@ -12,7 +12,6 @@
 #   export PHYSLOC_PUSH_OWNER=samueleruf
 #   bash scripts/run.sh review_severity       # -> samueleruf/physloc-review_severity
 #   bash scripts/run.sh review_conditions     # -> samueleruf/physloc-review_conditions
-#   bash scripts/run.sh review_ladder         # -> samueleruf/physloc-review_ladder
 #   bash scripts/run.sh review_ladder         # the whole ladder in proportion
 #   bash scripts/run.sh v0_release            # the published dataset
 #   bash scripts/run.sh v0_L2                 # ...or one level of it at a time
@@ -67,6 +66,11 @@
 #   PHYSLOC_PUSH_TO=<user>/physloc-mini PHYSLOC_PUSH_PRIVATE=1 \
 #     bash scripts/run.sh review -n 45 --variants 10 \
 #          --outdir out/physloc_mini --workdir out/work_mini
+#
+#   # the v0 release, on the data disk:
+#   PHYSLOC_PUSH_TO=<user>/physloc-v0_release \
+#     bash scripts/run.sh v0_release \
+#          --outdir /mnt/physloc/physloc_v0 --workdir /mnt/physloc/work_v0
 #
 # A push REPLACES the card and index at that repo id, so give each artefact its
 # own name rather than overwriting a release with a sample.

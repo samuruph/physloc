@@ -42,6 +42,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from typing import Optional
 
 #: How often a running `generate` prints a status line.
 HEARTBEAT_SECONDS = 300
@@ -376,8 +377,8 @@ class Progress:
             parts.append("eta %s" % _fmt(self.eta()))
             return " | ".join(parts)
 
-    def update(self, label: str, weight: float = None, ok: bool = True,
-               index: int = None) -> str:
+    def update(self, label: str, weight: Optional[float] = None, ok: bool = True,
+               index: Optional[int] = None) -> str:
         """Record one finished job. Returns the line it printed, or "".
 
         `index` is the job's position in the job list. Jobs finish out of order
@@ -416,7 +417,7 @@ class Progress:
             print(line, file=self.stream, flush=True)
             return line
 
-    def skip(self, label: str, weight: float = None, index: int = None) -> None:
+    def skip(self, label: str, weight: Optional[float] = None, index: Optional[int] = None) -> None:
         """Record a job that was RESUMED rather than run.
 
         A skipped job consumed no wall clock, so it must not enter the observed

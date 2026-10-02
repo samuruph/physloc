@@ -6,7 +6,6 @@ still running. The container is replaced here by a stand-in `docker/kubric.sh`
 that prints what a worker prints, so no docker is needed.
 """
 import json
-import os
 import stat
 import time
 

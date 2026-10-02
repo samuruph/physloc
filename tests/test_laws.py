@@ -26,7 +26,8 @@ def test_each_discrete_ladder_orders_by_its_reference():
     strong's -- the ordering the audit requires, stated on the knobs."""
     fis = type(injectors.get("fission")).SEPARATION_BY_BIN
     fus = type(injectors.get("fusion")).MEET_RADII
-    for table, ref in ((fus, laws.FUSION_REF_RADII),):
+    for table, ref in ((fus, laws.FUSION_REF_RADII),
+                       (fis, laws.FISSION_REF_RADII)):
         shares = [min(1.0, table[b] / ref) for b in ("weak", "medium", "strong")]
         assert shares[0] < shares[1] < shares[2] == 1.0, shares
     fade = type(injectors.get("dissolve")).FADE_BY_BIN

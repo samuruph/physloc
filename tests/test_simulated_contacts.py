@@ -83,7 +83,6 @@ def _obstacle_pairs(traj, t_event):
     body is sitting on the surface, and gravity puts it back there whatever the
     intervention did. A near-horizontal one means the surface is in the way.
     """
-    import numpy as np
 
     c = traj.contacts
     out = set()
@@ -103,7 +102,6 @@ def _resting_pairs(traj, t_event):
     A surface the moved body RESTS ON in the invalid clip is its support there,
     not an obstacle it was moved past -- a scan teleported sideways along
     `rolling_ramp` lands on the ramp and keeps rolling down it."""
-    import numpy as np
 
     c = traj.contacts
     out = set()
@@ -120,7 +118,6 @@ def _resting_pairs(traj, t_event):
 def _jumped_past(traj, t_event, pair, violators, delta):
     """Did a jump of `delta` carry the violator beyond where it lawfully
     touched the other body of `pair` -- past the obstacle, not away from it?"""
-    import numpy as np
 
     c = traj.contacts
     point = None

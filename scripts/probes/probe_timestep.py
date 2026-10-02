@@ -1,6 +1,6 @@
 """What timestep does PyBullet actually integrate with, per tier?
 
-    bash docker/kubric.sh physloc/render/probe_timestep.py < /dev/null
+    bash docker/kubric.sh scripts/probes/probe_timestep.py < /dev/null
 
 A frame must advance the physics by exactly 1/fps. Kubric steps
 `step_rate / frame_rate` substeps per frame; whether each substep is

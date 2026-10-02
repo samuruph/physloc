@@ -119,16 +119,12 @@ class Pour(Scenario):
                 color=(0.34, 0.35, 0.40), segmentation_id=self.SEG_WALLS[i],
                 role="prop"))
 
-        # **A COLUMN, not a curtain.** The grains used to be released across
-        # +/-0.45 m -- a 0.9 m spread into a 1.64 m box -- so they arrived
-        # already spread out and settled ONE GRAIN DEEP: measured, every grain
-        # in the lawful clip ended at z = 0.073, heavy and light alike. A
-        # single layer has no interior, so two families had nothing to act on.
-        # `newton2_mass` made half the grains 25x heavier and they had nothing
-        # to sink through -- the clip differed from its twin (a mean 0.34 m per
-        # grain) but the three bins were indistinguishable at 0.334 / 0.338 /
-        # 0.382 m, because any mismatch past ~3x fully decorrelates a chaotic
-        # packing. `friction` had no heap whose angle it could change.
+        # **A COLUMN, not a curtain.** Released across a wide spread (+/-0.45 m
+        # into a 1.64 m box) the grains arrive already spread out and settle
+        # ONE GRAIN DEEP -- measured, every grain ended at z = 0.073. A single
+        # layer has no interior: `newton2_mass`'s heavy grains have nothing to
+        # sink through (its three bins were indistinguishable), and `friction`
+        # has no heap whose angle it could change.
         #
         # Poured down a narrow column the medium piles up and then avalanches
         # out to its angle of repose, which is the thing friction actually
@@ -190,9 +186,9 @@ class Pour(Scenario):
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR)] + walls + grains,
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
-            # Moved in AND up with the box. The old pose framed 1.66 m of
-            # world, which around a 0.68 m vessel is mostly empty floor. This
-            # frames 1.49 m -- the grains that overflow the low walls reach
+            # Moved in AND up with the box: framing 1.66 m of world around a
+            # 0.68 m vessel is mostly empty floor. This frames 1.49 m -- the
+            # grains that overflow the low walls reach
             # 1.43 m from the centre at 96 grains, and a grain outside the
             # frame is a violator with no pixels in a clip that claims one --
             # and looks down at 52

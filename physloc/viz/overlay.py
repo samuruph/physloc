@@ -878,9 +878,9 @@ def _header(f, W, clip, t, T, active, observable, occluded):
     # a clip ends up with several violators: `superelastic` boosts BOTH bodies of
     # a two-body collision, because boosting one would add a momentum
     # violation the clip does not annotate; `fission` and `fusion` name both
-    # halves. So a `standard` clip can carry two violators, and nothing on the
-    # frame said so -- you found it on L3 `stack_topple x superelastic`, where
-    # the severity landed on two blocks under a label that did not mention it.
+    # halves. So a `standard` clip can carry two violators, and the frame has
+    # to say so, or the severity lands on two bodies under a label that does
+    # not mention it.
     nc = len(v.violators)
     if nc > 1:
         timing = v.timing
@@ -1076,8 +1076,7 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
     # not `total`, because the panel sits beside a video and has to describe
     # the same clip the video does. A super-elastic bounce that throws the ball
     # out of the top of the shot leaves `total` sitting at 12 J for the rest of
-    # the clip while every pixel of evidence for it is gone -- you reported
-    # exactly that on `drop x superelastic`, `solidity` and `antigravity`.
+    # the clip while every pixel of evidence for it is gone.
     # `total` is still drawn, dimmed, so the difference between the two IS the
     # reading: where they separate, energy has left the frame rather than the
     # scene, and `/energy/scene` ships both.

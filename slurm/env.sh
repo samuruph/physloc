@@ -4,7 +4,7 @@
 # Every .slurm script here sources it too.
 
 # ---- 1. edit these -----------------------------------------------------------
-export SBATCH_ACCOUNT="CHANGEME@cpu"      # your hours (`idrproj`); sbatch reads this
+export SBATCH_ACCOUNT="${IDRPROJ}@cpu"      # your hours (`idrproj`); sbatch reads this
 export SALLOC_ACCOUNT="$SBATCH_ACCOUNT"   # ...salloc reads this one
 export SLURM_ACCOUNT="$SBATCH_ACCOUNT"    # ...and srun this one
 export PHYSLOC_CONFIG="v0_release"        # which config to generate

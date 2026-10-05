@@ -6,8 +6,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm/logs/%x_%j.out
-#SBATCH --error=slurm/logs/%x_%j.out
+#SBATCH --output=slurm/logs/setup/%x_%j.out
+#SBATCH --error=slurm/logs/setup/%x_%j.out
 
 cd ${SLURM_SUBMIT_DIR}
 module purge

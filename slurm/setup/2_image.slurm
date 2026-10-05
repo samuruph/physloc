@@ -7,8 +7,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm/logs/%x_%j.out
-#SBATCH --error=slurm/logs/%x_%j.out
+#SBATCH --output=slurm/logs/setup/%x_%j.out
+#SBATCH --error=slurm/logs/setup/%x_%j.out
 
 cd ${SLURM_SUBMIT_DIR}
 module purge
@@ -20,4 +20,4 @@ DIGEST=$(grep -m1 '^kubricdockerhub/kubruntu@sha256:' docker/IMAGE_DIGEST)
 singularity build --force $SCRATCH/kubric.sif docker://$DIGEST
 idrcontmgr cp $SCRATCH/kubric.sif     # checked by IDRIS, copied to $SINGULARITY_ALLOWED_DIR
 idrcontmgr ls
-rm -f $SCRATCH/kubric.sif
+# rm -f $SCRATCH/kubric.sif

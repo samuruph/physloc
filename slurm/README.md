@@ -63,7 +63,7 @@ sbatch slurm/setup/1_conda.slurm
 sbatch slurm/setup/2_image.slurm
 sbatch slurm/setup/3_assets.slurm
 squeue -u $USER                     # wait until all three are gone
-tail slurm/logs/setup-*.out         # conda ends "host env OK"; image lists kubric.sif
+tail slurm/logs/setup/setup-*.out         # conda ends "host env OK"; image lists kubric.sif
 ```
 
 If `idrcontmgr` refuses the image (see the `setup-image` log), stop there and write to

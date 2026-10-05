@@ -20,25 +20,38 @@ resumable: a file is skipped when it is already there at its full size.
 import argparse
 import concurrent.futures
 import copy
+import importlib.util
 import json
 import os
 import sys
 import time
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 BASE = "https://storage.googleapis.com/kubric-public/assets"
 ATTEMPTS = 4
 
 
+def _load(relpath, name):
+    """A list from one of the baked id files, read on its own.
+
+    Not `import physloc.scenarios...`: that package needs numpy, and this
+    script must run with any Python 3 -- before the conda env exists. The two
+    id files import nothing but `typing`.
+    """
+    path = os.path.join(REPO, relpath)
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def wanted_ids():
     """{source name: the ids PhysLoc can ask for, or None for all of them}."""
-    from physloc.scenarios._gso import GSO_IDS
-    from physloc.scenarios._hdri import HDRI_IDS
-
-    return {"KuBasic": None, "GSO": list(GSO_IDS), "HDRI_haven": list(HDRI_IDS)}
+    gso = _load("physloc/scenarios/_gso.py", "_gso").GSO_IDS
+    hdri = _load("physloc/scenarios/_hdri.py", "_hdri").HDRI_IDS
+    return {"KuBasic": None, "GSO": list(gso), "HDRI_haven": list(hdri)}
 
 
 def asset_file(asset_id, entry):

@@ -128,6 +128,7 @@ The pilot's jobs are already done, so their tasks finish in seconds. To follow p
 ```bash
 squeue -u $USER          # what is running / waiting (and why, e.g. QOSMaxCpuPerUserLimit)
 python slurm/status.py   # what is done, and what to re-send
+python slurm/status.py --running   # each running task: time so far, peak memory vs its limit
 ```
 
 ### 6. If a job fails

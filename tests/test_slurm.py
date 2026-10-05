@@ -315,3 +315,10 @@ def test_status_writes_compact_array_ranges():
     assert spec([0, 1, 2, 5, 7, 8]) == "0-2,5,7-8"
     assert spec([3]) == "3"
     assert spec(range(180)) == "0-179"
+
+
+def test_status_reads_slurm_memory_figures():
+    gb = _slurm_module("status").parse_kib
+    assert abs(gb("33449380K") - 31.9) < 0.1          # sstat's usual form
+    assert gb("512M") == 0.5 and gb("2G") == 2.0
+    assert gb("") is None

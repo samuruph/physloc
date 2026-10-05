@@ -4,6 +4,7 @@ exact sbatch line to re-send them. Submits nothing itself.
     source slurm/env.sh
     python slurm/status.py            # summary + what to re-send
     python slurm/status.py --details  # ...and one line per unfinished job
+    python slurm/status.py --running  # running tasks: time so far, peak memory
 
 A job is DONE when its ledger entry `$PHYSLOC_OUTDIR/.jobs/<name>.json` exists:
 it is written only once the whole job has landed. For the rest, SLURM says
@@ -72,6 +73,44 @@ def finished_tasks(days=30):
                              "-S", "now-%ddays" % days, "-o", "JobID,JobName,State"]))
 
 
+def parse_kib(value):
+    """A SLURM memory figure (`2433616K`, `33.4G`, `512M`) in GB, or None."""
+    m = re.match(r"^([\d.]+)([KMGT]?)$", value.strip())
+    if not m:
+        return None
+    scale = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1.0,
+             "T": 1024.0}[m.group(2)]
+    return float(m.group(1)) * scale
+
+
+def running_report():
+    """One line per running render task: list, task, time so far, peak memory
+    against what its cores give it. sacct only reports MaxRSS once a task has
+    ended; sstat is the live figure."""
+    rows = []
+    for line in _run(["squeue", "-h", "-u", getpass.getuser(), "-t", "R",
+                      "-o", "%i|%j|%M"]).splitlines():
+        task, name, elapsed = (line.split("|") + ["", "", ""])[:3]
+        if not name.startswith("render-"):
+            continue
+        list_name = name[len("render-"):]
+        rss = _run(["sstat", "-n", "-P", "-j", task + ".batch", "-o", "MaxRSS"])
+        peak = parse_kib(rss.splitlines()[0]) if rss.strip() else None
+        limit = int(script_setting(list_name, "cpus-per-task")) * 4
+        rows.append((list_name, task, elapsed, peak, limit))
+    if not rows:
+        print("no render task is running")
+        return
+    print("%-9s %-12s %11s %10s %8s %5s" % ("list", "task", "elapsed", "peak mem",
+                                           "limit", "used"))
+    for list_name, task, elapsed, peak, limit in rows:
+        if peak is None:
+            print("%-9s %-12s %11s %10s %6d GB" % (list_name, task, elapsed, "?", limit))
+        else:
+            print("%-9s %-12s %11s %7.1f GB %5d GB %4.0f%%" % (
+                list_name, task, elapsed, peak, limit, 100 * peak / limit))
+
+
 def diagnose(attempts):
     """What to do about a job that is not done, from its finished attempts."""
     if not attempts:
@@ -132,7 +171,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--details", action="store_true",
                     help="one line per unfinished job, with its error")
+    ap.add_argument("--running", action="store_true",
+                    help="only the running tasks: time so far and peak memory")
     a = ap.parse_args()
+    if a.running:
+        running_report()
+        return 0
     outdir = env("PHYSLOC_OUTDIR")
     queued, finished = queued_tasks(), finished_tasks()
 

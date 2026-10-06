@@ -100,7 +100,7 @@ sbatch --array=0 slurm/render_8cores.slurm
 sbatch --array=0 slurm/render_4cores.slurm
 ```
 
-Line 1 of each list is its longest job. When all four have finished:
+Line 1 of each list is its longest job. When all four have finished, `python slurm/status.py --finished` does the arithmetic below for you. By hand:
 
 ```bash
 sacct -u $USER --starttime today --format=JobID,JobName%16,Elapsed,MaxRSS,State
@@ -129,6 +129,7 @@ The pilot's jobs are already done, so their tasks finish in seconds. To follow p
 squeue -u $USER          # what is running / waiting (and why, e.g. QOSMaxCpuPerUserLimit)
 python slurm/status.py   # what is done, and what to re-send
 python slurm/status.py --running   # each running task: time so far, peak memory vs its limit
+python slurm/status.py --finished  # finished tasks + a --time / cores advice per render script
 ```
 
 ### 6. If a job fails

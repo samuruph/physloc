@@ -5,6 +5,7 @@ exact sbatch line to re-send them. Submits nothing itself.
     python slurm/status.py            # summary + what to re-send
     python slurm/status.py --details  # ...and one line per unfinished job
     python slurm/status.py --running  # running tasks: time so far, peak memory
+    python slurm/status.py --finished # finished tasks, and a --time / cores advice per list
 
 A job is DONE when its ledger entry `$PHYSLOC_OUTDIR/.jobs/<name>.json` exists:
 it is written only once the whole job has landed. For the rest, SLURM says
@@ -27,7 +28,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from make_job_lists import JOBS_DIR, LISTS, env, script_setting  # noqa: E402
+from make_job_lists import (ANNOTATION_GB, JOBS_DIR, LISTS, env,  # noqa: E402
+                            script_setting)
 
 INTERRUPTED = {"NODE_FAIL", "CANCELLED", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
                "REQUEUED", "SUSPENDED"}
@@ -81,6 +83,102 @@ def parse_kib(value):
     scale = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1.0,
              "T": 1024.0}[m.group(2)]
     return float(m.group(1)) * scale
+
+
+def parse_duration(text):
+    """SLURM durations (`1-02:03:04`, `16:11:35`, `05:12.345`) in hours, or None."""
+    text = text.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        d, text = text.split("-", 1)
+        days = int(d)
+    parts = [float(x) for x in text.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    h, m, sec = parts
+    return days * 24 + h + m / 60 + sec / 3600
+
+
+def finished_tasks_table(text):
+    """sacct -P lines (job + its .batch step) -> one dict per finished render task."""
+    tasks, batch = {}, {}
+    for line in text.splitlines():
+        p = (line.strip().split("|") + [""] * 6)[:6]
+        job_id, name, state, elapsed, total_cpu, rss = p
+        if job_id.endswith(".batch"):
+            batch[job_id[:-len(".batch")]] = rss
+            continue
+        if not name.startswith("render-") or "." in job_id \
+                or not re.match(r"^\d+_\d+$", job_id):
+            continue
+        tasks[job_id] = {"list": name[len("render-"):], "task": job_id,
+                         "state": state.split()[0] if state else "",
+                         "hours": parse_duration(elapsed),
+                         "cpu_hours": parse_duration(total_cpu)}
+    for job_id, t in tasks.items():
+        t["peak_gb"] = parse_kib(batch.get(job_id, ""))
+    return [t for t in tasks.values() if t["state"] not in ("RUNNING", "PENDING")]
+
+
+def advise(list_name, rows):
+    """What the finished tasks of one list say about its #SBATCH header."""
+    cores = int(script_setting(list_name, "cpus-per-task"))
+    qos = script_setting(list_name, "qos")
+    done = [r for r in rows if r["state"] == "COMPLETED" and r["hours"]]
+    if not done:
+        return ["no completed task yet"]
+    longest = max(r["hours"] for r in done)
+    time_h = int(longest * 1.5) + 1                      # +50%, rounded up
+    peaks = [r["peak_gb"] for r in done if r["peak_gb"] is not None]
+    if qos == "qos_cpu-t3":
+        # t3 caps at 20 h. The pilot is the list's longest job, so a 1.2x margin
+        # is enough in practice; a rare TIMEOUT is re-sent on t4 by this script.
+        margin = 20 / longest
+        if margin >= 1.5:
+            note = "comfortable"
+        elif margin >= 1.2:
+            note = "OK; a rare TIMEOUT gets re-sent on qos_cpu-t4"
+        else:
+            note = "!! too tight: use qos_cpu-t4, or more cores"
+        out = ["longest %.1f h of qos_cpu-t3's 20 h (margin %.2fx): %s"
+               % (longest, margin, note)]
+    else:
+        out = ["longest %.1f h  ->  #SBATCH --time=%d:00:00" % (longest, time_h)]
+    if peaks:
+        need = int((max(peaks) * 1.5 + ANNOTATION_GB) / 4) + 1   # +50% headroom
+        out.append("peak memory %.1f GB of %d GB  ->  memory alone needs >= %d cores (has %d)"
+                   % (max(peaks), cores * 4, need, cores))
+    eff = [r["cpu_hours"] / (r["hours"] * cores) for r in done
+           if r["cpu_hours"] and r["hours"]]
+    if eff:
+        out.append("CPU efficiency %.0f%% (busy share of the %d cores)"
+                   % (100 * sum(eff) / len(eff), cores))
+    return out
+
+
+def finished_report(days=30):
+    rows = finished_tasks_table(_run([
+        "sacct", "-n", "-P", "-u", getpass.getuser(), "-S", "now-%ddays" % days,
+        "-o", "JobID,JobName,State,Elapsed,TotalCPU,MaxRSS"]))
+    if not rows:
+        print("no finished render task in the last %d days" % days)
+        return
+    print("%-9s %-12s %-14s %8s %10s" % ("list", "task", "state", "hours", "peak mem"))
+    for r in sorted(rows, key=lambda r: (LISTS.index(r["list"])
+                                         if r["list"] in LISTS else 99, r["task"])):
+        print("%-9s %-12s %-14s %8s %10s" % (
+            r["list"], r["task"], r["state"],
+            "%.1f" % r["hours"] if r["hours"] is not None else "?",
+            "%.1f GB" % r["peak_gb"] if r["peak_gb"] is not None else "?"))
+    print()
+    for list_name in LISTS:
+        mine = [r for r in rows if r["list"] == list_name]
+        if mine:
+            print("render_%s.slurm:" % list_name)
+            for line in advise(list_name, mine):
+                print("  " + line)
 
 
 def running_report():
@@ -173,9 +271,14 @@ def main():
                     help="one line per unfinished job, with its error")
     ap.add_argument("--running", action="store_true",
                     help="only the running tasks: time so far and peak memory")
+    ap.add_argument("--finished", action="store_true",
+                    help="finished tasks, and --time / cores advice per render script")
     a = ap.parse_args()
     if a.running:
         running_report()
+        return 0
+    if a.finished:
+        finished_report()
         return 0
     outdir = env("PHYSLOC_OUTDIR")
     queued, finished = queued_tasks(), finished_tasks()

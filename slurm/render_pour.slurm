@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1                    # one process: generate (it starts the render)
 #SBATCH --cpus-per-task=10            # = ~40 GB of memory on cpu_p1 (4 GB per core)
 #SBATCH --hint=nomultithread          # physical cores, no hyperthreading
-#SBATCH --time=60:00:00               # set from the pilot's sacct Elapsed, + margin
+#SBATCH --time=25:00:00               # pilot: 16.2 h for the longest pour job, +50%
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.out
 

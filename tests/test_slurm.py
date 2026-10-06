@@ -322,3 +322,28 @@ def test_status_reads_slurm_memory_figures():
     assert abs(gb("33449380K") - 31.9) < 0.1          # sstat's usual form
     assert gb("512M") == 0.5 and gb("2G") == 2.0
     assert gb("") is None
+
+
+def test_status_reads_durations():
+    h = _slurm_module("status").parse_duration
+    assert abs(h("16:11:35") - 16.193) < 0.001
+    assert h("1-02:00:00") == 26.0
+    assert abs(h("05:30.500") - 0.0918) < 0.001        # TotalCPU's short form
+    assert h("") is None
+
+
+def test_status_advises_from_the_pilot():
+    st = _slurm_module("status")
+    rows = st.finished_tasks_table("\n".join([
+        "614405_0|render-pour|COMPLETED|16:11:35|5-00:00:00|",
+        "614405_0.batch|batch|COMPLETED|16:11:35|5-00:00:00|6257480K",
+        "614406_0|render-8cores|COMPLETED|13:48:34|3-12:00:00|",
+        "614406_0.batch|batch|COMPLETED|13:48:34|3-12:00:00|3405788K",
+        "614407_0|render-4cores|RUNNING|02:00:00||",          # not finished: skipped
+        "608373|setup-image|COMPLETED|00:02:46||"]))          # not a render: skipped
+    assert sorted(r["list"] for r in rows) == ["8cores", "pour"]
+    pour = st.advise("pour", [r for r in rows if r["list"] == "pour"])
+    assert pour[0].endswith("--time=25:00:00")                # 16.2 h x 1.5, rounded up
+    eight = st.advise("8cores", [r for r in rows if r["list"] == "8cores"])
+    assert "margin 1.45x" in eight[0] and "OK" in eight[0]    # 13.8 h of 20 h
+    assert not any("!!" in line for line in eight)

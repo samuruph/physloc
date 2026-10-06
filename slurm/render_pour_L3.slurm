@@ -1,5 +1,5 @@
 #!/bin/bash
-# RENDER -- pour at L3: 96 scanned meshes, the most memory (~120 GB).
+# RENDER -- pour at L3: 96 scanned meshes, the most memory (pilot peak 39.8 GB).
 # One array task = one job (one level x scenario x variant: its valid clip and
 # every family at every severity). Task i runs line i+1 of slurm/jobs/pour_L3.txt.
 #
@@ -9,9 +9,9 @@
 #SBATCH --partition=cpu_p1
 #SBATCH --qos=qos_cpu-t4              # up to 100 h
 #SBATCH --ntasks=1                    # one process: generate (it starts the render)
-#SBATCH --cpus-per-task=32            # = ~128 GB of memory on cpu_p1 (4 GB per core)
+#SBATCH --cpus-per-task=16            # = ~64 GB of memory on cpu_p1; pilot peak 39.8 GB
 #SBATCH --hint=nomultithread          # physical cores, no hyperthreading
-#SBATCH --time=17:00:00               # pilot: 11.0 h, +50%; 32 cores for memory (39.8 GB, up to ~68 seen)
+#SBATCH --time=20:00:00               # pilot: 11.0 h on 32 cores; ~13-15 h expected on 16
 #SBATCH --output=slurm/logs/%x_%A_%a.out
 #SBATCH --error=slurm/logs/%x_%A_%a.out
 

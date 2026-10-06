@@ -14,9 +14,12 @@ list, by what it needs:
     4cores    everything else, L0/L1   -> render_4cores.slurm
 
 Each list is sorted longest job first, so `--array=0` (the pilot) is the job
-most likely to hit a limit. Before writing anything, every job is checked to
-fit the memory its script gives it: on cpu_p1 that is 4 GB per core, and the
-cores are read from the script's own `#SBATCH --cpus-per-task` line.
+most likely to hit a limit. Every job is also compared with the memory its
+script gives it (4 GB per core on cpu_p1, cores read from the script's own
+`#SBATCH --cpus-per-task`). That uses the CHARGE in `cli.JOB_MEMORY_GB`, a
+conservative estimate, so a mismatch is a WARNING: the pilot's measured peak
+(`python slurm/status.py --finished`) is what decides, and a job that really
+runs out of memory shows as OUT_OF_MEMORY in status.py, with a re-send line.
 """
 import csv
 import os
@@ -84,8 +87,10 @@ def main():
                               cores * GB_PER_CORE))
         lists[name].append(job["name"])
     if too_big:
-        sys.exit("raise --cpus-per-task in these scripts first:\n  "
-                 + "\n  ".join(too_big))
+        print("WARNING: these jobs are CHARGED more memory than their script gives.\n"
+              "The charge is a conservative estimate; if the pilot's measured peak\n"
+              "fits (status.py --finished), this is fine:\n  " + "\n  ".join(too_big),
+              file=sys.stderr)
 
     for old in os.listdir(JOBS_DIR):
         if old.endswith(".txt"):

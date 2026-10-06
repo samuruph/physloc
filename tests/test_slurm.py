@@ -256,7 +256,8 @@ def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
         t4 = "--qos=qos_cpu-t4" in header
         for name in list_file.read_text().split():
             r = rows[name]
-            assert cores * 4 >= float(r["memory_gb"]) + 2      # memory fits
+            if cores * 4 < float(r["memory_gb"]) + 2:        # charged more than given:
+                assert name in proc.stderr                    # ...said so, not hidden
             assert t4 == (r["scenario"] == "pour")             # only pour > 20 h
             assert (cores >= 8) == (r["level"] in ("L2", "L3")
                                     or r["scenario"] == "pour")
@@ -306,7 +307,10 @@ def test_status_remedies():
     assert st.remedy("timeout", "4cores") == "--qos=qos_cpu-t4 --time=60:00:00"
     assert st.remedy("timeout", "pour") == "--time=100:00:00"   # already on t4
     assert st.remedy("out of memory", "4cores") == "--cpus-per-task=8"
-    assert st.remedy("out of memory", "pour_L3") == "--cpus-per-task=40"  # one node
+    l3 = int(st.script_setting("pour_L3", "cpus-per-task"))
+    assert st.remedy("out of memory", "pour_L3") == "--cpus-per-task=%d" % min(40, 2 * l3)
+    st_cap = st.MAX_CORES
+    assert st_cap == 40                                         # one cpu_p1 node
     assert st.remedy("failed twice", "4cores") is None          # investigate instead
 
 

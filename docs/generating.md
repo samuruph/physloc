@@ -50,6 +50,7 @@ python -m physloc.cli stats     out/review_severity      # the distributions, pl
 python -m physloc.cli viz       out/review_severity      # every grid and sheet, one folder
 python -m physloc.cli coverage  out/review_severity      # every invalid clip, one video
 python -m physloc.cli compare   out/review_L0 out/review_L3 out/review_conditions  # dataset structure
+python -m physloc.cli showcase  out/review_L0 out/review_L3 out/review_conditions  # slide-ready videos
 
 python test_dataset_loader.py out/review_severity        # load it: structure and shapes
 python test_dataset_loader.py out/review_severity --gui  # any clip, any layer or panel
@@ -74,12 +75,13 @@ Each run leaves everything worth looking at beside its samples:
 
 ```
 out/<config>/
-  coverage_strong.mp4     every invalid clip in one video -- open this first
+  viz/coverage_strong.mp4 every invalid clip in one video -- open this first
+  viz/                    every grid and sheet, one folder
+  viz/compare/<level>/    variants and conditions of a cell, side by side
   audit.txt               the cells whose violation is not visible
   stats/                  the six figures and stats.json
-  viz/                    every grid and sheet, one folder
-  compare/<level>/        variants and conditions of a cell, side by side
 out/compare/              the same across every run of the sweep, including the level ladder
+out/showcase/             the presentation videos across every run of the sweep
 out/logs/<config>.txt     what that run printed
 ```
 
@@ -117,7 +119,7 @@ out/review_severity/viz/
 takes several release roots, because a review run usually holds one level:
 
 ```
-out/review_L0/compare/           (or --outdir)
+out/review_L0/viz/compare/       (or --outdir)
   levels/drop__antigravity.mp4     L0 | L1 | L2 | L3 -- each level's OWN scene, not twins
   variants/drop__solidity.mp4      up to 5 variants of the cell at one level (--level, -n)
   conditions/drop__solidity.mp4    standard | camera | distractors | multi | camera+multi
@@ -126,6 +128,47 @@ out/review_L0/compare/           (or --outdir)
 Each tile is the invalid sample with its violation mask and timeline; a missing tile says "not
 generated". `--scenario drop --family solidity` draws one cell; `--limit N` draws N cells per kind
 spread over the scenarios. It reads finished samples only, at a few seconds per video.
+
+`showcase` is for an audience rather than for review: videos ready to drop onto a slide.
+**Each axis video shows one axis on one scene**: the clips side by side differ in that axis and
+nothing else. There is **one per scenario, in a folder per axis**, so you choose the scene when you
+build the slide. The only text is a caption in a semi-transparent box at a tile's bottom right,
+in capitals. The axis videos are RGB only; annotation appears in `annotations` and the teaser.
+
+```
+<root>/viz/showcase/                (or --outdir; finalize.slurm writes it)
+  teaser.mp4                 square, 1080x1080 -- the dataset as a story, below
+  scenarios.mp4              every built scenario
+  families/<scenario>.mp4    ONE scene: valid, then every family staged on it
+  severity/<scenario>.mp4    one scene: valid | weak | medium | strong
+  levels/<scenario>.mp4      one cell: L0 | L1 | L2 | L3 -- each level its OWN scene, not twins
+  conditions/<scenario>.mp4  one cell: standard | camera | distractors | multi | camera+multi
+  variants/<scenario>.mp4    one cell at L0: six seeds, what the sampler varies
+  annotations/<scenario>.mp4 one clip, a sliding line through RGB -> depth -> ... -> causal
+  picks.json                 which sample fills each slot
+```
+
+The teaser runs in seven sections:
+
+1. A carousel of every scenario scrolls right to left and stops on `collision x phantom_impulse`.
+2. That clip plays once in RGB.
+3. A sliding line reveals its severity map. The annotation stays on from here to the end.
+4. A carousel of every family.
+5. Wipes through the five conditions.
+6. Wipes through the four levels.
+7. A zoom out to a 20x20 mosaic.
+
+Every number on it comes from the taxonomy or from the clips on disk. A slot the run did not
+generate is a "not generated" placeholder, so a partial run still plays end to end. The opening
+clip, the mosaic size, the scroll speed and the zoom are constants at the top of
+`physloc/viz/showcase.py`.
+
+The picks are automatic. They rank on what `sample.json` already says: strong, then standard,
+then L0, then the violation's area against its occlusion. `--scenario drop` makes only that
+scenario's axis videos, and `--family support` fixes the family where the axis allows. To curate any
+slot, edit `picks.json` and re-run with `--picks viz/showcase/picks.json --only severity`. A partial
+run keeps the other videos' picks. A full release takes a few minutes, most of it the teaser's
+mosaic.
 
 ## Overriding a config
 

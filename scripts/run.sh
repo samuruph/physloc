@@ -155,7 +155,7 @@ BINS=${BINS:-strong}
 echo "== coverage: scenario x family lattice, one per severity =="
 for BIN in $BINS; do
   $PV coverage "$REL" --severity "$BIN" \
-      --out "$REL/coverage_$BIN.mp4" || true
+      --out "$REL/viz/coverage_$BIN.mp4" || true
 done
 
 # Grids and sheets, collected into ONE folder rather than written beside the
@@ -177,16 +177,16 @@ $PV viz "$REL" || true
 COMPARE_LIMIT="${PHYSLOC_COMPARE_LIMIT:-12}"
 LEVELS=$(find "$REL/samples" -mindepth 2 -maxdepth 2 -type d -name 'L[0-9]' \
          -printf '%f\n' 2>/dev/null | sort -u)
-echo "== compare: structure videos -> $REL/compare (levels: ${LEVELS:-none}) =="
+echo "== compare: structure videos -> $REL/viz/compare (levels: ${LEVELS:-none}) =="
 for LEVEL in $LEVELS; do
   for KIND in variants conditions; do
     $PV compare "$REL" --kind "$KIND" --level "$LEVEL" --limit "$COMPARE_LIMIT" \
-        --outdir "$REL/compare/$LEVEL" || true
+        --outdir "$REL/viz/compare/$LEVEL" || true
   done
 done
 if [ "$(echo "$LEVELS" | wc -w)" -gt 1 ]; then
   $PV compare "$REL" --kind levels --limit "$COMPARE_LIMIT" \
-      --outdir "$REL/compare" || true
+      --outdir "$REL/viz/compare" || true
 fi
 
 echo "== randomisation: is the sampler actually varying? (renders nothing) =="
@@ -225,11 +225,11 @@ $PV export "$REL" --outdir "out/hf/$(basename "$REL")" "${PUSH[@]}" || true
 
 echo
 echo "done -> $REL"
-echo "  coverage_strong.mp4            scenario x family lattice -- open this first"
+echo "  viz/coverage_strong.mp4        scenario x family lattice -- open this first"
+echo "  viz/                           every grid and sheet, one folder"
+echo "  viz/compare/<level>/{variants,conditions}/   one cell's structure side by side"
 echo "  audit.txt                      cells whose violation is not visible"
 echo "  stats/                         1_overview.png ... 6_timing_and_severity.png, stats.json"
-echo "  viz/                           every grid and sheet, one folder"
-echo "  compare/<level>/{variants,conditions}/   one cell's structure side by side"
 echo "  out/hf/$(basename "$REL")/       packaged dataset: index.parquet plays the videos"
 echo "  samples/**/sheet_strong.mp4    one scenario: every family x every annotation"
 echo "  samples/**/grid_<family>.mp4   one family: every severity x every annotation"

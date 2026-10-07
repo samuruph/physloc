@@ -549,7 +549,10 @@ def coverage(release_root: str, out_path: Optional[str] = None,
                     cv2.circle(f, (x + cell - 9, y + 9), 5, (255, 255, 255), 1)
         out[t] = f
 
-    out_path = out_path or os.path.join(release_root, "coverage.mp4")
+    # Every video of a release lives under viz/, beside the grids and sheets.
+    out_path = out_path or os.path.join(release_root, "viz",
+                                        "coverage_%s.mp4" % severity)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     fps = next(iter(next(iter(clips.values())).values()))["meta"].get(
         "frame_rate", 12)
     vid.write(out, out_path, fps=int(fps))

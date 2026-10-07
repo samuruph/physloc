@@ -316,10 +316,21 @@ frames rendered in memory, never written).
 Boxes, centres, arrows and labels skip a body the trajectory marks absent: a vanished body
 keeps a pose, and a box drawn around nothing reads as a detection.
 
-`compare` (`physloc/viz/compare.py`) is the one exception, on purpose: it shows the dataset's
+`compare` (`physloc/viz/compare.py`) is an exception, on purpose: it shows the dataset's
 STRUCTURE -- levels, variants, conditions of one cell side by side -- so each tile is the `mask`
 panel alone with its timeline. Its level video shows each level's own scene; levels are never
 twins, and the header says so.
+
+`showcase` (`physloc/viz/showcase.py`) is the second exception: presentation videos, **one axis
+per video on one scene, one video per scenario** (`<axis>/<scenario>.mp4` for families, severity,
+levels, conditions, variants and annotations), RGB only, with a capitalised caption box in each
+tile's corner. The square `teaser` tells the whole dataset: scenario carousel, hero clip, sliding
+line to its severity map, family carousel, condition and level wipes, then a zoom out to a mosaic.
+It draws through `overlay.Renderer`'s own panels and picks through `compare.index`, so it adds
+layout and nothing else. Clips advance by TIME (`Clip.at`), because roots can mix tiers. Its
+picks are a file (`picks.json`, replayed with `--picks`) so slides can be curated.
+`finalize.slurm` writes it. Its captions use PIL fonts rather than `_text`: they are for an
+audience, and they sit on a backing box anyway.
 
 When drawing text on frames, use `viz.overlay._text`: it draws a dark backing box rather
 than a thick outline, because OpenCV's Hershey glyph advance grows with stroke thickness, so

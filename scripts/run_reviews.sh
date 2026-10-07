@@ -73,5 +73,10 @@ if [ ${#ROOTS[@]} -gt 1 ]; then
   conda run --no-capture-output -n physloc python -m physloc.cli compare \
       "${ROOTS[@]}" --limit "${PHYSLOC_COMPARE_LIMIT:-20}" --outdir "$OUT" \
       2>&1 | tee "out/logs/compare$SUFFIX.txt" || true
+  # The presentation videos, over the same roots and for the same reason:
+  # their levels and conditions slides need every root at once.
+  conda run --no-capture-output -n physloc python -m physloc.cli showcase \
+      "${ROOTS[@]}" --outdir "out/showcase$SUFFIX" \
+      2>&1 | tee "out/logs/showcase$SUFFIX.txt" || true
 fi
 echo "ALL DONE $(date)"

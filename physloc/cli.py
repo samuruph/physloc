@@ -1894,7 +1894,7 @@ def cmd_compare(a) -> int:
     from .viz import compare
 
     kinds = compare.KINDS if a.kind == "all" else (a.kind,)
-    outdir = a.outdir or os.path.join(a.roots[0], "compare")
+    outdir = a.outdir or os.path.join(a.roots[0], "viz", "compare")
     if a.scenario and a.family:
         recs = compare.index(a.roots)
         made = []
@@ -1918,6 +1918,18 @@ def cmd_compare(a) -> int:
 def cmd_coverage(a) -> int:
     from .viz.grid import coverage
     print(json.dumps(coverage(a.root, a.out, severity=a.severity), default=str))
+    return 0
+
+
+def cmd_showcase(a) -> int:
+    """Slide-ready videos of the dataset's breadth -- see `viz/showcase.py`."""
+    from .viz import showcase
+
+    only = [x.strip() for x in a.only.split(",") if x.strip()] if a.only else None
+    outdir = a.outdir or os.path.join(a.roots[0], "viz", "showcase")
+    print(json.dumps(showcase.build(a.roots, outdir, only=only, picks=a.picks,
+                                    seed=a.seed, scenario=a.scenario,
+                                    family=a.family), indent=1, default=str))
     return 0
 
 
@@ -2218,8 +2230,28 @@ def _build(suppress: bool = False):
     p.add_argument("--limit", type=int, default=0,
                    help="at most this many cells per kind, spread over "
                         "scenarios (0 = every cell)")
-    p.add_argument("--outdir", help="default <first root>/compare")
+    p.add_argument("--outdir", help="default <first root>/viz/compare")
     p.set_defaults(fn=cmd_compare)
+
+    p = add_parser("showcase",
+                   help="slide-ready 1920x1080 videos, one dataset axis each")
+    p.add_argument("roots", nargs="+",
+                   help="release roots to draw from, e.g. out/physloc_v0")
+    p.add_argument("--outdir", help="default <first root>/viz/showcase")
+    p.add_argument("--only",
+                   help="comma list of: teaser, scenarios, families, "
+                        "severity, levels, conditions, variants, annotations "
+                        "(default: all)")
+    p.add_argument("--picks",
+                   help="a picks.json from an earlier run: replay (or "
+                        "hand-curate) which sample fills each slot")
+    p.add_argument("--seed", type=int, default=0,
+                   help="shuffles the teaser mosaic")
+    p.add_argument("--scenario",
+                   help="the scene of severity, levels, conditions, variants "
+                        "and annotations")
+    p.add_argument("--family", help="the family of the same videos")
+    p.set_defaults(fn=cmd_showcase)
 
     p = add_parser("config-path",
                    help="print the outdir a config resolves to")

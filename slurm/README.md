@@ -33,15 +33,16 @@ This is the IDRIS job-array example, with `./mon_exe < fichier${SLURM_ARRAY_TASK
 | `setup/3_assets.slurm` | downloads the Kubric assets (~12 GB): compute nodes have no internet | once |
 | `make_job_lists.py` | writes `slurm/jobs/*.txt` and **prints the sbatch commands to run** | once per release |
 | `render_4cores.slurm` | L0/L1 jobs (except `pour`): 4 cores, 20 h | `sbatch --array=...` |
-| `render_8cores.slurm` | L2/L3 jobs (except `pour`): 8 cores, 20 h | `sbatch --array=...` |
+| `render_8cores.slurm` | L2/L3 jobs (except `pour` and `shadow_track`): 8 cores, 20 h | `sbatch --array=...` |
+| `render_8cores_long.slurm` | `shadow_track` L2/L3 (each clip rendered 2–3 times): 8 cores, long queue | `sbatch --array=...` |
 | `render_pour.slurm` | `pour` L0–L2: 10 cores, long queue | `sbatch --array=...` |
 | `render_pour_L3.slurm` | `pour` L3: 32 cores (it needs ~120 GB), long queue | `sbatch --array=...` |
 | `status.py` | what is done, why the rest is not, and the exact line to re-send it | any time |
-| `finalize.slurm` | stats, index, validate, audit, coverage video | once, at the end |
+| `finalize.slurm` | stats, index, validate, audit, coverage video, showcase | once, at the end |
 | `archive.slurm` | tar the release into `$STORE` | once, at the end |
 | `kubric_singularity.sh` | how a render starts inside `kubric.sif` (used by `generate`; you never call it) | never |
 
-The four render scripts are identical except for their `#SBATCH` header and the job list they read.
+The five render scripts are identical except for their `#SBATCH` header and the job list they read.
 Why four: on Jean Zay memory comes with cores (about 4 GB per core), and `pour` needs the most of both.
 
 ## Step by step
@@ -114,7 +115,7 @@ sacct -u $USER --starttime today --format=JobID,JobName%16,Elapsed,MaxRSS,State
 
 ### 5. Everything
 
-Paste the four "EVERYTHING" lines `make_job_lists.py` printed, e.g.:
+Paste the "EVERYTHING" lines `make_job_lists.py` printed (one per render script), e.g.:
 
 ```bash
 sbatch --array=0-1   slurm/render_pour_L3.slurm
@@ -182,16 +183,63 @@ sbatch slurm/finalize.slurm       # when status.py says "All done"
 ```
 
 Then:
-- Look at `$PHYSLOC_OUTDIR/audit.txt`, `validate.json` and `coverage_strong.mp4`.
-- `sbatch slurm/archive.slurm` copies the release to `$STORE`. Do this soon: `$SCRATCH` deletes files
-  nobody has read for 30 days.
-- Publishing is by hand, on prepost:
+- Look at `$PHYSLOC_OUTDIR/audit.txt` and `validate.json`, then the videos, all in
+  `$PHYSLOC_OUTDIR/viz/`:
+  - `coverage_strong.mp4`: every invalid clip in one video. Open this first.
+  - `compare/`: one cell's levels, variants and conditions side by side.
+  - `showcase/`: the presentation videos and `picks.json`. To curate, edit the file and re-run
+    `python -m physloc.cli showcase $PHYSLOC_OUTDIR --picks $PHYSLOC_OUTDIR/viz/showcase/picks.json --only <video>`.
 
-  ```bash
-  srun --partition=prepost --time=10:00:00 --pty bash
-  source slurm/env.sh
-  python -m physloc.cli export $PHYSLOC_OUTDIR --outdir $SCRATCH/hf/$PHYSLOC_RELEASE --push-to <user>/physloc
-  ```
+### 8. Archive to $STORE
+
+```bash
+sbatch slurm/archive.slurm
+```
+
+Do this soon after finalize: `$SCRATCH` deletes files nobody has read for 30 days. It writes 5 tar
+files to `$STORE/physloc/`:
+
+- `physloc_v0_meta.tar`: everything except the level folders (index, manifest, stats, `viz/`, the
+  `.jobs` ledger, `failures/`, ...);
+- `physloc_v0_L0.tar` … `physloc_v0_L3.tar`: one per level.
+
+Then the job **checks** that the tars together hold exactly the release: every path, size, empty
+folder and link. If anything differs, the job fails and its log lists what. The last lines of
+`slurm/logs/archive_<id>.out` should say `archive OK`.
+
+To restore, extract every tar in the same folder; you get back the identical `physloc_v0/` tree:
+
+```bash
+cd $SCRATCH/physloc
+for t in $STORE/physloc/physloc_v0_*.tar; do tar -xf $t; done
+```
+
+### 9. Publish to HuggingFace (by hand, when you are happy with the clips)
+
+Once, on a login node, log in to HuggingFace, then check `PHYSLOC_HF_REPO` and `PHYSLOC_HF_PRIVATE` in
+`slurm/env.sh`:
+
+```bash
+hf auth login
+```
+
+Then:
+
+```bash
+sbatch slurm/publish.slurm
+```
+
+It runs on prepost (internet, not charged):
+
+1. It packages the release into `$SCRATCH/hf/<release>`. This is a full copy (about the release's
+   size again), and it's skipped if a previous run already finished it.
+2. It uploads in pieces, each its own commit: first the card, index and splits, then one level at a
+   time.
+
+If it runs out of its 20 h, `sbatch` it again: pieces already on the Hub aren't sent again.
+
+**Try it on something small first:** point `PHYSLOC_HF_REPO` at a throwaway private repo and run
+it once. A 1.3 TB upload is not something to find problems in for the first time.
 
 ## Good to know
 

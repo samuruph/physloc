@@ -78,6 +78,14 @@ def index(roots: Sequence[str]) -> List[Dict[str, object]]:
             if info.is_valid:
                 continue
             windows = v.windows
+            factors = (v.difficulty or {}).get("factors") or {}
+
+            def factor(name, default=0.0):
+                return float((factors.get(name) or {}).get("value") or default)
+
+            valid_dir = (os.path.join(root, "samples",
+                                      *str(info.valid_uid).split("/"))
+                         if info.valid_uid else None)
             out.append({
                 "dir": sample.path, "root": root,
                 "uid": info.uid, "valid_uid": info.valid_uid,
@@ -92,6 +100,20 @@ def index(roots: Sequence[str]) -> List[Dict[str, object]]:
                 "t_event": v.t_event,
                 "vwin": [tuple(w) for w in windows["active"]],
                 "owin": [tuple(w) for w in windows["observable"]],
+                # What `showcase` ranks on, all read from sample.json so that
+                # picking over a whole release opens no arrays: how much of
+                # the frame the violation covers, how much of it is hidden,
+                # and how long it lasts.
+                "area": factor("violation_area"),
+                "occlusion": factor("occlusion"),
+                "duration": factor("duration"),
+                "violators": len(v.ids),
+                "affected": any(x["affected_ids"] for x in v.violators),
+                "medium": str(scene.physics_medium or ""),
+                "magnitude": v.intervention.get("magnitude"),
+                "unit": str(v.intervention.get("unit") or ""),
+                "valid_dir": (valid_dir if valid_dir and os.path.exists(
+                    os.path.join(valid_dir, loader.SAMPLE_METADATA)) else None),
             })
     return out
 
@@ -171,15 +193,21 @@ def _fit(s: str, width: int, scale: float) -> str:
     return s + ".."
 
 
-def _load(rec) -> Dict[str, object]:
-    """A tile's arrays, through the loader: the reference outline needs the
-    clip's valid twin, and is left out when that twin is not on disk."""
+def _open(rec) -> "loader.Sample":
+    """The record's sample, with its valid twin attached when it is on disk."""
     sample = loader.Sample.from_dir(rec["dir"])
     valid_uid = rec.get("valid_uid")
     if valid_uid and valid_uid != sample.uid:
         valid_dir = os.path.join(rec["root"], "samples", *str(valid_uid).split("/"))
         if os.path.exists(os.path.join(valid_dir, loader.SAMPLE_METADATA)):
             sample._twin = loader.Sample.from_dir(valid_dir)
+    return sample
+
+
+def _load(rec) -> Dict[str, object]:
+    """A tile's arrays, through the loader: the reference outline needs the
+    clip's valid twin, and is left out when that twin is not on disk."""
+    sample = _open(rec)
     T = int(rec["num_frames"])
     v = sample.violation
     return {"rgb": sample.video.rgb[:T],

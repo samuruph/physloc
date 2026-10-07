@@ -8,10 +8,15 @@ A job list is one job name per line (e.g. `L0_drop_20260824_v3`); array task i
 of a render script runs line i+1 of its list. Every job goes to exactly one
 list, by what it needs:
 
-    pour_L3   pour at L3               -> render_pour_L3.slurm
-    pour      pour at L0-L2            -> render_pour.slurm
-    8cores    everything else, L2/L3   -> render_8cores.slurm
-    4cores    everything else, L0/L1   -> render_4cores.slurm
+    pour_L3      pour at L3                    -> render_pour_L3.slurm
+    pour         pour at L0-L2                 -> render_pour.slurm
+    8cores_long  shadow_track at L2/L3         -> render_8cores_long.slurm
+    8cores       everything else, L2/L3        -> render_8cores.slurm
+    4cores       everything else, L0/L1        -> render_4cores.slurm
+
+`shadow_track` renders each clip two or three times at L2/L3 (the shadow is
+measured against a render without its caster, and a key-light-only one), so
+its jobs there outlast qos_cpu-t3's 20 h even though they have fewer clips.
 
 Each list is sorted longest job first, so `--array=0` (the pilot) is the job
 most likely to hit a limit. Every job is also compared with the memory its
@@ -32,7 +37,9 @@ REPO = os.path.dirname(HERE)
 JOBS_DIR = os.path.join(HERE, "jobs")
 
 #: The lists, in the order to submit them: the longest jobs first.
-LISTS = ("pour_L3", "pour", "8cores", "4cores")
+LISTS = ("pour_L3", "pour", "8cores_long", "8cores", "4cores")
+#: Scenarios whose L2/L3 jobs need the long queue at 8 cores (see above).
+LONG_AT_HDRI = ("shadow_track",)
 GB_PER_CORE = 4
 #: Memory the annotation needs beside the render, inside the same task.
 ANNOTATION_GB = 2
@@ -42,7 +49,9 @@ def list_for(level, scenario):
     """Which render script a job belongs to."""
     if scenario == "pour":
         return "pour_L3" if level == "L3" else "pour"
-    return "8cores" if level in ("L2", "L3") else "4cores"
+    if level in ("L2", "L3"):
+        return "8cores_long" if scenario in LONG_AT_HDRI else "8cores"
+    return "4cores"
 
 
 def script_setting(list_name, option):
@@ -103,7 +112,7 @@ def main():
     used = [n for n in LISTS if lists[n]]
     print("\nJob lists for %s -> %s" % (config, outdir))
     for n in used:
-        print("  slurm/jobs/%-12s %4d jobs   %s cores, %s, %s" % (
+        print("  slurm/jobs/%-17s %4d jobs   %s cores, %s, %s" % (
             n + ".txt", len(lists[n]), script_setting(n, "cpus-per-task"),
             script_setting(n, "qos"), script_setting(n, "time")))
     print("\nPILOT -- the longest job of each list:")

@@ -258,7 +258,8 @@ def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
             r = rows[name]
             if cores * 4 < float(r["memory_gb"]) + 2:        # charged more than given:
                 assert name in proc.stderr                    # ...said so, not hidden
-            assert t4 == (r["scenario"] == "pour")             # only pour > 20 h
+            long_hdri = (r["scenario"] == "shadow_track" and r["level"] in ("L2", "L3"))
+            assert t4 == (r["scenario"] == "pour" or long_hdri)   # only these > 20 h
             assert (cores >= 8) == (r["level"] in ("L2", "L3")
                                     or r["scenario"] == "pour")
             seen.append(name)

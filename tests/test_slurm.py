@@ -352,3 +352,44 @@ def test_status_advises_from_the_pilot():
     eight = st.advise("8cores", [r for r in rows if r["list"] == "8cores"])
     assert "margin 1.45x" in eight[0] and "OK" in eight[0]    # 13.8 h of 20 h
     assert not any("!!" in line for line in eight)
+
+
+# ------------------------------------------------------------------ archive
+def _release(tmp_path):
+    rel = tmp_path / "physloc_v0"
+    (rel / "samples" / "physloc_v0" / "L0" / "a").mkdir(parents=True)
+    (rel / "samples" / "physloc_v0" / "L0" / "a" / "data.h5").write_bytes(b"x" * 100)
+    (rel / ".jobs").mkdir()
+    (rel / ".jobs" / "L0_a.json").write_text("{}")
+    (rel / "empty").mkdir()
+    os.symlink("samples", rel / "link")
+    return rel
+
+
+def _tar(path, root, members):
+    import tarfile
+    with tarfile.open(path, "w") as tf:
+        for m in members:
+            tf.add(os.path.join(os.path.dirname(root), m), arcname=m)
+
+
+def test_check_archive_accepts_an_exact_archive(tmp_path):
+    chk = _slurm_module("check_archive")
+    rel = _release(tmp_path)
+    _tar(tmp_path / "all.tar", str(rel), ["physloc_v0"])
+    problems, n = chk.compare(str(rel), [str(tmp_path / "all.tar")])
+    assert problems == [] and n == 2
+
+
+def test_check_archive_catches_missing_changed_and_extra(tmp_path):
+    chk = _slurm_module("check_archive")
+    rel = _release(tmp_path)
+    _tar(tmp_path / "all.tar", str(rel), ["physloc_v0"])
+    (rel / "new.txt").write_text("added after archiving")                 # missing
+    (rel / "samples/physloc_v0/L0/a/data.h5").write_bytes(b"x" * 99)      # size differs
+    (rel / ".jobs" / "L0_a.json").unlink()                                 # extra in tar
+    problems, _ = chk.compare(str(rel), [str(tmp_path / "all.tar")])
+    text = "\n".join(problems)
+    assert "missing from the tars: physloc_v0/new.txt" in text
+    assert "differs: physloc_v0/samples/physloc_v0/L0/a/data.h5" in text
+    assert "in a tar but not in the folder: physloc_v0/.jobs/L0_a.json" in text

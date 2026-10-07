@@ -10,6 +10,8 @@ export SLURM_ACCOUNT="$SBATCH_ACCOUNT"    # ...and srun this one
 export PHYSLOC_CONFIG="v0_release"        # which config to generate
 export PHYSLOC_RELEASE="physloc_v0"       # its outdir name (configs/<config>.yaml)
 export PHYSLOC_CONDA_MODULE="miniforge"   # `module avail conda` -- only for setup
+export PHYSLOC_HF_REPO="samueleruf/physloc_v0"  # where publish.slurm uploads (HuggingFace dataset)
+export PHYSLOC_HF_PRIVATE=1                 # 1 = create the repo private; 0 = public
 # ------------------------------------------------------------------------------
 
 # ---- 2. where things live (usually fine as is) -------------------------------

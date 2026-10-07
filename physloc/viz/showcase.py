@@ -582,7 +582,7 @@ AXIS_PICKERS: Dict[str, Callable] = {
 def badge(s: str, px: int) -> np.ndarray:
     """`s` in capitals on a semi-transparent dark box, as an RGBA sprite.
 
-    A two-line caption ("5 conditions\ncamera motion") puts the first line
+    A two-line caption ("5 configurations\ncamera motion") puts the first line
     small and dim above the second: the section, then the thing it is on.
     """
     key = ("badge", s, px)
@@ -663,14 +663,35 @@ def _fps(pairs) -> int:
     return max((int(r["fps"]) for _, r in pairs if r is not None), default=12)
 
 
+def tight_grid(n: int, max_w: int = W, max_h: int = H) -> Tuple[int, int, int]:
+    """(cols, rows, cell) for `n` square tiles laid edge to edge, the frame
+    exactly the grid -- no margins, no gaps, no background.
+
+    The shape trades empty slots (each one a dark tile, the only background
+    left) against how far the grid is from square: an empty slot costs as
+    much as four units of aspect ratio, so 4 tiles are 2x2, 5 are one row of
+    five rather than 3x2 with a hole, and 13 are 7x2 with one spare.
+    Landscape wins a tie. `cell` is the largest even size that fits.
+    """
+    best = None
+    for cols in range(1, n + 1):
+        rows = -(-n // cols)
+        score = (4.0 * (cols * rows - n) + max(cols, rows) / min(cols, rows),
+                 cols < rows)
+        cell = min(max_w // cols, max_h // rows) // 2 * 2
+        if best is None or score < best[0]:
+            best = (score, cols, rows, cell)
+    return best[1], best[2], best[3]
+
+
 def side_by_side(w: "vid.Writer", pairs) -> None:
-    """One scene's clips in a row (or a grid when there are many), RGB only,
-    each captioned in its corner. Plays the longest clip once."""
+    """One scene's clips edge to edge in a tight grid (`tight_grid`), RGB
+    only, each captioned in its corner. Plays the longest clip once."""
     fps = _fps(pairs)
-    cols, rows, s = layout(len(pairs))
-    pos = grid_positions(len(pairs), cols, rows, s)
+    cols, rows, s = tight_grid(len(pairs))
+    pos = [((i % cols) * s, (i // cols) * s) for i in range(len(pairs))]
     px = int(min(26, max(14, s / 16)))
-    bg = canvas()
+    bg = np.full((rows * s, cols * s, 3), EMPTY, np.uint8)
     clips = []
     try:
         for (slot, rec), (x, y) in zip(pairs, pos):
@@ -698,25 +719,26 @@ def side_by_side(w: "vid.Writer", pairs) -> None:
 
 
 def video_annotations(w: "vid.Writer", pairs) -> None:
-    """One clip, large; per loop the line wipes to the next modality."""
+    """One clip filling a square frame; per loop the sliding line wipes to
+    the next modality, its caption drawn on each side so the line covers the
+    old name and uncovers the new one with the picture."""
     (_, rec), = pairs[:1]
-    big = 1000
-    x, y = (W - big) // 2, (H - big) // 2
-    clip = Clip(rec, big, _fps(pairs))
+    S = TEASER_SIZE
+    clip = Clip(rec, S, _fps(pairs))
+
+    def shown(kind, name, src):
+        img = clip.frame(kind, src, S).copy()
+        caption(img, name, 30, S, S, 24)
+        return img
+
     try:
-        bg = canvas()
         for k in range(len(MODALITIES)):
             prev, cur = MODALITIES[max(k - 1, 0)], MODALITIES[k]
             for t in range(clip.n):
-                f = bg.copy()
-                p = t / max(1.0, WIPE * clip.n)
                 src = clip.at(t)
-                a = clip.frame(prev[0], src, big)
-                img = a if k == 0 else wiped(a, clip.frame(cur[0], src, big), p)
-                f[y:y + big, x:x + big] = img
-                name = cur[1] if k == 0 or _ease(p) > 0.5 else prev[1]
-                caption(f, name, 30, x + big, y + big, 20)
-                w.append(f)
+                b = shown(cur[0], cur[1], src)
+                w.append(b if k == 0 else wiped(
+                    shown(prev[0], prev[1], src), b, t / max(1.0, WIPE * clip.n)))
     finally:
         clip.close()
 

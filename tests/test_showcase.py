@@ -140,7 +140,8 @@ def test_build_writes_slide_sized_videos_and_replays_its_picks(root, tmp_path):
     assert os.path.exists(os.path.join(out, "severity", "drop.mp4"))
     for made in got["made"].values():
         frames = _frames(made["path"])
-        assert frames.shape[1:3] == (showcase.H, showcase.W)
+        h, w = frames.shape[1:3]                 # the grid, edge to edge
+        assert h % 2 == 0 and w % 2 == 0 and h <= showcase.H and w <= showcase.W
         assert frames.shape[0] == made["frames"]
     picks = os.path.join(out, "picks.json")
     with open(picks) as fh:
@@ -197,3 +198,11 @@ def test_family_reel_starts_on_the_hero_scene_and_covers_the_rest(root):
     assert [f for f, _ in reel].count("solidity") == 1
     assert {f for f, _ in reel} == set(taxonomy.FAMILIES)
     assert all(r is None for f, r in reel if f not in ("support", "solidity"))
+
+
+@pytest.mark.parametrize("n, shape", [(4, (2, 2)), (5, (5, 1)), (6, (3, 2)),
+                                      (13, (7, 2)), (18, (6, 3)), (1, (1, 1))])
+def test_tight_grid_has_no_gaps_and_stays_near_square(n, shape):
+    cols, rows, cell = showcase.tight_grid(n)
+    assert (cols, rows) == shape
+    assert cell % 2 == 0 and cols * cell <= showcase.W and rows * cell <= showcase.H

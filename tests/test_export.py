@@ -48,8 +48,11 @@ def test_shipped_loader_reads_the_export(release, tmp_path):
     dataset = module.PhysLocDataset(out)
     assert len(dataset.samples) == 24
     splits = {sample.info.split for sample in dataset.samples}
-    assert splits <= {"main", "held_out", "debug"} and "unassigned" not in splits
+    assert splits <= {"main", "held_out"}
     assert len(module.PhysLocDataset(out, unit="pair")) == 12
+    # `debug` labels no sample: it is the list in splits/debug.txt, inside main.
+    debug = module.PhysLocDataset(out, split="debug")
+    assert len(debug) == 2 and {s.info.split for s in debug.samples} == {"main"}
 
 
 def test_pairs_never_cross_splits(release, tmp_path):
@@ -83,7 +86,8 @@ def test_dataset_metadata_is_complete(release, tmp_path):
         metadata = json.load(handle)["dataset_metadata"]
     assert metadata["number_of_samples"] == 24
     assert metadata["number_of_pairs"] == 12
-    assert metadata["split_ratios"] == {"main": 0.75, "held_out": 0.20, "debug": 0.05}
+    assert metadata["split_ratios"] == {"main": 0.75, "held_out": 0.25}
+    assert metadata["split_design"]["unit"] == "pair_uid"
     assert sum(metadata["splits"].values()) == metadata["number_of_samples"]
     assert metadata["taxonomy"]["scenarios"] == ["drop"]
     assert metadata["generation_config_ids"] == ["test:debug"]
@@ -121,3 +125,56 @@ def test_split_assignment_is_reproducible_and_populated():
         assert got == X.assign_splits(reversed(values))
         assert all(any(split == name for split in got.values())
                    for name, _fraction in X.SPLIT_FRACTIONS)
+
+
+def _layout():
+    """v0's shape: per scenario 10 / 5 / 3 / 2 pairs at L0..L3, conditions mixed."""
+    conds = {"L0": ("standard", "standard", "standard", "camera", "distractors",
+                    "multi", "camera-multi"),
+             "L1": ("standard", "standard", "distractors", "camera-multi"),
+             "L2": ("standard", "multi"), "L3": ("standard", "multi")}
+    uids = []
+    for scenario in ("drop", "toss", "pour", "collision", "shadow_track"):
+        for level, n in (("L0", 10), ("L1", 5), ("L2", 3), ("L3", 2)):
+            uids += ["v0/%s/%s/%04d_%s" % (level, scenario, i, conds[level][i % len(conds[level])])
+                     for i in range(n)]
+    return uids
+
+
+def test_held_out_covers_every_level_scenario_cell():
+    """The guarantee the split makes: each level's held_out holds every
+    scenario, and no cell strays more than a pair from its share."""
+    got = X.assign_splits(_layout())
+    cells = {}
+    for uid, split in got.items():
+        level, scenario, _ = X.strata(uid)
+        cells.setdefault((level, scenario), []).append(split)
+    for key, splits in cells.items():
+        held, n = splits.count("held_out"), len(splits)
+        assert 1 <= held < n, key
+        assert held <= max(1, X.HELD_OUT_SHARE * n + 1), key
+    for level, n in (("L0", 50), ("L1", 25)):
+        held = sum(s == "held_out" for u, s in got.items() if X.strata(u)[0] == level)
+        assert abs(held - X.HELD_OUT_SHARE * n) <= 1, level
+
+
+def test_split_depends_on_the_set_not_the_order():
+    uids = _layout()
+    assert X.assign_splits(uids) == X.assign_splits(list(reversed(uids)))
+
+
+def test_a_frozen_assignment_survives_new_pairs():
+    uids = _layout()
+    first = X.assign_splits(uids)
+    grown = uids + ["v0/L0/drop/%04d_standard" % i for i in range(100, 110)]
+    again = X.assign_splits(grown, frozen=first)
+    assert all(again[uid] == first[uid] for uid in uids)
+    assert any(again[uid] == "held_out" for uid in grown[len(uids):])
+
+
+def test_debug_is_one_main_pair_per_scenario():
+    got = X.assign_splits(_layout())
+    debug = X.debug_subset(got)
+    assert all(got[uid] == "main" for uid in debug)
+    assert sorted(X.strata(uid)[1] for uid in debug) == sorted(
+        {X.strata(uid)[1] for uid in got})

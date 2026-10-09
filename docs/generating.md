@@ -79,7 +79,7 @@ out/<config>/
   viz/                    every grid and sheet, one folder
   viz/compare/<level>/    variants and conditions of a cell, side by side
   audit.txt               the cells whose violation is not visible
-  stats/                  the six figures and stats.json
+  stats/                  the seven figures and stats.json
 out/compare/              the same across every run of the sweep, including the level ladder
 out/showcase/             the presentation videos across every run of the sweep
 out/logs/<config>.txt     what that run printed

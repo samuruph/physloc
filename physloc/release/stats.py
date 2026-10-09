@@ -15,7 +15,7 @@ shipped `sample.json` files and nothing else.
 
     python -m physloc.cli stats out/physloc_v0
 
-Writes `<root>/stats/`: the six figures in `FIGURES` and `stats.json`, the
+Writes `<root>/stats/`: the seven figures in `FIGURES` and `stats.json`, the
 numbers behind them -- so a regression can be diffed rather than squinted at,
 and so the dataset card can quote them without re-deriving anything. `generate`
 writes them at the end of every run and `export` ships them with the release.
@@ -84,6 +84,9 @@ FIGURES: Tuple[Tuple[str, str], ...] = (
     ("6_timing_and_severity.png",
      "When violations fire, how long until they are visible, and how strong "
      "they measure at each severity bin."),
+    ("7_splits.png",
+     "How the pairs divide into main and held_out: the share held out per "
+     "level, condition, scenario x level cell and family, against the target."),
 )
 
 
@@ -198,6 +201,7 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         declared = {}
 
     return {
+        "splits": _split_summary(metas),
         "samples": len(metas), "invalid": len(invalid), "valid": len(valid),
         "levels": dict(levels), "conditions": dict(conditions),
         "declared_condition_shares": declared,
@@ -220,6 +224,67 @@ def summarise(metas: List[Dict[str, object]]) -> Dict[str, object]:
         "thresholds": {f.name: {"easier": f.easier, "easy": f.easy,
                                 "moderate": f.moderate, "basis": f.basis}
                        for f in D.FACTORS},
+    }
+
+
+def _split_summary(metas: List[Dict[str, object]]) -> Dict[str, object]:
+    """Pairs and samples per split along every axis the split is balanced on.
+
+    Reads the split each sample stores. A run that has not been finalized yet
+    stores none, so the split is DRAWN here with the function `finalize` uses --
+    it depends only on the set of pairs -- and `source` says which happened.
+    """
+    from .export import HELD_OUT_SHARE, SPLITS, assign_splits, debug_subset
+
+    pairs: Dict[str, Dict[str, object]] = {}
+    for m in metas:
+        md = _md(m)
+        uid = md.get("pair_uid")
+        if not uid:
+            continue
+        p = pairs.setdefault(str(uid), {
+            "level": _level(m), "scenario": str(md.get("scenario")),
+            "condition": str(md.get("condition") or "?"), "stored": set(),
+            "samples": 0, "families": Counter()})
+        p["stored"].add(str(md.get("split")))
+        p["samples"] += 1
+        if m.get("violation"):
+            p["families"][str(md.get("family"))] += 1
+    if not pairs:
+        return {}
+    stored = all(len(p["stored"]) == 1 and next(iter(p["stored"])) in SPLITS
+                 for p in pairs.values())
+    split = ({uid: next(iter(p["stored"])) for uid, p in pairs.items()} if stored
+             else assign_splits(pairs))
+    debug = set(debug_subset(split))
+
+    def tally(key, weight=lambda p: 1):
+        out: Dict[str, Dict[str, int]] = defaultdict(lambda: dict.fromkeys(SPLITS, 0))
+        for uid, p in pairs.items():
+            for k in key(p):
+                out[k][split[uid]] += weight(p)
+        return {k: dict(v) for k, v in out.items()}
+
+    cells: Dict[str, Dict[str, Dict[str, int]]] = defaultdict(dict)
+    for (scenario, level), v in tally(lambda p: [(p["scenario"], p["level"])]).items():
+        cells[scenario][level] = v
+    families: Dict[str, Dict[str, int]] = defaultdict(lambda: dict.fromkeys(SPLITS, 0))
+    for uid, p in pairs.items():
+        for f, n in p["families"].items():
+            families[f][split[uid]] += n
+    return {
+        "source": "sample.json" if stored else "computed",
+        "held_out_share": HELD_OUT_SHARE,
+        "pairs": {k: sum(v == k for v in split.values()) for k in SPLITS},
+        "samples": {k: sum(p["samples"] for uid, p in pairs.items() if split[uid] == k)
+                    for k in SPLITS},
+        "debug": {"pairs": len(debug),
+                  "samples": sum(pairs[uid]["samples"] for uid in debug)},
+        "by_level": tally(lambda p: [p["level"]]),
+        "by_condition": tally(lambda p: [p["condition"]]),
+        "by_scenario": tally(lambda p: [p["scenario"]]),
+        "by_scenario_level": {k: dict(v) for k, v in cells.items()},
+        "by_family": {k: dict(v) for k, v in families.items()},
     }
 
 
@@ -1254,12 +1319,165 @@ def _fig_timing(plt, s, path) -> None:
     plt.close(fig)
 
 
+#: main and held_out keep these two slots in every panel of the splits figure.
+SPLIT_COLOUR = {"main": CATEGORICAL[0], "held_out": CATEGORICAL[1]}
+
+
+def _share_bars(ax, rows: Sequence[str], counts: Sequence[Dict[str, int]],
+                target: float, unit: str) -> None:
+    """The held_out share of each row as a bar on a full-width track, the
+    target as a dashed rule, and the counts it came from beside each bar."""
+    import numpy as np
+
+    held = np.array([c.get("held_out", 0) for c in counts], float)
+    total = np.array([sum(c.values()) for c in counts], float)
+    share = np.where(total > 0, held / np.maximum(total, 1), 0.0)
+    y = np.arange(len(rows))[::-1]
+    top = max(0.5, float(share.max()) + 0.08)
+    ax.barh(y, [top] * len(rows), height=0.62, color=_tint(NEUTRAL, 0.55), linewidth=0)
+    ax.barh(y, share, height=0.62, color=SPLIT_COLOUR["held_out"], linewidth=0)
+    ax.axvline(target, color=INK, linewidth=1.0, linestyle=(0, (2, 2)), zorder=4)
+    ax.text(target, len(rows) - 0.35, "target %d%%" % round(100 * target),
+            ha="center", va="bottom", fontsize=7.4, color=INK)
+    for yi, s_, h, t in zip(y, share, held, total):
+        ax.text(top * 1.03, yi, ("%d%%   %d / %d %s" % (round(100 * s_), h, t, unit)).rstrip(),
+                va="center", fontsize=7.4, color=INK2)
+    ax.set_yticks(y)
+    ax.set_yticklabels([r.replace("_", " ") for r in rows], fontsize=8)
+    # Room on the right for the counts, INSIDE the axes so no panel clips them.
+    ax.set_xlim(0, top * 1.42)
+    ax.set_ylim(-0.6, len(rows) - 0.1)
+    ticks = [t for t in (0, 0.25, 0.5, 0.75, 1.0) if t <= top]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(["%d%%" % round(100 * t) for t in ticks])
+    _quiet(ax, "")
+    ax.spines["left"].set_visible(False)
+
+
+def _fig_splits(plt, s, path) -> None:
+    """main vs held_out along every axis the split is balanced on."""
+    import numpy as np
+    from matplotlib.colors import to_rgb
+    from .. import taxonomy as T
+
+    sp = s.get("splits") or {}
+    fig = plt.figure(figsize=(17, 10.5))
+    if not sp:
+        _heading(fig, "Splits", "no pair_uid in these samples")
+        _empty(fig.add_subplot(111), "nothing to split")
+        fig.savefig(path, dpi=170)
+        plt.close(fig)
+        return
+    target = float(sp["held_out_share"])
+    pairs, samples, debug = sp["pairs"], sp["samples"], sp["debug"]
+    _heading(fig, "Splits",
+             "%d pairs  |  held_out %d pairs (%d samples), main %d pairs (%d samples)  |  "
+             "unit = pair: a twin and its siblings never cross  |  held_out drawn per "
+             "level x scenario, at least one pair each  |  debug: %d main pairs  |  %s"
+             % (sum(pairs.values()), pairs["held_out"], samples["held_out"],
+                pairs["main"], samples["main"], debug["pairs"],
+                "as stored in sample.json" if sp["source"] == "sample.json"
+                else "computed, not yet written by finalize"))
+    top = fig.add_gridspec(1, 3, left=0.06, right=0.97, top=0.84, bottom=0.6,
+                           wspace=0.55, width_ratios=[0.8, 1, 1])
+    bottom = fig.add_gridspec(1, 2, left=0.1, right=0.97, top=0.5, bottom=0.04,
+                              wspace=0.42, width_ratios=[1.15, 1])
+
+    ax = fig.add_subplot(top[0, 0])
+    _panel_title(ax, "Pairs per split", "debug is a subset of main")
+    _donut(ax, ["main", "held_out"], [pairs["main"], pairs["held_out"]],
+           [SPLIT_COLOUR["main"], SPLIT_COLOUR["held_out"]],
+           "%d" % sum(pairs.values()), "pairs",
+           legend_labels=["main  %d pairs, %d samples" % (pairs["main"], samples["main"]),
+                          "held_out  %d pairs, %d samples"
+                          % (pairs["held_out"], samples["held_out"])],
+           legend_cols=1)
+
+    ax = fig.add_subplot(top[0, 1])
+    by = sp["by_level"]
+    rows = [k for k in LEVELS if k in by] + sorted(k for k in by if k not in LEVELS)
+    _panel_title(ax, "Held out per level",
+                 "pairs; L2 and L3 run high, one per scenario is the floor")
+    _share_bars(ax, rows, [by[k] for k in rows], target, "pairs")
+
+    ax = fig.add_subplot(top[0, 2])
+    by = sp["by_condition"]
+    rows = [k for k in CONDITIONS if k in by] + sorted(k for k in by if k not in CONDITIONS)
+    _panel_title(ax, "Held out per condition",
+                 "pairs; balanced inside each cell -- multi runs high because\n"
+                 "L2 and L3, held out more, are only standard or multi")
+    _share_bars(ax, rows, [by[k] for k in rows], target, "pairs")
+
+    # The scenario x level lattice: each cell is held_out / pairs, tinted by
+    # its share -- the guarantee the split makes, readable cell by cell.
+    ax = fig.add_subplot(bottom[0, 0])
+    _panel_title(ax, "Held out per scenario x level", "held_out / pairs in each cell")
+    cells = sp["by_scenario_level"]
+    scen = sorted(cells)
+    levels = [k for k in LEVELS if any(k in cells[r] for r in scen)]
+    cols = levels + ["all"]
+    rgb = np.ones((len(scen) + 1, len(cols), 3))
+    text = [["" for _ in cols] for _ in range(len(scen) + 1)]
+    for i, r in enumerate(scen + ["all"]):
+        for j, c in enumerate(cols):
+            if r == "all":
+                got = sp["by_level"].get(c) if c != "all" else pairs
+            elif c == "all":
+                got = sp["by_scenario"].get(r)
+            else:
+                got = cells[r].get(c)
+            n = sum((got or {}).values())
+            if not n:
+                rgb[i, j] = to_rgb("#f3f2ef")
+                text[i][j] = "-"
+                continue
+            h = got.get("held_out", 0)
+            share = h / float(n)
+            rgb[i, j] = to_rgb(_tint(SPLIT_COLOUR["held_out"],
+                                     1.0 - 0.9 * min(1.0, share / (2 * target))))
+            text[i][j] = "%d / %d" % (h, n)
+    ax.imshow(rgb, aspect="auto", interpolation="nearest")
+    for i in range(len(scen) + 1):
+        for j in range(len(cols)):
+            fill = "#%02x%02x%02x" % tuple(int(255 * x) for x in rgb[i, j])
+            ax.text(j, i, text[i][j], ha="center", va="center", fontsize=7.6,
+                    color=_ink_on(fill),
+                    fontweight="bold" if (i == len(scen) or cols[j] == "all") else "normal")
+    ax.set_xticks(np.arange(len(cols)))
+    ax.set_xticklabels(cols, fontsize=8)
+    ax.set_yticks(np.arange(len(scen) + 1))
+    ax.set_yticklabels([r.replace("_", " ") for r in scen] + ["all"], fontsize=8)
+    ax.set_xticks(np.arange(-0.5, len(cols), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(scen) + 1, 1), minor=True)
+    ax.grid(which="minor", color=SURFACE, linewidth=1.6)
+    ax.axhline(len(scen) - 0.5, color=INK2, linewidth=0.8)
+    ax.axvline(len(levels) - 0.5, color=INK2, linewidth=0.8)
+    ax.tick_params(which="both", length=0, colors=INK2)
+    for side in ax.spines.values():
+        side.set_visible(False)
+
+    ax = fig.add_subplot(bottom[0, 1])
+    by = sp["by_family"]
+    doms = list(T.DOMAINS)
+
+    def dom_of(f):
+        d = getattr(T.FAMILIES.get(f), "domain", None)
+        return doms.index(d) if d in doms else 99
+
+    rows = sorted(by, key=lambda f: (dom_of(f), f))
+    _panel_title(ax, "Held out per family", "violated samples, families by domain")
+    _share_bars(ax, rows, [by[k] for k in rows], target, "samples")
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
 _DRAW = {"1_overview.png": _fig_overview,
          "2_taxonomy.png": _fig_taxonomy,
          "3_coverage.png": _fig_coverage,
          "4_difficulty.png": _fig_difficulty,
          "5_difficulty_factors.png": _fig_factors,
-         "6_timing_and_severity.png": _fig_timing}
+         "6_timing_and_severity.png": _fig_timing,
+         "7_splits.png": _fig_splits}
 #: Figures earlier reports wrote under other names. A re-run removes them, or
 #: an old composition.png sits beside the new overview and nobody knows which
 #: one is current.

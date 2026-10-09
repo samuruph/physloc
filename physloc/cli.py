@@ -442,7 +442,7 @@ def _print_release_size(cells, a) -> None:
 # ------------------------------------------------------------------ export
 def cmd_export(a) -> int:
     from .release.export import export
-    out = export(a.root, a.outdir, license_name=a.license)
+    out = export(a.root, a.outdir, license_name=a.license, splits_from=a.splits)
     if a.push_to:
         from .release.export import upload
         out["url"] = upload(a.outdir, a.push_to, private=a.private)
@@ -1327,33 +1327,36 @@ def _write_job_list(path, jobs, tier, severity) -> int:
     return 0
 
 
-def _finish_release(rel) -> bool:
-    """Stats and the dataset manifest for a release root. True if both landed.
+def _finish_release(rel, splits_from=None) -> bool:
+    """The dataset manifest and stats for a release root. True if both landed.
 
     STATS ON EVERY RUN. `physloc stats` had to be remembered, and no script
     remembered it, so a run's distributions were only ever looked at when
     someone thought to ask. It reads sample.json only -- seconds, even over a
     release -- and a failure to plot is reported, never a failed run.
+
+    The manifest goes FIRST: it writes each sample's split, which the splits
+    figure then reads back rather than re-deriving.
     """
     ok = True
+    # A generated run is already the canonical dataset representation. Finish
+    # its global manifest and index in place; `export` only copies this same
+    # sample tree to a publication directory.
+    try:
+        from .release.export import finalize
+        manifest = finalize(rel, splits_from=splits_from)
+        print("dataset manifest: %d samples, %d pairs -> %s"
+              % (manifest["samples"], manifest["pairs"], rel))
+    except (Exception, SystemExit) as exc:                 # noqa: BLE001
+        print("!! dataset manifest not written for %s: %r" % (rel, exc),
+              file=sys.stderr)
+        ok = False
     try:
         from .release.stats import report
         got = report(rel)
         print("stats: %d samples -> %s" % (got["samples"], got["outdir"]))
     except (Exception, SystemExit) as exc:                 # noqa: BLE001
         print("!! stats not written for %s: %r" % (rel, exc), file=sys.stderr)
-        ok = False
-    # A generated run is already the canonical dataset representation. Finish
-    # its global manifest and index in place; `export` only copies this same
-    # sample tree to a publication directory.
-    try:
-        from .release.export import finalize
-        manifest = finalize(rel)
-        print("dataset manifest: %d samples, %d pairs -> %s"
-              % (manifest["samples"], manifest["pairs"], rel))
-    except (Exception, SystemExit) as exc:                 # noqa: BLE001
-        print("!! dataset manifest not written for %s: %r" % (rel, exc),
-              file=sys.stderr)
         ok = False
     return ok
 
@@ -1363,7 +1366,7 @@ def cmd_finalize(a) -> int:
     if not os.path.isdir(os.path.join(a.root, "samples")):
         print("no samples/ under %s" % a.root, file=sys.stderr)
         return 2
-    return 0 if _finish_release(a.root) else 1
+    return 0 if _finish_release(a.root, a.splits) else 1
 
 
 def _levels_for(spec: str, variants: int):
@@ -2200,6 +2203,10 @@ def _build(suppress: bool = False):
                    help="stats + dataset manifest for a release root (what "
                         "generate does at the end; for runs split into tasks)")
     p.add_argument("root", help="a release root, e.g. out/physloc_v0")
+    p.add_argument("--splits", metavar="PAIRS_JSON",
+                   help="keep the main/held_out assignment of a published "
+                        "release's splits/pairs.json; only pairs it does not "
+                        "list are drawn")
     p.set_defaults(fn=cmd_finalize)
 
     p = add_parser("annotate", help="host-side annotation of a worker dir")
@@ -2297,6 +2304,10 @@ def _build(suppress: bool = False):
     p.add_argument("--outdir", required=True,
                    help="where to write the packaged dataset")
     p.add_argument("--license", default="CC-BY-4.0")
+    p.add_argument("--splits", metavar="PAIRS_JSON",
+                   help="keep the main/held_out assignment of a published "
+                        "release's splits/pairs.json; only pairs it does not "
+                        "list are drawn")
     p.add_argument("--push-to", metavar="REPO_ID",
                    help="after packaging, upload with the `hf` CLI to this "
                         "Hugging Face dataset repo")
@@ -2305,7 +2316,7 @@ def _build(suppress: bool = False):
     p.set_defaults(fn=cmd_export)
 
     p = add_parser("stats",
-                   help="what a release contains: six figures and stats.json")
+                   help="what a release contains: seven figures and stats.json")
     p.add_argument("root", help="a release root, e.g. out/physloc_v0")
     p.add_argument("--outdir", help="default <root>/stats")
     p.set_defaults(fn=cmd_stats)

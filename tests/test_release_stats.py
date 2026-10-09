@@ -76,3 +76,23 @@ def test_stats_reconstructs_early_v3_factor_blocks(tmp_path):
     assert loaded[0]["difficulty"] is not None
     assert loaded[0]["difficulty"]["level"] in D.LEVELS
     assert set(loaded[0]["difficulty"]["factors"]) == {factor.name for factor in D.FACTORS}
+
+
+def test_split_summary_counts_pairs_not_samples():
+    from physloc.release import stats
+
+    metas = []
+    for level, n in (("L0", 8), ("L3", 2)):
+        for i in range(n):
+            pair = "v0/%s/drop/%04d_standard" % (level, i)
+            for family in (None, "antigravity", "support"):
+                m = _meta(condition="standard", scenario="drop", family=family,
+                          complexity={"name": level}, pair_uid=pair)
+                if family is None:
+                    m["violation"] = None
+                metas.append(m)
+    sp = stats.summarise(metas)["splits"]
+    assert sp["source"] == "computed"
+    assert sum(sp["pairs"].values()) == 10 and sum(sp["samples"].values()) == 30
+    assert sp["by_level"]["L3"]["held_out"] == 1
+    assert sum(sp["by_family"]["support"].values()) == 10

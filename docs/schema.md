@@ -20,7 +20,7 @@ dataset-root/
 ├── dataset.json
 ├── schema.json
 ├── index.parquet                 # index.jsonl only when PyArrow is unavailable
-├── splits/{main,held_out,debug}.txt
+├── splits/{main,held_out,debug}.txt, pairs.json
 └── samples/
     └── <sample_uid>/             # <release>/<level>/<scenario>/<seed>_<condition>/<valid|invalid_*>
         ├── sample.json           # metadata and annotations

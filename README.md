@@ -188,7 +188,7 @@ Read from `sample.json`, no arrays.
 | `valid_uid` | str | the valid twin's uid; a valid sample points at itself |
 | `label` | str | `valid` or `invalid` |
 | `is_valid` | bool | `label == "valid"` |
-| `split` | str | `main`, `held_out` or `debug`. Assigned per `pair_uid`, so a twin never crosses a split |
+| `split` | str | `main` or `held_out`. Assigned per `pair_uid`, so a twin never crosses a split; `debug` is a list inside `main` (`splits/debug.txt`) |
 | `release` | str | what the dataset is called, from `--outdir` |
 | `tier` | str | `debug` (128², 12 fps, 25 frames) or `release` (512², 30 fps, 89 frames) |
 | `seed` | int | the scene seed. The same seed at a different level is a DIFFERENT scene |
@@ -733,12 +733,28 @@ The draw is weighted so the mean density stays where the scenarios' contact para
 
 ### Splits
 
-`main` **75%** · `held_out` **20%** · `debug` **5%**, grouped by `pair_uid` so a valid twin and its
-invalid siblings never land in different splits. The exporter groups pairs by scenario, orders the
-pairs inside each scenario by a SHA-256 hash of the `pair_uid`, then cuts that ordered list by the
-split fractions. That keeps every scenario in roughly the same proportions in each split, and a
-re-generated release reproduces the same assignment. The `held_out` split is the dataset evaluation
-split; it is unrelated to any asset-level `held_out` flag on scanned objects. Every split ships every
+`main` **75%** · `held_out` **25%** of PAIRS, and `debug` is a subset of `main`. The unit is the
+`pair_uid` — one scene, its valid twin and every invalid sibling — because siblings share their
+whole prefix: a release has about 34 samples per scene, and the scene count is the number an
+error bar on `held_out` has to be computed from (bootstrap over pairs, not clips).
+
+- **Stratified by level × scenario.** Every cell of two or more pairs holds out at least one, so
+  each level's `held_out` contains every scenario; above that floor each level holds out its 25%,
+  rounding remainders spread across scenarios. At L2 and L3 a scenario has only 2–5 scenes, so the
+  floor holds those levels out at ~30% and ~45% — **report pooled numbers as a mean over levels**,
+  not over clips.
+- **Conditions balanced inside each cell** by systematic sampling: a cell's pairs are ordered by
+  condition and taken at a regular stride. `multi` runs above 25% overall only because L2 and L3
+  carry no other non-standard condition.
+- **The most balanced of `REDRAWS` fair draws** (rerandomisation), so it is deterministic and
+  depends on the SET of pairs — adding scenes reshuffles it. `splits/pairs.json` is the
+  assignment; pass it back with `finalize --splits` / `export --splits` and those pairs keep
+  their split while only new ones are drawn.
+- **`debug`** is one `main` pair per scenario (`splits/debug.txt`); `PhysLocDataset(root,
+  split="debug")` reads that list, since no sample is labelled with it.
+
+`stats/7_splits.png` draws all of it. The `held_out` split is the dataset evaluation split; it is
+unrelated to any asset-level `held_out` flag on scanned objects. Every split ships every
 annotation — for a blind leaderboard set, strip annotations at that point.
 
 ### The index

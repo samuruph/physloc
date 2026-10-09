@@ -1248,6 +1248,18 @@ class PhysLocDataset:
                 "no schema-v%d samples under %s; expected samples/<sample_uid>/%s"
                 % (SCHEMA_VERSION, self.root, SAMPLE_METADATA))
         wanted = {key: _as_set(value) for key, value in filters.items()}
+        # A split is whatever `splits/<name>.txt` lists, when the release ships
+        # one: `debug` is a subset of `main` and no sample is labelled with it.
+        members = None
+        if "split" in wanted:
+            files = [os.path.join(self.root, "splits", "%s.txt" % name)
+                     for name in wanted["split"]]
+            if all(os.path.exists(path) for path in files):
+                members = set()
+                for path in files:
+                    with open(path, encoding="utf-8") as handle:
+                        members.update(handle.read().split())
+                del wanted["split"]
         self.samples: List[Sample] = []
         for json_path in paths:
             sample = Sample(os.path.dirname(json_path), selected_fields=selected)
@@ -1257,6 +1269,9 @@ class PhysLocDataset:
                       "condition": scene.condition,
                       "severity": sample.violation.severity_bin,
                       "seed": info.seed, "split": info.split}
+            if members is not None and info.uid not in members:
+                sample.release()
+                continue
             if all(str(values.get(key)) in choices for key, choices in wanted.items()):
                 self.samples.append(sample)
         self._by_uid = {sample.uid: sample for sample in self.samples}

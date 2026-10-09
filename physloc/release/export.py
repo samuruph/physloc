@@ -6,14 +6,27 @@ import json
 import os
 import shutil
 from collections import Counter
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from .. import loader, reference
 from ..annotate import layout
 from ..schema import write
 from ..residuals.energy import ENERGY_EXCLUDED_ROLES
 
-SPLIT_FRACTIONS = (("main", 0.75), ("held_out", 0.20), ("debug", 0.05))
+#: The share of PAIRS held out for evaluation. A pair -- one scene, its valid
+#: twin and every invalid sibling -- is the unit, because siblings share their
+#: whole prefix: 283 scenes are 283 independent observations, not 9,579.
+HELD_OUT_SHARE = 0.25
+SPLITS = ("main", "held_out")
+SPLIT_FRACTIONS = (("main", 1.0 - HELD_OUT_SHARE), ("held_out", HELD_OUT_SHARE))
+#: `debug` is a SUBSET of `main`, one pair per scenario -- a smoke test that
+#: spends none of the evaluation pairs. It used to be a third split taking 5%.
+DEBUG_PER_SCENARIO = 1
+#: How many candidate splits are drawn before the most balanced is kept.
+REDRAWS = 1000
+#: Written beside the per-sample lists; pass it back with `--splits` to keep a
+#: published assignment fixed when scenes are added.
+PAIRS_FILE = "pairs.json"
 
 
 def _hash_unit(value: str) -> float:
@@ -21,44 +34,118 @@ def _hash_unit(value: str) -> float:
     return int.from_bytes(digest[:8], "big") / float(1 << 64)
 
 
-def _cut(values: List[str], names: List[str]) -> Dict[str, str]:
-    n = len(values)
-    if not n:
-        return {}
-    weights = dict(SPLIT_FRACTIONS)
-    raw = [weights[name] * n for name in names]
-    counts = [int(value) for value in raw]
-    for index in sorted(range(len(names)), key=lambda i: raw[i] - counts[i], reverse=True)[:n - sum(counts)]:
-        counts[index] += 1
-    if n >= len(names):
-        for index, count in enumerate(counts):
-            if count:
-                continue
-            donor = max(range(len(counts)), key=lambda i: counts[i])
-            counts[donor] -= 1
-            counts[index] = 1
-    out = {}
-    start = 0
-    for name, count in zip(names, counts):
-        for value in values[start:start + count]:
-            out[value] = name
-        start += count
+def strata(pair_uid: str) -> Tuple[str, str, str]:
+    """(level, scenario, condition) of a ``release/level/scenario/seed_condition``
+    pair uid -- the layout `annotate.pipeline` writes."""
+    parts = str(pair_uid).replace(os.sep, "/").split("/")
+    scenario = parts[-2] if len(parts) >= 2 else "dataset"
+    level = parts[-3] if len(parts) >= 3 else "?"
+    condition = parts[-1].split("_", 1)[1] if "_" in parts[-1] else "?"
+    return level, scenario, condition
+
+
+def _held_counts(cells: Dict[Tuple[str, str], List[str]], salt: str
+                 ) -> Dict[Tuple[str, str], int]:
+    """How many pairs each (level, scenario) cell holds out.
+
+    Every cell of two or more pairs holds out at least one, so each level's
+    held_out covers every scenario -- at L2 and L3 a scenario has two to five
+    scenes, and a plain 25% leaves some with none, which makes "L3 against L0"
+    compare different scenario mixes. Above that floor a level's total is the
+    share of its pairs, its rounding remainders going to the cells with the
+    largest fractional part (ties broken by `salt`, so the redraws can pick
+    which scenarios take them).
+    """
+    out: Dict[Tuple[str, str], int] = {}
+    levels: Dict[str, List[Tuple[str, str]]] = {}
+    for key in cells:
+        levels.setdefault(key[0], []).append(key)
+    for keys in levels.values():
+        exact = {key: HELD_OUT_SHARE * len(cells[key]) for key in keys}
+        for key in keys:
+            floor = int(exact[key])
+            out[key] = max(1, floor) if len(cells[key]) >= 2 else floor
+        target = int(HELD_OUT_SHARE * sum(len(cells[key]) for key in keys) + 0.5)
+        spare = sorted((key for key in keys if out[key] < len(cells[key]) - 1
+                        and out[key] < exact[key]),
+                       key=lambda k: (-(exact[k] - out[k]), _hash_unit(salt + "/".join(k))))
+        for key in spare[:max(0, target - sum(out[key] for key in keys))]:
+            out[key] += 1
     return out
 
 
-def assign_splits(pair_uids: Iterable[str]) -> Dict[str, str]:
-    """Deterministic, pair-grouped and scenario-stratified splits."""
-    groups: Dict[str, List[str]] = {}
-    for uid in sorted(set(str(value) for value in pair_uids)):
-        parts = uid.replace(os.sep, "/").split("/")
-        scenario = parts[-2] if len(parts) >= 2 else "dataset"
-        groups.setdefault(scenario, []).append(uid)
-    names = [name for name, _ in SPLIT_FRACTIONS]
+def _draw(cells: Dict[Tuple[str, str], List[str]], salt: str) -> Dict[str, str]:
+    """One candidate: within each cell, pairs ordered by condition and taken at a
+    regular stride from a hashed offset -- systematic sampling, so every
+    condition in the cell is held out in proportion without a cut of its own."""
     out = {}
-    for values in groups.values():
-        ordered = sorted(values, key=lambda value: (_hash_unit(value), value))
-        out.update(_cut(ordered, names))
+    counts = _held_counts(cells, salt)
+    for key, uids in cells.items():
+        ordered = sorted(uids, key=lambda u: (strata(u)[2], _hash_unit(salt + u), u))
+        n, k = len(ordered), counts[key]
+        offset = _hash_unit(salt + "/".join(key))
+        picks = {int((offset + j) * n / k) % n for j in range(k)} if k else set()
+        for index, uid in enumerate(ordered):
+            out[uid] = "held_out" if index in picks else "main"
     return out
+
+
+def imbalance(assignment: Dict[str, str]) -> float:
+    """Squared distance of every margin from `HELD_OUT_SHARE`, per pair --
+    scenario, level, condition and their pairwise crossings."""
+    margins: Dict[Tuple, List[int]] = {}
+    for uid, split in assignment.items():
+        level, scenario, condition = strata(uid)
+        for key in (("s", scenario), ("l", level), ("c", condition),
+                    ("ls", level, scenario), ("lc", level, condition),
+                    ("cs", condition, scenario)):
+            got = margins.setdefault(key, [0, 0])
+            got[0] += split == "held_out"
+            got[1] += 1
+    return sum((held - HELD_OUT_SHARE * n) ** 2 / n for held, n in margins.values())
+
+
+def assign_splits(pair_uids: Iterable[str],
+                  frozen: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """``pair_uid -> "main" | "held_out"``: deterministic, pair-grouped, and
+    stratified by level x scenario with condition balanced inside each cell.
+
+    `REDRAWS` candidates are drawn and the most balanced kept (rerandomisation:
+    each candidate is a fair draw, so the one kept is too). The result depends
+    on the SET of pairs, not their order -- and therefore changes when pairs are
+    added. `frozen` pins a published assignment: those pairs keep their split
+    and only the others are drawn, among themselves.
+    """
+    frozen = {str(k): v for k, v in (frozen or {}).items() if v in SPLITS}
+    uids = sorted(set(str(value) for value in pair_uids))
+    out = {uid: frozen[uid] for uid in uids if uid in frozen}
+    cells: Dict[Tuple[str, str], List[str]] = {}
+    for uid in uids:
+        if uid not in out:
+            level, scenario, _ = strata(uid)
+            cells.setdefault((level, scenario), []).append(uid)
+    if cells:
+        best = min((_draw(cells, "redraw%d:" % i) for i in range(REDRAWS)),
+                   key=imbalance)
+        out.update(best)
+    return out
+
+
+def debug_subset(assignment: Dict[str, str]) -> List[str]:
+    """`DEBUG_PER_SCENARIO` main pairs per scenario, by hash."""
+    by_scenario: Dict[str, List[str]] = {}
+    for uid, split in assignment.items():
+        if split == "main":
+            by_scenario.setdefault(strata(uid)[1], []).append(uid)
+    return sorted(uid for uids in by_scenario.values()
+                  for uid in sorted(uids, key=lambda u: (_hash_unit("debug:" + u), u))
+                  [:DEBUG_PER_SCENARIO])
+
+
+def read_pairs(path: str) -> Dict[str, str]:
+    """A `PAIRS_FILE` written by `finalize`, as ``pair_uid -> split``."""
+    with open(path, encoding="utf-8") as handle:
+        return dict(json.load(handle)["pairs"])
 
 
 def _row(sample: "loader.Sample", sample_path: str) -> Dict:
@@ -184,6 +271,13 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
             "number_of_pairs": len({row["pair_uid"] for row in rows}),
             "splits": dict(sorted(splits.items())),
             "split_ratios": dict(SPLIT_FRACTIONS),
+            "split_design": {
+                "unit": "pair_uid", "held_out_share_of_pairs": HELD_OUT_SHARE,
+                "strata": "level x scenario, at least one held_out pair per "
+                          "cell of two or more; condition balanced within",
+                "debug": "subset of main, %d pair(s) per scenario" % DEBUG_PER_SCENARIO,
+                "pairs_file": "splits/" + PAIRS_FILE,
+            },
             "complexity_splits": {str(key): value for key, value in sorted(complexity.items())},
             "taxonomy": {
                 "scenarios": sorted({str(row["scenario"]) for row in rows
@@ -243,15 +337,22 @@ def _write_global_files(root: str, rows: List[Dict], license_name: str) -> None:
     shutil.copyfile(loader.__file__, os.path.join(root, "loader.py"))
 
 
-def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
-    """Write the global index, splits, schema, card, and dataset metadata."""
+def finalize(root: str, license_name: str = "CC-BY-4.0",
+             splits_from: Optional[str] = None) -> Dict[str, object]:
+    """Write the global index, splits, schema, card, and dataset metadata.
+
+    `splits_from` is a `PAIRS_FILE` whose assignments are kept as they are;
+    without it the split is drawn afresh from the pairs present.
+    """
     metadata_paths = layout.find(root)
     if not metadata_paths:
         raise FileNotFoundError("no schema-v%d samples under %s" % (loader.SCHEMA_VERSION, root))
     documents = [(os.path.dirname(path), layout.read(os.path.dirname(path)))
                  for path in metadata_paths]
-    splits = assign_splits(layout.identity(document)["pair_uid"]
-                           for _, document in documents)
+    frozen = read_pairs(splits_from) if splits_from else None
+    splits = assign_splits((layout.identity(document)["pair_uid"]
+                            for _, document in documents), frozen=frozen)
+    debug = set(debug_subset(splits))
     rows = []
     for sample_dir, document in documents:
         info = layout.identity(document)
@@ -264,19 +365,26 @@ def finalize(root: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
     if os.path.isdir(split_dir):
         shutil.rmtree(split_dir)
     os.makedirs(split_dir)
-    for name, _ in SPLIT_FRACTIONS:
-        members = sorted(row["sample_uid"] for row in rows if row["split"] == name)
+    lists = {name: [row for row in rows if row["split"] == name] for name in SPLITS}
+    lists["debug"] = [row for row in rows if row["pair_uid"] in debug]
+    for name, members in lists.items():
+        uids = sorted(row["sample_uid"] for row in members)
         with open(os.path.join(split_dir, name + ".txt"), "w", encoding="utf-8") as handle:
-            handle.write("\n".join(members) + ("\n" if members else ""))
+            handle.write("\n".join(uids) + ("\n" if uids else ""))
+    with open(os.path.join(split_dir, PAIRS_FILE), "w", encoding="utf-8") as handle:
+        json.dump({"held_out_share": HELD_OUT_SHARE, "pairs": dict(sorted(splits.items())),
+                   "debug": sorted(debug), "frozen_from": splits_from},
+                  handle, indent=1, sort_keys=True)
     index = _write_index(rows, root)
     _write_global_files(root, rows, license_name)
     return {"samples": len(rows), "pairs": len({row["pair_uid"] for row in rows}),
             "schema_version": loader.SCHEMA_VERSION, "index": index,
-            "splits": {name: sum(row["split"] == name for row in rows)
-                       for name, _ in SPLIT_FRACTIONS}, "outdir": root}
+            "splits": {name: len(members) for name, members in lists.items()},
+            "outdir": root}
 
 
-def export(root: str, outdir: str, license_name: str = "CC-BY-4.0") -> Dict[str, object]:
+def export(root: str, outdir: str, license_name: str = "CC-BY-4.0",
+           splits_from: Optional[str] = None) -> Dict[str, object]:
     """Copy an already-v4 sample tree and finalize it for publication."""
     if os.path.realpath(root) == os.path.realpath(outdir):
         raise ValueError("export source and destination must be different directories")
@@ -293,7 +401,7 @@ def export(root: str, outdir: str, license_name: str = "CC-BY-4.0") -> Dict[str,
         uid = str(layout.identity(document)["uid"])
         destination = os.path.join(outdir, "samples", *uid.split("/"))
         shutil.copytree(source, destination)
-    return finalize(outdir, license_name)
+    return finalize(outdir, license_name, splits_from)
 
 
 def upload(outdir: str, repo_id: str, private: bool = False,

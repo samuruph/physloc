@@ -346,8 +346,12 @@ def hf_card(license_name: str, version: int, splits=()) -> str:
                             "seven factors.\n"}
     for name in CARD_BLOCKS:
         parts += [titles[name], render(name) + "\n"]
-    parts.append("## Splits\n\n%s, grouped by `pair_uid` so a valid twin and its "
-                 "invalid siblings never cross a split.\n" % (split_text or "see `splits/`"))
+    parts.append("## Splits\n\n%s of pairs, grouped by `pair_uid` so a valid twin and "
+                 "its invalid siblings never cross a split. `held_out` is drawn inside "
+                 "every level x scenario cell, at least one pair per cell, with the "
+                 "difficulty conditions balanced within it; `debug` is a small subset "
+                 "of `main`, one pair per scenario. `splits/pairs.json` is the "
+                 "assignment.\n" % (split_text or "see `splits/`"))
     parts.append("## Licence\n\nAnnotations, renders and metadata: `%s`. L3 clips contain "
                  "Google Scanned Objects (`CC BY-SA 4.0`), recorded per asset in "
                  "`objects.records[i].asset.license`.\n" % license_name)

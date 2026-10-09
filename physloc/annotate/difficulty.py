@@ -429,7 +429,7 @@ def meta_from_sample(sample) -> Dict[str, object]:
     records = sample.objects.records
     metadata = {
         "sample_uid": info.uid, "pair_uid": info.pair_uid, "label": info.label,
-        "release": info.release, "tier": info.tier, "seed": info.seed,
+        "split": info.split, "release": info.release, "tier": info.tier, "seed": info.seed,
         "variant": info.variant, "num_frames": sample.video.num_frames,
         "frame_rate": sample.video.fps, "resolution": list(sample.video.resolution),
         "scenario": scene.scenario, "family": scene.family, "domain": scene.domain,

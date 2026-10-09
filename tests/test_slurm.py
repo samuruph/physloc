@@ -434,3 +434,18 @@ def test_status_counts_missing_samples_from_the_ledgers():
     text = "\n".join(st.sample_report(gaps, details=True))
     assert "7 of 9 expected, 2 missing" in text
     assert "L0_drop_v0" in text and "re-send" in text
+
+
+@pytest.mark.parametrize("attempts, reason", [
+    ([(True, False)] * 6, "a body falls through the floor"),
+    ([(False, True)] * 6, "violator leaves the frame"),
+    ([(False, True), (True, False)], "leaves the frame / falls through floor"),
+])
+def test_a_decline_names_the_check_it_failed(attempts, reason):
+    """The worker's two visibility checks used to share one message, so a body
+    sunk into the floor in full view was counted as leaving the frame."""
+    from physloc.injectors import _geom
+    st = _slurm_module("status")
+    made = [{"ok": True, "in_frame": f, "above_floor": a, "visible": f and a}
+            for f, a in attempts]
+    assert st.reason_class(_geom.unseen_error(made)) == reason

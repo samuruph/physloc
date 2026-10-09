@@ -286,6 +286,10 @@ def reason_class(error):
     error = str(error or "")
     if error.startswith("multi clip needs"):
         return "multi: fewer than two violators"
+    if error.startswith("no event moment"):
+        return "leaves the frame / falls through floor"
+    if "falls through the floor" in error:
+        return "a body falls through the floor"
     if "leaves the frame" in error:
         return "violator leaves the frame"
     if "never observable" in error:

@@ -1240,11 +1240,16 @@ def _invalid_variant(spec, scenario, inj, sev, rng_seed, traj_valid, simulator,
         multi._name_every_body(spec, plan, subs, owners)
     else:
         inj.refine_windows(spec, traj_valid, traj_invalid, plan)
+    # Two checks, kept apart so a decline can say which one it failed: they
+    # used to share one message, and "leaves the frame" hid every clip
+    # declined for sinking a body into the floor in full view.
+    in_frame = violators_stay_visible(spec, inj.family, plan, traj_valid,
+                                      traj_invalid)
+    above_floor = not falls_out_of_world(spec, inj.family, plan, traj_valid,
+                                         traj_invalid)
     return {"ok": True, "plan": plan, "traj": traj_invalid,
-            "visible": (violators_stay_visible(spec, inj.family, plan,
-                                               traj_valid, traj_invalid)
-                        and not falls_out_of_world(spec, inj.family, plan,
-                                                   traj_valid, traj_invalid))}
+            "in_frame": in_frame, "above_floor": above_floor,
+            "visible": in_frame and above_floor}
 
 
 def shows_effect(traj_valid, traj_invalid, body_id: int, t0: int) -> bool:
@@ -1605,8 +1610,7 @@ def main() -> int:
                     break
             if not made.get("visible"):
                 error = (made.get("error") if not any_ok else
-                         "violator leaves the frame after t_event at every one "
-                         "of %d event moments" % len(tries))
+                         _geom.unseen_error([attempt_at(sev, k) for k in tries]))
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": error})
                 _announce("NOT_RENDERED", tag)

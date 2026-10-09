@@ -651,6 +651,25 @@ EVIDENCE_SECONDS = 0.25
 EVIDENCE_SHARE = 0.75
 
 
+def unseen_error(attempts) -> str:
+    """The decline message for a bin no event moment could show, naming the
+    check each moment failed: `in_frame` (the violators stay in shot) or
+    `above_floor` (no body sinks through the floor)."""
+    shown = [m for m in attempts if m.get("ok")]
+    frame = sum(1 for m in shown if not m.get("in_frame", True))
+    floor = sum(1 for m in shown if not m.get("above_floor", True))
+    n = len(attempts)
+    if floor and not frame:
+        return ("a body falls through the floor after t_event at every one of "
+                "%d event moments" % n)
+    if frame and not floor:
+        return ("violator leaves the frame after t_event at every one of %d "
+                "event moments" % n)
+    return ("no event moment of %d keeps the violator in frame and every body "
+            "above the floor (%d leave the frame, %d fall through the floor)"
+            % (n, frame, floor))
+
+
 def violators_visible(spec, traj, bodies, t_event: int,
                      tolerance: float = VISIBLE_AFTER_SHARE) -> bool:
     """Does the clip keep `bodies` on screen after `t_event`?

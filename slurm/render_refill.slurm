@@ -32,7 +32,20 @@ OUT=$PHYSLOC_DATA/refill_$FAMILY/$PHYSLOC_RELEASE
 # This task's job, e.g. L0_ramp_slide_20260824_v0
 JOB=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" slurm/jobs/refill.txt)
 
-export PHYSLOC_THREADS=$SLURM_CPUS_PER_TASK
+# THE THREAD COUNT THE RELEASE USED, not this task's. Cycles' output depends on
+# it (the NLM denoiser works per tile, and the tiling follows the threads): the
+# first refill rendered L0/L1 jobs with 8 threads where the release had used 4,
+# and all 45 of their valid clips came out different from the release's -- a
+# new invalid clip next to an old valid one is then not a twin pair. So the job
+# renders with the cores of the list it ORIGINALLY ran in.
+ORIG=$(grep -l -x "$JOB" slurm/jobs/{4cores,8cores,8cores_long,pour,pour_L3}.txt 2>/dev/null | head -1)
+ORIG=$(basename "${ORIG:?$JOB is in none of the release job lists}" .txt)
+THREADS=$(sed -n 's/^#SBATCH --cpus-per-task=\([0-9]*\).*/\1/p' slurm/render_$ORIG.slurm)
+if [ "${THREADS:-0}" -gt "$SLURM_CPUS_PER_TASK" ]; then
+  echo "$JOB ran with $THREADS threads in the release; this task has $SLURM_CPUS_PER_TASK" >&2
+  exit 1
+fi
+export PHYSLOC_THREADS=$THREADS
 export PHYSLOC_SCRATCH=$JOBSCRATCH
 
 python -m physloc.cli generate --config $PHYSLOC_CONFIG --only $JOB \

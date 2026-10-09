@@ -53,6 +53,58 @@ def _top_of_partner(spec, traj, partner_id: int, frame: int) -> float:
     return float(traj.pos[f, bi, 2] + traj.radius[bi])
 
 
+#: How far a support's top face must tilt, in radians, to count as a RAMP for
+#: `solidity`: a table or a post is flat, a ramp is not (`ramp_slide` and
+#: `rolling_ramp` draw 0.30-0.52).
+RAMP_MIN_TILT = 0.05
+
+
+def _ramp_face(spec, partner_id: int) -> Optional[Dict[str, object]]:
+    """The tilted top face of a static cube, or None if it is not a ramp.
+
+    `top` is the face's centre, `normal` its unit outward normal (pointing up),
+    and `centre`, `half`, `rot` the slab itself, for a footprint test in its own
+    frame -- the same construction `residuals.laws.ground_under` measures depth
+    against.
+    """
+    body = next((b for b in spec.bodies
+                 if int(b.segmentation_id) == int(partner_id)), None)
+    if body is None or not body.static or body.kind != "cube":
+        return None
+    from ..residuals.laws import _quat_matrix
+
+    rot = _quat_matrix(body.quaternion or (1.0, 0.0, 0.0, 0.0))
+    normal = rot[:, 2].copy()
+    if normal[2] < 0:
+        normal = -normal
+    if normal[2] < 0.2 or np.arccos(min(1.0, float(normal[2]))) < RAMP_MIN_TILT:
+        return None                     # a wall, or a flat table: not a ramp
+    centre = np.asarray(body.position, np.float64)
+    half = np.asarray(body.scale, np.float64)
+    return {"top": centre + normal * half[2], "normal": normal,
+            "centre": centre, "half": half, "rot": rot}
+
+
+def _on_face(face, p, margin: float = 0.0) -> bool:
+    """Is world point `p` over the ramp's footprint?
+
+    Tested on the point of the face straight BELOW `p`, exactly as
+    `residuals.laws.ground_under` does, not on `p` itself: on a tilted slab the
+    two land in different places along the slope, and where they disagree --
+    at the lip -- the hold let go a frame before the penetration law stopped
+    measuring against the face, and a recovered bin read a one-frame spike to
+    full severity.
+    """
+    p = np.asarray(p, np.float64)
+    n, top = np.asarray(face["normal"]), np.asarray(face["top"])
+    z = top[2] - (n[0] * (p[0] - top[0]) + n[1] * (p[1] - top[1])) / n[2]
+    local = np.asarray(face["rot"]).T @ (np.array([p[0], p[1], z])
+                                         - np.asarray(face["centre"]))
+    half = np.asarray(face["half"])
+    return bool(abs(local[0]) <= half[0] + margin
+                and abs(local[1]) <= half[1] + margin)
+
+
 def candidates_for(spec, family: str):
     """Bodies a family should prefer to act on, in order.
 
@@ -325,6 +377,10 @@ class Solidity(Injector):
     #: backwards -- a strong bin that does not pass through.
     SECONDS_BY_BIN = {"weak": 0.17, "medium": 0.34, "strong": 0.85}
 
+    #: How much of the slope, in seconds, a body sunk into a RAMP must still
+    #: have to ride down after the event -- see `plan`.
+    RAMP_RIDE_SECONDS = 0.6
+
     #: Below this speed, m/s, a body counts as resting on its surface.
     RESTING_SPEED = 0.3
 
@@ -424,6 +480,38 @@ class Solidity(Injector):
         # top of a wall it hit side-on lifts it into the air instead.
         head_on = abs(float(normal[2])) < 0.6
         mode = "pass_through" if (head_on or not partner_static) else "sink"
+        # A RAMP IS NOT A FLOOR. A body sliding on a tilted slab breaks
+        # solidity against THAT SLAB, and only it: the floor below stays solid.
+        # `weak` and `medium` sink part-way into the ramp and go on sliding down
+        # it embedded, `strong` drops through it and lands on the floor under
+        # ordinary physics. Treated as a floor, every bin fell through the ramp
+        # AND the floor -- the recovered bins came to rest half-sunk in the
+        # ground, and `strong` was declined for falling out of the world.
+        ramp = (_ramp_face(spec, partner_id)
+                if (mode == "sink" and partner_static) else None)
+        if ramp is not None:
+            mode = "sink_ramp"
+            # ENOUGH SLOPE LEFT TO SEE IT. A recovered bin is a body riding down
+            # the ramp embedded, and it stops being one at the lip. On
+            # `ramp_slide` the block reached the lip 0.4 s after the default
+            # moment, before `medium` had reached its depth, so `weak` and
+            # `medium` read the same. Fired earlier where the slope would
+            # otherwise run out -- never before the usual earliest moment.
+            bi_r = traj.index_of(int(actor.segmentation_id))
+            n_r = np.asarray(ramp["normal"], np.float64)
+            h = (np.asarray(traj.pos[:, bi_r], np.float64)
+                 - np.asarray(ramp["top"], np.float64)) @ n_r
+            ride = h[int(np.clip(t_fire, 0, traj.num_frames - 1))]
+            riding = [f for f in range(traj.num_frames)
+                      if abs(h[f] - ride) < 0.25 * float(radius)
+                      and _on_face(ramp, traj.pos[f, bi_r])]
+            need = int(round(self.RAMP_RIDE_SECONDS * _geom._fps(spec)))
+            if riding and max(riding) - t_fire < need:
+                t_fire = max(earliest, min(t_fire, max(riding) - need))
+                n_window = self._window_len(
+                    self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]),
+                    t_fire, traj.num_frames)
+                t_end = t_fire + n_window - 1
 
         # A SUPPORT contact needs everything beneath the body disabled, not just
         # the surface it happened to touch first. On `ramp_slide` the block was
@@ -474,6 +562,33 @@ class Solidity(Injector):
             pc = np.asarray(traj.pos[fc, bi_c], np.float64)
             notes["surface_top"] = float(_laws.ground_under(
                 spec, float(pc[0]), float(pc[1]), float(pc[2])))
+        if ramp is not None:
+            partner = next(b for b in spec.bodies
+                           if int(b.segmentation_id) == int(partner_id))
+            bi_r = traj.index_of(int(actor.segmentation_id))
+            fr = int(np.clip(t_fire, 0, traj.num_frames - 1))
+            n_r = np.asarray(ramp["normal"], np.float64)
+            # How high the body lawfully rides above the face, along its normal:
+            # the length the declared depth is written in, as `contact_z` is on
+            # a floor.
+            stand = float(n_r @ (np.asarray(traj.pos[fr, bi_r], np.float64)
+                                 - np.asarray(ramp["top"], np.float64)))
+            notes.update({
+                # What the body is measured against where the ramp is NOT under
+                # it: the floor. The penetration law follows the tilted face
+                # wherever the body is over it (`ground_under`) and falls back
+                # to this elsewhere; left at the face's height where contact
+                # began, a recovered bin carried off the lip read as metres deep
+                # for the frames it took to fall clear -- a one-frame spike to
+                # full severity on a clip whose depth never passed 0.3 radii.
+                "surface_top": float(spec.floor_level),
+                "ramp_normal": [float(x) for x in n_r],
+                "ramp_top": [float(x) for x in ramp["top"]],
+                "ramp_stand": max(stand, 1e-3),
+                # PyBullet's friction for a pair is the PRODUCT of the two
+                # bodies' coefficients, so this is the lawful slide's own.
+                "ramp_mu": float(getattr(actor, "friction", 0.0))
+                           * float(getattr(partner, "friction", 0.0))})
         if mode == "pass_through":
             # Against another moving body there is no surface to place the
             # actor a prescribed depth below. Suppressing the pair's response
@@ -513,7 +628,11 @@ class Solidity(Injector):
                     # radius, the pair comes back when the bodies are
                     # geometrically clear of each other, which is a fact about
                     # the run rather than a guess made before it.
-                    "restore_when_clear": bool(depth_r >= 1.0),
+                    # On a ramp, every bin: the recovered ones ride embedded
+                    # until they leave the slab, and the pair returns once
+                    # nothing overlaps -- never while a body is inside it.
+                    "restore_when_clear": bool(depth_r >= 1.0
+                                               or mode == "sink_ramp"),
                     "settles": settles,
                     "target_depth_radii": depth_r},
             # WHAT WAS TURNED OFF, not how deep the body ended up. The depth is
@@ -645,6 +764,69 @@ class Solidity(Injector):
         out.meta["label"] = "invalid"
         return out
 
+    def _sink_ramp(self, spec, traj, plan, actor):
+        """Host approximation of `sink_ramp` -- see `_ramp_hooks` for the staged one.
+
+        Recovered bins: the lawful slide, displaced into the slab along its
+        normal by the declared depth (eased in over the bin's window) while the
+        body is over the ramp, then re-integrated off the lip onto the floor.
+        `strong`: re-integrated from the event with the ramp left out, so it
+        drops through it and lands on the floor.
+        """
+        out = self._clone(traj)
+        bi = traj.index_of(int(actor.segmentation_id))
+        ramp_id = int(plan.notes["partner_id"])
+        face = _ramp_face(spec, ramp_id)
+        t0, T = int(plan.t_event), traj.num_frames
+        r = float(traj.radius[bi])
+        floor = float(spec.floor_level)
+        g_seq = lambda n: np.tile(traj.gravity.astype(np.float64)[None, :], (n, 1))
+        obstacles = _geom.Obstacles(
+            spec, traj, exclude_ids=[ramp_id, int(actor.segmentation_id)])
+
+        def fall_from(f):
+            """Ordinary physics from frame f on, with the ramp out of the way."""
+            if f >= T:
+                return
+            pos, vel = self._integrate_profile(
+                out.pos[f - 1, bi].astype(np.float64),
+                out.lin_vel[f - 1, bi].astype(np.float64), g_seq(T - f), traj.dt,
+                floor, r, float(actor.restitution), obstacles=obstacles,
+                t_start=float(f - 1), friction=float(getattr(actor, "friction", 0.0)))
+            out.pos[f:, bi, :] = pos
+            out.lin_vel[f:, bi, :] = vel
+
+        if face is None or not plan.params.get("settles"):
+            fall_from(t0)
+        else:
+            n = np.asarray(plan.notes["ramp_normal"], np.float64)
+            depth = (float(plan.params["target_depth_radii"])
+                     * float(plan.notes["ramp_stand"]))
+            n_ease = max(1, int(plan.params.get("frames_disabled", 4)))
+            off = T
+            for f in range(t0, T):
+                if not _on_face(face, traj.pos[f, bi]):
+                    off = f
+                    break
+                ease = min(1.0, (f - t0 + 1) / float(n_ease)) ** 1.6
+                out.pos[f, bi, :] = traj.pos[f, bi] - (n * depth * ease).astype(np.float32)
+            for f in range(t0, off):
+                out.lin_vel[f, bi, :] = ((out.pos[f, bi] - out.pos[f - 1, bi])
+                                         / traj.dt).astype(np.float32)
+            fall_from(off)
+        c = out.contacts
+        pair = {int(actor.segmentation_id), ramp_id}
+        if len(c):
+            keep = ~np.array([int(f) >= t0 and {int(a), int(b)} == pair
+                              for f, a, b in zip(c.frame, c.body_a, c.body_b)], bool)
+            out.contacts = type(c)(c.frame[keep], c.body_a[keep], c.body_b[keep],
+                                   c.point[keep], c.normal[keep], c.impulse[keep],
+                                   c.penetration[keep])
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
     def _passed_through(self, spec, traj, actor, partner_id, t0, n_win):
         """Both bodies ignore each other for `n_win` frames, then resume.
 
@@ -714,8 +896,12 @@ class Solidity(Injector):
         the barrier. Overlap is a geometric fact about the finished trajectory,
         so it is measured here rather than guessed in `plan()`.
         """
-        if plan.params.get("mode") != "pass_through":
-            return          # `sink` and `sink_group` persist to the last frame
+        # `sink` and `sink_group` persist to the last frame. On a RAMP the
+        # violation is being inside the slab, and it ends when the body is
+        # clear of it -- off the lip for a recovered bin, out underneath for
+        # `strong` -- after which it is an ordinary body again.
+        if plan.params.get("mode") not in ("pass_through", "sink_ramp"):
+            return
         pair = plan.params.get("pair")
         if not pair or len(pair) != 2:
             return
@@ -737,7 +923,12 @@ class Solidity(Injector):
         if body_b.static:
             centre = np.asarray(body_b.position, np.float64)
             half = np.asarray(body_b.scale, np.float64)
-            delta = np.abs(pos_a - centre[None, :]) - half[None, :]
+            rel = pos_a - centre[None, :]
+            face = (_ramp_face(spec, b_id)
+                    if plan.params.get("mode") == "sink_ramp" else None)
+            if face is not None:
+                rel = rel @ np.asarray(face["rot"])     # into the slab's frame
+            delta = np.abs(rel) - half[None, :]
             outside = np.linalg.norm(np.maximum(delta, 0.0), axis=1)
             overlapping = outside < ra
         else:
@@ -876,6 +1067,10 @@ class Solidity(Injector):
         if plan.params.get("mode") == "pass_through":
             return ()
         settles = bool(plan.params.get("settles"))
+        if plan.params.get("mode") == "sink_ramp":
+            # `strong` drops through the ramp under ordinary physics and lands
+            # on the floor, which stays solid: nothing to hold.
+            return self._ramp_hooks(spec, simulator, objs, plan) if settles else ()
         import pybullet as pb
 
         from ..render import stepper
@@ -934,6 +1129,79 @@ class Solidity(Injector):
                 pb.applyExternalForce(idx, -1, (fx, fy, fz),
                                       list(pb.getBasePositionAndOrientation(idx)[0]),
                                       pb.WORLD_FRAME)
+
+        return (settle,)
+
+    def _ramp_hooks(self, spec, simulator, objs, plan):
+        """Hold a body embedded in a ramp at its bin's depth, still sliding.
+
+        The floor case written along the slab's NORMAL instead of the vertical:
+        the same `arrest` and `hold` terms (the arrest critically damped, see
+        below), against the weight's component into
+        the face (g cos tilt), so the declared depth is an equilibrium of the
+        body riding down the slope. With the pair off there is no contact
+        friction either, and a body held by a spring alone glides down on ice;
+        so kinetic friction is applied from the hold's own normal force, with
+        the lawful pair's coefficient (`ramp_mu`), and the embedded body slides
+        down the ramp at the pace a lawful one would. Off the slab's footprint
+        -- past the lip -- nothing is applied: it falls and lands on the floor.
+        """
+        import pybullet as pb
+
+        from ..render import stepper
+
+        notes = plan.notes
+        face = _ramp_face(spec, int(notes["partner_id"]))
+        if face is None:
+            return ()
+        n = np.asarray(notes["ramp_normal"], np.float64)
+        top = np.asarray(notes["ramp_top"], np.float64)
+        stand = float(notes["ramp_stand"])
+        mu = float(notes.get("ramp_mu", 0.0))
+        g = float(np.linalg.norm(np.asarray(spec.gravity, np.float64))) or 9.81
+        g_n = g * float(n[2])                 # the weight's share into the face
+        sink = max(float(plan.params.get("target_depth_radii", 0.3)) * stand, 1e-4)
+        # CRITICALLY DAMPED, not `ARREST`. That rate is sized to stop a 6.5 m/s
+        # impact on a floor; a body on a ramp enters the slab from REST along
+        # its normal, and against the spring that damping made it creep -- in
+        # debug clips `medium` was still at half its depth when it reached the
+        # lip, and read the same as `weak`. Matched to the spring instead,
+        # each bin reaches its own depth within a few frames and stops there.
+        arrest = 2.0 * float(np.sqrt(g_n / sink))
+        bodies = []
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is not None:
+                bodies.append((idx, float(getattr(body, "mass", 1.0))))
+        if not bodies:
+            return ()
+        t0 = plan.t_event
+
+        def settle(_client, _step, frame):
+            if frame < t0:
+                return
+            for idx, mass in bodies:
+                p = np.asarray(pb.getBasePositionAndOrientation(idx)[0], np.float64)
+                if not _on_face(face, p):
+                    continue
+                below = stand - float(n @ (p - top))
+                if below <= 0.0:
+                    continue
+                v = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
+                v_n = float(v @ n)
+                hold = min(below / sink, self.SPRING_MAX)
+                f_n = mass * (g_n * hold - arrest * min(v_n, 0.0))
+                force = f_n * n
+                v_t = v - v_n * n
+                speed = float(np.linalg.norm(v_t))
+                if f_n > 0.0 and speed > 1e-3:
+                    force = force - mu * f_n * v_t / speed
+                pb.applyExternalForce(idx, -1, [float(x) for x in force],
+                                      [float(x) for x in p], pb.WORLD_FRAME)
 
         return (settle,)
 
@@ -998,6 +1266,8 @@ class Solidity(Injector):
 
         if plan.params.get("mode") == "sink_group":
             return self._sink_group(spec, traj, plan)
+        if plan.params.get("mode") == "sink_ramp":
+            return self._sink_ramp(spec, traj, plan, actor)
         if plan.params.get("mode") == "pass_through":
             out = self._passed_through(spec, traj, actor,
                                        int(plan.notes["partner_id"]), t0,

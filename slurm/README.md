@@ -192,6 +192,28 @@ A decline (the violator leaves the shot) is a decision, and the cell stays missi
 crash: fix it, delete those jobs' `.jobs/<job>.json` and re-send them. With `--details`, there's one
 line per job with what it is missing.
 
+### 6b. Refill: re-render one family after a fix
+
+When a fix changes how ONE family renders (e.g. `solidity` on ramps), re-render only that family on
+the jobs it touches, into its own folder, then swap its samples into the release:
+
+```bash
+# the jobs: every job of these scenarios that runs this family
+python -m physloc.cli generate --config $PHYSLOC_CONFIG --scenario ramp_slide,rolling_ramp \
+    --family solidity --list-jobs slurm/jobs/refill.tsv
+tail -n +2 slurm/jobs/refill.tsv | cut -f1 > slurm/jobs/refill.txt; wc -l slurm/jobs/refill.txt
+PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/render_refill.slurm
+# when they are done:
+python slurm/merge_refill.py --family solidity           # preview
+python slurm/merge_refill.py --family solidity --apply   # swap the family's samples in
+python slurm/status.py                                   # the refill now counts for that family
+```
+
+The refill writes to `$PHYSLOC_DATA/refill_<family>/$PHYSLOC_RELEASE`, so the release is untouched until
+the merge. The merge removes every old sample of the family on each refilled scene slot before copying
+the new ones in, so a bin the fixed code declines doesn't keep its old clip. A slot whose refill job
+failed has no ledger and is left as it was. Then run `finalize`.
+
 ### 7. Finish
 
 ```bash

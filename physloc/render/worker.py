@@ -1318,7 +1318,14 @@ def falls_out_of_world(spec, family, plan, traj_valid, traj_invalid) -> bool:
             entries = [(params, [int(i) for i in plan.causal_body_ids])]
         for p, owners in entries:
             pair = [int(i) for i in (p.get("pair") or [])]
-            if floors.intersection(pair) or p.get("mode") == "sink_group":
+            # ...or beneath its support: a body sunk into a ramp or a table has
+            # every static surface under it switched off as well, the floor
+            # among them (`Solidity.plan`, `also_disable`), so that `strong`
+            # goes through for good rather than landing on the floor. Reading
+            # only `pair` declined exactly that body as falling out of the
+            # world -- `ramp_slide` lost its strong bin in 19 scenes of 20.
+            removed = pair + [int(i) for i in (p.get("also_disable") or [])]
+            if floors.intersection(removed) or p.get("mode") == "sink_group":
                 through.update(owners)
                 through.update(i for i in pair if i not in floors)
     for b in spec.bodies:

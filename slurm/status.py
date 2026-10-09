@@ -320,21 +320,30 @@ def sample_gaps(ledgers):
             (int(req.get("seed") or 0), name, entry))
     out = {}
     for (level, variant, scenario), runs in groups.items():
-        runs.sort(key=lambda r: r[0])                 # the main job, then retries
-        req = runs[0][2]["request"]
+        runs.sort(key=lambda r: (r[0], "__refill_" in r[1]))   # main job, retries, refills
+        # A REFILL (`merge_refill.py`, `<job>__refill_<family>.json`) re-ran some
+        # families on this slot after a fix, and its samples replaced the old
+        # ones: for those families only its own outcome counts.
+        refilled = {f for _s, name, e in runs if "__refill_" in name
+                    for f in (e.get("request") or {}).get("families") or []}
+        req = next((e["request"] for _s, name, e in runs
+                    if "__refill_" not in name), runs[0][2]["request"])
         bins = (SEVERITY_BINS if req.get("severity") == "all"
                 else [b for b in str(req.get("severity")).split(",") if b])
         condition = condition_for(int(variant), req.get("n_variants"), level)
         expected = {(f, b) for f in req.get("families") or [] for b in bins
                     if why_absent(scenario, f, level, condition) is None}
         made, reasons = set(), {}
-        for _seed, _name, entry in runs:              # the LATEST attempt's reason wins
+        for _seed, name, entry in runs:               # the LATEST attempt's reason wins
             outcome = entry.get("outcome") or {}
+            counts = (lambda f: True) if "__refill_" in name else (
+                lambda f: f not in refilled)
             made |= {(r.get("family"), r.get("severity"))
-                     for r in outcome.get("results") or []}
+                     for r in outcome.get("results") or [] if counts(r.get("family"))}
             for bad in outcome.get("bad") or []:
-                reasons[(bad.get("family"), bad.get("severity"))] = reason_class(
-                    bad.get("error"))
+                if counts(bad.get("family")):
+                    reasons[(bad.get("family"), bad.get("severity"))] = reason_class(
+                        bad.get("error"))
         out[(level, variant, scenario)] = {
             "job": runs[0][1], "expected": len(expected),
             "missing": {cell: reasons.get(cell) or reasons.get((cell[0], None))

@@ -14,6 +14,7 @@ array run is built from:
   and `slurm/status.py` reads SLURM's verdicts and prescribes the re-send.
 """
 import csv
+import json
 import importlib.util
 import os
 import shutil
@@ -449,3 +450,69 @@ def test_a_decline_names_the_check_it_failed(attempts, reason):
     made = [{"ok": True, "in_frame": f, "above_floor": a, "visible": f and a}
             for f, a in attempts]
     assert st.reason_class(_geom.unseen_error(made)) == reason
+
+
+def test_status_lets_a_refill_override_its_family():
+    st = _slurm_module("status")
+    every = lambda f: [(f, b) for b in ("weak", "medium", "strong")]
+    old = _ledger("L0", 0, "ramp_slide", 0, ["friction", "solidity"],
+                  every("friction") + every("solidity")[:2],
+                  [("solidity", "strong", "a body falls through the floor after t_event")])
+    new = _ledger("L0", 0, "ramp_slide", 0, ["solidity"], every("solidity")[1:],
+                  [("solidity", "weak", "violator leaves the frame after t_event")])
+    gaps = st.sample_gaps({"L0_ramp_slide_0_v0": old,
+                           "L0_ramp_slide_0_v0__refill_solidity": new})
+    g = gaps[("L0", 0, "ramp_slide")]
+    assert g["job"] == "L0_ramp_slide_0_v0" and g["expected"] == 6
+    # the old weak clip was replaced, and the refill declined it
+    assert g["missing"] == {("solidity", "weak"): "violator leaves the frame"}
+
+
+def _scene(root, level, scenario, seed, samples):
+    for s in samples:
+        d = os.path.join(root, "samples", "physloc_v0", level, scenario,
+                         "%d_standard" % seed, s)
+        os.makedirs(d)
+        with open(os.path.join(d, "sample.json"), "w") as fh:
+            fh.write(s)
+
+
+def _jobs(root, name, level, variant, scenario, seed, families):
+    os.makedirs(os.path.join(root, ".jobs"), exist_ok=True)
+    with open(os.path.join(root, ".jobs", name + ".json"), "w") as fh:
+        json.dump({"request": {"level": level, "variant": variant, "scenario": scenario,
+                               "seed": seed, "families": families}}, fh)
+
+
+def test_merge_refill_swaps_one_family_per_slot(tmp_path):
+    release, refill = str(tmp_path / "physloc_v0"), str(tmp_path / "refill" / "physloc_v0")
+    # the release: slot v0 (main scene + a retry scene), and slot v1, not refilled
+    _scene(release, "L0", "ramp_slide", 100, ["valid", "invalid_solidity_weak",
+                                              "invalid_solidity_medium", "invalid_friction_weak"])
+    _scene(release, "L0", "ramp_slide", 110, ["valid", "invalid_solidity_strong"])
+    _scene(release, "L0", "ramp_slide", 101, ["valid", "invalid_solidity_weak"])
+    _jobs(release, "L0_ramp_slide_100_v0", "L0", 0, "ramp_slide", 100, ["friction", "solidity"])
+    _jobs(release, "L0_ramp_slide_110_v0", "L0", 0, "ramp_slide", 110, ["solidity"])
+    _jobs(release, "L0_ramp_slide_101_v1", "L0", 1, "ramp_slide", 101, ["solidity"])
+    # the refill: slot v0 only, its weak bin now declined, and a new retry scene
+    _scene(refill, "L0", "ramp_slide", 100, ["valid", "invalid_solidity_medium",
+                                             "invalid_solidity_strong"])
+    _scene(refill, "L0", "ramp_slide", 120, ["valid", "invalid_solidity_weak"])
+    _jobs(refill, "L0_ramp_slide_100_v0", "L0", 0, "ramp_slide", 100, ["solidity"])
+    _jobs(refill, "L0_ramp_slide_120_v0", "L0", 0, "ramp_slide", 120, ["solidity"])
+    script = os.path.join(REPO, "slurm", "merge_refill.py")
+    run = lambda *extra: subprocess.run(
+        [sys.executable, script, "--family", "solidity", "--release", release,
+         "--refill", refill] + list(extra), capture_output=True, text=True, check=True)
+    preview = run()
+    assert "remove    3" in preview.stdout and "Nothing changed" in preview.stdout
+    assert os.path.isdir(os.path.join(release, "samples/physloc_v0/L0/ramp_slide/100_standard/invalid_solidity_weak"))
+    run("--apply")
+    have = lambda seed: sorted(os.listdir(os.path.join(
+        release, "samples/physloc_v0/L0/ramp_slide/%d_standard" % seed)))
+    assert have(100) == ["invalid_friction_weak", "invalid_solidity_medium",
+                         "invalid_solidity_strong", "valid"]       # old weak gone
+    assert have(110) == ["valid"]                                  # old retry clip gone
+    assert have(120) == ["invalid_solidity_weak", "valid"]         # new retry scene
+    assert have(101) == ["invalid_solidity_weak", "valid"]         # other slot untouched
+    assert os.path.exists(os.path.join(release, ".jobs", "L0_ramp_slide_100_v0__refill_solidity.json"))

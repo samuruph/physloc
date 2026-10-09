@@ -3,9 +3,14 @@ exact sbatch line to re-send them. Submits nothing itself.
 
     source slurm/env.sh
     python slurm/status.py            # summary + what to re-send
-    python slurm/status.py --details  # ...and one line per unfinished job
+    python slurm/status.py --details  # ...and one line per unfinished job, and
+                                      #    per job with missing samples
     python slurm/status.py --running  # running tasks: time so far, peak memory
     python slurm/status.py --finished # finished tasks, and a --time / cores advice per list
+
+Below the table, the SAMPLES of the done jobs: how many of those the taxonomy
+expects are present, and the missing ones counted by reason -- a done job can
+still have declined or crashed on some of its cells.
 
 A job is DONE when its ledger entry `$PHYSLOC_OUTDIR/.jobs/<name>.json` exists:
 it is written only once the whole job has landed. For the rest, SLURM says
@@ -22,12 +27,14 @@ the last attempt ended -- and each outcome has its own remedy:
 import argparse
 import collections
 import getpass
+import json
 import os
 import re
 import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from make_job_lists import (ANNOTATION_GB, JOBS_DIR, LISTS, env,  # noqa: E402
                             script_setting)
 
@@ -265,10 +272,127 @@ def last_error(outdir, job):
     return (errors or lines or [""])[-1][:160]
 
 
+# ------------------------------------------------------------------ samples
+# A DONE JOB IS NOT A FULL ONE. A job lands once it has run, and inside it a
+# cell can still decline (its violator leaves the shot) or crash (one clip's
+# annotation) while the rest of the job is written -- so the table above can
+# say "all done" over hundreds of missing samples. Each ledger entry records
+# what the job asked for and what came of every cell, so the gap is counted
+# here from the ledgers, against what the taxonomy says the job's level and
+# condition can hold (`taxonomy.expected_cells`).
+
+def reason_class(error):
+    """A decline or failure message -> one short, countable reason."""
+    error = str(error or "")
+    if error.startswith("multi clip needs"):
+        return "multi: fewer than two violators"
+    if "leaves the frame" in error:
+        return "violator leaves the frame"
+    if "never observable" in error:
+        return "violation never observable"
+    if error.startswith("injector produced no plan"):
+        return "no plan, after every retry seed"
+    if error.startswith(("annotate failed", "plan raised", "trajectory prefix")):
+        # The exception itself, not the traceback around it.
+        last = re.findall(r"(?:\\n|\n)\s*(\w+(?:Error|Exception)\b[^\\\n']*)", error)
+        return "BUG " + (last[-1] if last else error.split(":")[0])[:70]
+    return error[:60] or "no record"
+
+
+def sample_gaps(ledgers):
+    """{(level, variant, scenario): {"job", "expected", "missing": {(family, bin): reason}}}
+
+    `ledgers` maps a ledger name to its entry. A job and the retries that
+    rebuilt its declined cells on fresh seeds share (level, variant, scenario),
+    so a cell a retry built is not missing.
+    """
+    from physloc.scenarios.base import condition_for
+    from physloc.taxonomy import SEVERITY_BINS, why_absent
+
+    groups = collections.defaultdict(list)
+    for name, entry in ledgers.items():
+        req = entry.get("request") or {}
+        groups[(req.get("level"), req.get("variant"), req.get("scenario"))].append(
+            (int(req.get("seed") or 0), name, entry))
+    out = {}
+    for (level, variant, scenario), runs in groups.items():
+        runs.sort(key=lambda r: r[0])                 # the main job, then retries
+        req = runs[0][2]["request"]
+        bins = (SEVERITY_BINS if req.get("severity") == "all"
+                else [b for b in str(req.get("severity")).split(",") if b])
+        condition = condition_for(int(variant), req.get("n_variants"), level)
+        expected = {(f, b) for f in req.get("families") or [] for b in bins
+                    if why_absent(scenario, f, level, condition) is None}
+        made, reasons = set(), {}
+        for _seed, _name, entry in runs:              # the LATEST attempt's reason wins
+            outcome = entry.get("outcome") or {}
+            made |= {(r.get("family"), r.get("severity"))
+                     for r in outcome.get("results") or []}
+            for bad in outcome.get("bad") or []:
+                reasons[(bad.get("family"), bad.get("severity"))] = reason_class(
+                    bad.get("error"))
+        out[(level, variant, scenario)] = {
+            "job": runs[0][1], "expected": len(expected),
+            "missing": {cell: reasons.get(cell) or reasons.get((cell[0], None))
+                        or "no record" for cell in expected - made}}
+    return out
+
+
+def sample_report(gaps, details=False):
+    """A few lines: expected, present, missing by reason; per job with --details."""
+    expected = sum(g["expected"] for g in gaps.values())
+    missing = sum(len(g["missing"]) for g in gaps.values())
+    if not expected:
+        return []
+    lines = ["Samples of the done jobs: %d of %d expected, %d missing (%.1f%%)"
+             % (expected - missing, expected, missing, 100.0 * missing / expected)]
+    by_reason = collections.defaultdict(collections.Counter)
+    bug_jobs = collections.defaultdict(set)
+    for g in gaps.values():
+        for (family, _bin), reason in g["missing"].items():
+            by_reason[reason][family] += 1
+            if reason.startswith("BUG"):
+                bug_jobs[reason].add(g["job"])
+    for reason, fams in sorted(by_reason.items(), key=lambda kv: -sum(kv[1].values())):
+        top = ", ".join("%s %d" % kv for kv in fams.most_common(4))
+        lines.append("  %5d  %-34s %s%s" % (sum(fams.values()), reason[:34], top,
+                                           ", ..." if len(fams) > 4 else ""))
+        if reason in bug_jobs:
+            lines.append("         %s  in: %s" % (reason[34:70], " ".join(sorted(bug_jobs[reason]))))
+    if bug_jobs:
+        lines.append("  BUG rows are failures, not decisions: fix, then delete those "
+                     "jobs' .jobs/<job>.json and re-send them.")
+    if details:
+        for key, g in sorted(gaps.items(), key=lambda kv: kv[1]["job"]):
+            if not g["missing"]:
+                continue
+            fams = collections.defaultdict(list)
+            for (family, b), reason in g["missing"].items():
+                fams[(family, reason)].append(b[0])
+            lines.append("  %-34s %s" % (g["job"], "; ".join(
+                "%s[%s] %s" % (f, "".join(sorted(bs)), r[:28])
+                for (f, r), bs in sorted(fams.items()))))
+    return lines
+
+
+def read_ledgers(outdir):
+    out = {}
+    folder = os.path.join(outdir, ".jobs")
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if name.endswith(".json"):
+            try:
+                with open(os.path.join(folder, name)) as fh:
+                    out[name[:-len(".json")]] = json.load(fh)
+            except (OSError, ValueError):
+                continue
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--details", action="store_true",
-                    help="one line per unfinished job, with its error")
+                    help="one line per unfinished job, with its error, and one per "
+                         "job with missing samples")
     ap.add_argument("--running", action="store_true",
                     help="only the running tasks: time so far and peak memory")
     ap.add_argument("--finished", action="store_true",
@@ -314,6 +438,9 @@ def main():
         total += len(names)
         done_total += n_done
     print("%-9s %6d %6d\n" % ("total", total, done_total))
+    report = sample_report(sample_gaps(read_ledgers(outdir)), details=a.details)
+    if report:
+        print("\n".join(report) + "\n")
 
     if a.details and details:
         print("Unfinished jobs (list, task, job, reason, last error line):")

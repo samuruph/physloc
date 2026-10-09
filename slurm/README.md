@@ -176,6 +176,22 @@ done were made with the old code, and the release would mix the two.
 **Not a failure:** a log line saying a family "declined" a scene and was retried on another seed.
 That's normal, and handled inside the job.
 
+**A done job can still be missing samples.** Below the table, `status.py` counts the samples of the
+done jobs against what the taxonomy expects, and groups the missing ones by reason:
+
+```
+Samples of the done jobs: 9295 of 9672 expected, 377 missing (3.9%)
+    221  violator leaves the frame          solidity 60, immutability 58, superelastic 36, ...
+     20  BUG ValueError: affected clock dis shadow_track ...
+         agrees with the violator records  in: <job> <job>
+```
+
+Cells a level or condition can never hold (`colour_shift` at L3, `fission` in a `multi` clip, ...)
+are not expected, so they are not counted. `physloc taxonomy -v` lists them with the reason for each.
+A decline (the violator leaves the shot) is a decision, and the cell stays missing. A `BUG` row is a
+crash: fix it, delete those jobs' `.jobs/<job>.json` and re-send them. With `--details`, there's one
+line per job with what it is missing.
+
 ### 7. Finish
 
 ```bash

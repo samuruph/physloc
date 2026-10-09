@@ -393,3 +393,44 @@ def test_check_archive_catches_missing_changed_and_extra(tmp_path):
     assert "missing from the tars: physloc_v0/new.txt" in text
     assert "differs: physloc_v0/samples/physloc_v0/L0/a/data.h5" in text
     assert "in a tar but not in the folder: physloc_v0/.jobs/L0_a.json" in text
+
+
+def _ledger(level, variant, scenario, seed, families, made, bad=()):
+    return {"request": {"level": level, "variant": variant, "scenario": scenario,
+                        "seed": seed, "n_variants": 10, "families": families,
+                        "severity": "all"},
+            "outcome": {"results": [{"family": f, "severity": b} for f, b in made],
+                        "bad": [{"family": f, "severity": b, "error": e}
+                                for f, b, e in bad]}}
+
+
+def test_status_counts_missing_samples_from_the_ledgers():
+    st = _slurm_module("status")
+    every = lambda f: [(f, b) for b in ("weak", "medium", "strong")]
+    crash = ("annotate failed: RuntimeError('annotation worker exited 1: Traceback"
+             "\\n  File x\\nValueError: affected clock disagrees\\n')")
+    ledgers = {
+        # L0 variant 8 is `multi`: fission is never owed there, so its decline
+        # is not a gap; solidity's strong bin left the frame, then a retry
+        # seed built superelastic, which the main job had declined.
+        "L0_drop_v8": _ledger("L0", 8, "drop", 8, ["fission", "solidity", "superelastic"],
+                              every("solidity")[:2],
+                              [("fission", b, "multi clip needs two or more") for b in
+                               ("weak", "medium", "strong")]
+                              + [("solidity", "strong", "violator leaves the frame after")]
+                              + [("superelastic", b, "injector produced no plan")
+                                 for b in ("weak", "medium", "strong")]),
+        "L0_drop_v8_retry": _ledger("L0", 8, "drop", 18, ["superelastic"],
+                                    every("superelastic")),
+        "L0_drop_v0": _ledger("L0", 0, "drop", 0, ["solidity"], every("solidity")[1:],
+                              [("solidity", "weak", crash)]),
+    }
+    gaps = st.sample_gaps(ledgers)
+    assert gaps[("L0", 8, "drop")]["expected"] == 6           # fission left out
+    assert gaps[("L0", 8, "drop")]["missing"] == {
+        ("solidity", "strong"): "violator leaves the frame"}
+    assert gaps[("L0", 0, "drop")]["missing"] == {
+        ("solidity", "weak"): "BUG ValueError: affected clock disagrees"}
+    text = "\n".join(st.sample_report(gaps, details=True))
+    assert "7 of 9 expected, 2 missing" in text
+    assert "L0_drop_v0" in text and "re-send" in text

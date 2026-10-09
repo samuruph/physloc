@@ -858,11 +858,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                     violation_objects[key][target_row] = arrays[
                         "violator_" + key][source_row]
                 record = violator_meta[source_row]
-                for affected_id in record.get("affected_instance_ids") or []:
-                    if int(affected_id) not in row:
+                for target in schema_write.affected_ids(record, object_id, remap):
+                    if target not in row:
                         continue
                     for start, end in record.get("consequence_windows") or []:
-                        violation_objects["affected"][row[int(affected_id)],
+                        violation_objects["affected"][row[target],
                                                        int(start):int(end) + 1] = True
 
         instance_arrays = movi_mod.instance_arrays(spec, traj, seg_here, cam_track, K)

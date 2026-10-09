@@ -155,6 +155,20 @@ def _last(windows) -> Optional[int]:
     return int(windows[-1][1]) if windows else None
 
 
+def affected_ids(record: Dict, object_id: int, remap: Dict[int, int]) -> List[int]:
+    """The bodies one generator violator record disturbed, as public ids.
+
+    A remapped shadow caster is the actor itself, and a violator is not a body
+    its own violation disturbed. The ONE translation: the dense ``affected``
+    clock the pipeline writes and the ``affected_ids`` the loader rebuilds it
+    from must both come through here, or `_record_clocks` refuses the sample --
+    which it did for every `shadow_track` multi clip whose peer violator
+    disturbed the actor's shadow.
+    """
+    return sorted({remap.get(int(i), int(i))
+                   for i in record.get("affected_instance_ids") or []} - {int(object_id)})
+
+
 def _violator(record: Dict, remap: Dict[int, int], magnitude, T: int) -> Dict:
     """One generator violator record -> its v4 form, checked against the
     derivations the loader will apply to it."""
@@ -172,10 +186,7 @@ def _violator(record: Dict, remap: Dict[int, int], magnitude, T: int) -> Dict:
         if key in record and record[key] != derived:
             raise ValueError("violator %d: %s=%r but its windows give %r"
                              % (object_id, key, record[key], derived))
-    # A remapped shadow caster is the actor itself, and a violator is not a
-    # body its own violation disturbed.
-    affected = sorted({remap.get(int(i), int(i))
-                       for i in record.get("affected_instance_ids") or []} - {object_id})
+    affected = affected_ids(record, object_id, remap)
     out = {"id": object_id, "affected_ids": affected, "windows": windows}
     for key, value in record.items():
         if key in DERIVED_VIOLATOR or key in WINDOW_CLOCKS or key in (

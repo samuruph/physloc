@@ -43,10 +43,21 @@ def _first(a, b, t_axis, n_frames):
         x, y = a(t), b(t)
         if x.shape != y.shape:
             return (t, "shape %s vs %s" % (x.shape, y.shape))
-        if not np.array_equal(x, y):
-            return (t, "%.3g" % float(np.abs(x.astype(np.float64)
-                                             - y.astype(np.float64)).max()))
+        if not _same(x, y):
+            diff = np.abs(x.astype(np.float64) - y.astype(np.float64))
+            where = np.isnan(x) != np.isnan(y) if x.dtype.kind == "f" else None
+            if where is not None and where.any():
+                return (t, "NaN in one but not the other")
+            return (t, "%.3g" % float(np.nanmax(diff)))
     return None
+
+
+def _same(x, y):
+    """Equal, with NaN equal to NaN: a body absent from a frame has a NaN pose
+    in BOTH twins, and plain `array_equal` called every crowded scene different."""
+    if x.dtype.kind == "f":
+        return bool(np.array_equal(x, y, equal_nan=True))
+    return bool(np.array_equal(x, y))
 
 
 def compare(a_dir, b_dir):

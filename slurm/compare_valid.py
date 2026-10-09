@@ -31,26 +31,27 @@ GROUPS = {
 }
 
 
-def _frames(path):
-    import imageio.v2 as imageio
+def _first(a, b, t_axis, n_frames):
+    """(first differing frame, max |a - b| on that frame), or None if equal.
 
-    with imageio.get_reader(path) as r:
-        return np.stack([np.asarray(f) for f in r])
-
-
-def _first_and_max(a, b, t_axis=0):
-    """(first differing frame, max |a - b|), or None if equal."""
-    if a.shape != b.shape:
-        return ("-", "shape %s vs %s" % (a.shape, b.shape))
-    diff = np.abs(a.astype(np.float64) - b.astype(np.float64))
-    if not diff.any():
-        return None
-    per = np.moveaxis(diff, t_axis, 0).reshape(diff.shape[t_axis], -1).max(axis=1)
-    return (int(np.flatnonzero(per)[0]), float(diff.max()))
+    FRAME BY FRAME, from the HDF5 datasets or video readers, never whole
+    arrays: a 512^2 release clip's flow and normal passes are hundreds of MB
+    each, and loading two of them with their difference cost GBs per scene --
+    enough to be killed on a login node, silently under `| tail`.
+    """
+    for t in range(n_frames):
+        x, y = a(t), b(t)
+        if x.shape != y.shape:
+            return (t, "shape %s vs %s" % (x.shape, y.shape))
+        if not np.array_equal(x, y):
+            return (t, "%.3g" % float(np.abs(x.astype(np.float64)
+                                             - y.astype(np.float64)).max()))
+    return None
 
 
 def compare(a_dir, b_dir):
     import h5py
+    import imageio.v2 as imageio
 
     out = {}
     with h5py.File(os.path.join(a_dir, "data.h5"), "r") as fa, \
@@ -58,18 +59,39 @@ def compare(a_dir, b_dir):
         for group, names in GROUPS.items():
             worst = []
             for name in names:
-                if name in fa and name in fb:
-                    # per-object arrays are [object, frame, ...]
-                    d = _first_and_max(fa[name][()], fb[name][()],
-                                       1 if name.startswith("objects/") else 0)
-                    if d is not None:
-                        worst.append("%s (from frame %s, max %s)" % (
-                            name.split("/")[-1], d[0], d[1] if isinstance(d[1], str)
-                            else "%.3g" % d[1]))
+                if name not in fa or name not in fb:
+                    continue
+                da, db = fa[name], fb[name]
+                if da.shape != db.shape:
+                    worst.append("%s (shape %s vs %s)" % (name.split("/")[-1],
+                                                          da.shape, db.shape))
+                    continue
+                if name.startswith("objects/"):           # [object, frame, ...]
+                    d = _first(lambda t: da[:, t], lambda t: db[:, t], 1, da.shape[1])
+                else:
+                    d = _first(lambda t: da[t], lambda t: db[t], 0, da.shape[0])
+                if d is not None:
+                    worst.append("%s (from frame %s, max %s)"
+                                 % (name.split("/")[-1], d[0], d[1]))
             out[group] = worst
-    d = _first_and_max(_frames(os.path.join(a_dir, "rgb.mp4")),
-                       _frames(os.path.join(b_dir, "rgb.mp4")))
-    out["rgb"] = [] if d is None else ["frames (from frame %s, max %s of 255)" % d]
+    with imageio.get_reader(os.path.join(a_dir, "rgb.mp4")) as ra, \
+            imageio.get_reader(os.path.join(b_dir, "rgb.mp4")) as rb:
+        fa_, fb_ = iter(ra), iter(rb)
+        out["rgb"] = []
+        t = 0
+        while True:
+            x, y = next(fa_, None), next(fb_, None)
+            if x is None and y is None:
+                break
+            if x is None or y is None:
+                out["rgb"] = ["frame count differs from frame %d" % t]
+                break
+            x, y = np.asarray(x), np.asarray(y)
+            if not np.array_equal(x, y):
+                out["rgb"] = ["frames (from frame %d, max %d of 255)"
+                              % (t, int(np.abs(x.astype(int) - y.astype(int)).max()))]
+                break
+            t += 1
     return out
 
 
@@ -96,12 +118,12 @@ def main():
         res = compare(old, new)
         if not any(res.values()):
             n_same += 1
-            print("same  %s" % scene)
+            print("same  %s" % scene, flush=True)
             continue
-        print("DIFF  %s" % scene)
+        print("DIFF  %s" % scene, flush=True)
         for group in ("physics", "passes", "rgb"):
             if res[group]:
-                print("        %-7s %s" % (group, "; ".join(res[group])))
+                print("        %-7s %s" % (group, "; ".join(res[group])), flush=True)
     print("\n%d identical" % n_same)
     return 0
 

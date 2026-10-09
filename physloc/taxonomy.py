@@ -406,6 +406,83 @@ NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
         "needs either free flight or a level support",
 }
 
+#: Built cells that some CLIPS of a release can never contain, by design, each
+#: with a written reason. A cell is BUILD or not; these say which of its
+#: (level, condition) slots it still cannot fill, so `expected_cells` -- and
+#: every count derived from it -- says what a release will hold rather than
+#: what it schedules. The worker still offers these cells and declines them at
+#: planning, before anything renders; scheduling is left alone because the
+#: family list is part of every job's resume ledger.
+
+#: Cells that cannot make a `multi` clip -- one where two or more bodies,
+#: the scenario's own actor among them, break the law. The worker declines
+#: them (`render.worker._invalid_variant`) rather than ship one violator under
+#: a label promising several. Found by measurement, then explained: each one
+#: was built in none of the five `multi` / `camera+multi` slots per scenario of
+#: `physloc_v0` (L0 x2, L1, L2, L3), where every other cell was built in at
+#: least one. Add a cell here only with both.
+FISSION_NEEDS_UNDERSTUDY = (
+    "fission splits a body into itself and a dormant understudy, and %s "
+    "declares an understudy for its own actor only -- an extra body has no "
+    "second half to split into, so the family can act on one body")
+NEEDS_FLIGHT = (
+    "non_parabolic bends an airborne path, and on %s only the scenario's own "
+    "actor flies: the extra bodies slide, roll or rest, so the family can act "
+    "on one body")
+SINGLE_SHADOW = (
+    "shadow_track casts one shadow, of its own actor; the extra bodies are not "
+    "given shadows the family can act on, so it can act on one")
+
+NOT_IN_MULTI: Dict[Tuple[str, str], str] = {
+    **{("fission", s): FISSION_NEEDS_UNDERSTUDY % s
+       for s in ("barrier_pass", "collision", "drop", "occluder_pass",
+                 "resting_table", "rolling_ramp", "toss")},
+    **{("non_parabolic", s): NEEDS_FLIGHT % s
+       for s in ("pyramid_impact", "stack_topple", "toss")},
+    **{(f, "shadow_track"): SINGLE_SHADOW
+       for f in ("shadow", "shadow_inverted", "shadow_shape")},
+    ("newton2_mass", "collision"):
+        "newton2_mass alters the exchange between two colliding bodies and has "
+        "no per-body version; the scenario's own pair is one violation, and the "
+        "extra bodies are not launched into collisions of their own",
+}
+
+#: Families a whole complexity level removes, whatever the scenario --
+#: `Injector.available_at`, which the worker reports as `skipped`. Keyed by
+#: family, then level.
+NOT_AT_LEVEL: Dict[Tuple[str, str], str] = {
+    ("colour_shift", "L3"):
+        "L3 actors are scanned objects with a texture rather than a flat "
+        "colour, so there is no colour to shift",
+}
+
+
+def is_multi(condition: str) -> bool:
+    """Whether a condition makes several bodies violate (`multi`,
+    `camera+multi`). The same test as `scenarios.base.has_multi`."""
+    return "multi" in str(condition or "")
+
+
+def why_absent(scenario: str, family: str, level: str,
+               condition: str) -> Optional[str]:
+    """Why a BUILD cell cannot appear in a clip of this level and condition,
+    or None when it is expected there."""
+    if (family, level) in NOT_AT_LEVEL:
+        return NOT_AT_LEVEL[(family, level)]
+    if is_multi(condition) and (family, scenario) in NOT_IN_MULTI:
+        return NOT_IN_MULTI[(family, scenario)]
+    return None
+
+
+def expected_cells(level: str, condition: str,
+                   cells: Optional[List[Tuple[str, str]]] = None
+                   ) -> List[Tuple[str, str]]:
+    """The (scenario, family) cells a clip of this level and condition can
+    contain: `cells` (default `build_cells()`) less what `why_absent` rules out."""
+    return [(s, f) for s, f in (build_cells() if cells is None else cells)
+            if why_absent(s, f, level, condition) is None]
+
+
 #: Scenarios declared in the taxonomy but not implemented yet.
 #: `tumble` is retired rather than deleted. It was a near-duplicate of `toss`
 #: -- identical `provides`, medium and family list, launch velocities within 2%
@@ -550,3 +627,10 @@ def validate_taxonomy() -> None:
     for (fam, scen) in NOT_MEANINGFUL:
         assert fam in FAMILIES, fam
         assert scen in SCENARIOS, scen
+    # An absence is a claim about a BUILT cell; one about a cell that is not
+    # built says nothing and would hide a typo.
+    for (fam, scen) in NOT_IN_MULTI:
+        assert COMPATIBILITY.get(fam, {}).get(scen) == BUILD, (
+            "NOT_IN_MULTI names %s x %s, which is not a BUILD cell" % (fam, scen))
+    for (fam, _level) in NOT_AT_LEVEL:
+        assert fam in FAMILIES, fam

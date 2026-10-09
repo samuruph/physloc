@@ -378,15 +378,15 @@ rendering; a real run finishes roughly 10% over it.
 | `review_L0` | L0 | 166 | 179 | 32 | **12 min** |
 | `review_L1` | L1 | 166 | 179 | 32 | **12 min** |
 | `review_L2` | L2 | 166 | 179 | 32 | **1.2 h** |
-| `review_L3` | L3 | 166 | 179 | 32 | **1.2 h** |
+| `review_L3` | L3 | 166 | 166 | 32 | **1.1 h** |
 | `review_ladder` | L0+L1+L2+L3 | 12 | 320 | 32 | **48 min** |
-| `review` | L0+L1+L2+L3 | 166 | 5110 | 32 | **14.0 h** |
-| `v0_mini` | L0+L1+L2+L3 | 41 | 2520 | 32 | **6.2 h** |
-| `v0_L0` | L0 | 166 | 5110 | 32 | 99 h (**4.1 days**) |
-| `v0_L1` | L1 | 166 | 2555 | 32 | 50 h (**2.1 days**) |
-| `v0_L2` | L2 | 166 | 1533 | 32 | 84 h (**3.5 days**) |
-| `v0_L3` | L3 | 166 | 1022 | 32 | 56 h (**2.3 days**) |
-| `v0_release` | L0+L1+L2+L3 | 166 | 10220 | 32 | 289 h (**12.0 days**) |
+| `review` | L0+L1+L2+L3 | 166 | 5029 | 32 | **13.7 h** |
+| `v0_mini` | L0+L1+L2+L3 | 41 | 2442 | 32 | **5.8 h** |
+| `v0_L0` | L0 | 166 | 5026 | 32 | 98 h (**4.1 days**) |
+| `v0_L1` | L1 | 166 | 2513 | 32 | 49 h (**2.0 days**) |
+| `v0_L2` | L2 | 166 | 1491 | 32 | 82 h (**3.4 days**) |
+| `v0_L3` | L3 | 166 | 902 | 32 | 49 h (**2.1 days**) |
+| `v0_release` | L0+L1+L2+L3 | 166 | 9932 | 32 | 278 h (**11.6 days**) |
 <!-- /physloc:costs -->
 
 ### Where a release's time goes
@@ -394,11 +394,11 @@ rendering; a real run finishes roughly 10% over it.
 <!-- physloc:costs_ladder -->
 | level | variants | renders | per render | at 32 workers | share of the run |
 |---|---|---|---|---|---|
-| **L0** | 10 | 5110 | 204 s | 99 h (**4.1 days**) | 34% |
-| **L1** | 5 | 2555 | 204 s | 50 h (**2.1 days**) | 17% |
-| **L2** | 3 | 1533 | 464 s | 84 h (**3.5 days**) | 29% |
-| **L3** | 2 | 1022 | 464 s | 56 h (**2.3 days**) | 19% |
-| **all four** | -- | 10220 | -- | 289 h (**12.0 days**) | 100% |
+| **L0** | 10 | 5026 | 204 s | 98 h (**4.1 days**) | 35% |
+| **L1** | 5 | 2513 | 204 s | 49 h (**2.0 days**) | 18% |
+| **L2** | 3 | 1491 | 464 s | 82 h (**3.4 days**) | 29% |
+| **L3** | 2 | 902 | 464 s | 49 h (**2.1 days**) | 18% |
+| **all four** | -- | 9932 | -- | 278 h (**11.6 days**) | 100% |
 <!-- /physloc:costs_ladder -->
 
 L0 and L1 are three quarters of the renders and about half the time; L2 and L3 cost more per

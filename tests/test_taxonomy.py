@@ -72,3 +72,30 @@ def test_declared_kind_matches_what_injectors_emit():
             % (family, t.FAMILIES[family].kind, scenario, plan.kind))
         checked += 1
     assert checked > 50
+
+
+def test_a_level_without_flat_colours_declares_colour_shift_absent():
+    """`colour_shift.available_at` refuses scanned actors; the taxonomy must
+    say so for exactly the levels that use them, or the expected count drifts
+    from what the worker can make."""
+    from physloc.scenarios.base import COMPLEXITY
+
+    gso = {name for name, cx in COMPLEXITY.items() if cx.actor_assets == "gso"}
+    declared = {level for fam, level in t.NOT_AT_LEVEL if fam == "colour_shift"}
+    assert declared == gso
+
+
+def test_expected_cells_drop_only_what_is_declared():
+    cells = t.build_cells()
+    assert t.expected_cells("L0", "standard") == cells
+    assert t.expected_cells("L0", "camera") == cells
+    for condition in ("multi", "camera+multi"):
+        got = set(t.expected_cells("L0", condition))
+        assert set(cells) - got == {(s, f) for f, s in t.NOT_IN_MULTI}
+    l3 = set(t.expected_cells("L3", "standard"))
+    assert set(cells) - l3 == {(s, f) for s, f in cells if f == "colour_shift"}
+
+
+def test_every_absence_has_a_reason():
+    for why in list(t.NOT_IN_MULTI.values()) + list(t.NOT_AT_LEVEL.values()):
+        assert why and "%s" not in why

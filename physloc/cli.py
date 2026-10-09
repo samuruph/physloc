@@ -64,6 +64,14 @@ def cmd_taxonomy(a) -> int:
     if a.verbose:
         for scen, fam in cells:
             print("  %-16s x %s" % (scen, fam))
+        from .taxonomy import NOT_AT_LEVEL, NOT_IN_MULTI
+
+        print("\nBUILT, BUT NEVER IN SOME CLIPS (by design; not counted as missing)")
+        for (fam, level), why in sorted(NOT_AT_LEVEL.items()):
+            print("  %-16s at %-17s %s" % (fam, level, why))
+        for (fam, scen), why in sorted(NOT_IN_MULTI.items()):
+            if (scen, fam) in cells:
+                print("  %-16s on %-11s multi: %s" % (fam, scen, why))
     _print_release_size(cells, a)
     return 0
 
@@ -315,6 +323,17 @@ LEVEL_SEED_STRIDE = 1_000_000
 DISTRACTOR_COST = 0.157
 
 
+def _expected_cells_at(level: str, n_variants: int, cells) -> int:
+    """Cell slots one level's variants can fill: summed over its variants,
+    each under its own condition (`taxonomy.expected_cells`)."""
+    from .scenarios.base import condition_for
+    from .taxonomy import expected_cells
+
+    return sum(len(expected_cells(level, condition_for(v, n_variants, level),
+                                  cells))
+               for v in range(n_variants))
+
+
 def _print_release_size(cells, a) -> None:
     """What a given configuration would actually produce, and how long it takes.
 
@@ -338,7 +357,7 @@ def _print_release_size(cells, a) -> None:
     from .scenarios import TIERS
 
     levels = _levels_for(a.complexity, variants)
-    invalid = valid = renders = 0
+    invalid = valid = renders = absent_cells = 0
     serial = 0.0
     serial_bg = {}
     print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
@@ -386,7 +405,11 @@ def _print_release_size(cells, a) -> None:
                        + condition_share("multi")
                        + condition_share("camera+multi"))
             rate *= 1.0 + DISTRACTOR_COST * mean_extra * crowded
-        inv = len(cells) * n_bins * n_v
+        # WHAT THE RELEASE WILL HOLD, not what it schedules: a variant's
+        # condition and the level rule out some cells by design
+        # (`taxonomy.why_absent`), and those decline at planning, unrendered.
+        inv = n_bins * _expected_cells_at(level, n_v, cells)
+        absent_cells += len(cells) * n_v - _expected_cells_at(level, n_v, cells)
         val = len(scenarios) * n_v      # one per scenario+seed, shared
         invalid += inv
         valid += val
@@ -400,6 +423,10 @@ def _print_release_size(cells, a) -> None:
           "\n   (valid twins are one per scenario+seed, shared across families"
           "\n    and bins because the prefix is bit-identical)"
           % (len(cells), n_bins, renders))
+    if absent_cells:
+        print("   %d cell slot(s) x %d bin(s) left out: their level or condition "
+              "cannot hold them (`physloc taxonomy -v` lists why)"
+              % (absent_cells, n_bins))
     workers = _workers(getattr(a, "workers", 0) or 4)
     # Per background, because an HDRI frame scales worse than a solid one.
     parallel = sum(s / speedup_for(workers, bg) for bg, s in serial_bg.items())
@@ -1235,10 +1262,15 @@ def cmd_generate(a) -> int:
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
-    # Cells the level cannot express were never owed, so they do not count as
-    # missing -- see `Injector.available_at`.
-    n_skipped = sum(len(o.get("skipped") or []) for o in outcomes)
-    expected = len(cells) * sum(n for _, n in levels) * len(
+    # Cells the level or condition cannot express were never owed, so they do
+    # not count as missing: the taxonomy declares them (`why_absent`), and a
+    # skip the worker reports that the taxonomy does not (`available_at`
+    # without a NOT_AT_LEVEL entry) is subtracted on top.
+    from .taxonomy import NOT_AT_LEVEL
+
+    n_skipped = sum(1 for o in outcomes for x in (o.get("skipped") or [])
+                    if (x.get("family"), o.get("level")) not in NOT_AT_LEVEL)
+    expected = sum(_expected_cells_at(level, n, cells) for level, n in levels) * len(
         ["weak", "medium", "strong"] if a.severity == "all"
         else [x for x in a.severity.split(",") if x.strip()])
     if n_skipped:

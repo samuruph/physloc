@@ -39,6 +39,8 @@ def fallen(sample_dir, doc):
     floor = [k for k, o in enumerate(objects) if o.get("role") == "floor"]
     with h5py.File(os.path.join(sample_dir, "data.h5"), "r") as h5:
         pos = h5["objects/positions"][()]                    # [N, T, 3]
+        seen = (h5["objects/visibility"][()] if "objects/visibility" in h5
+                else None)                                   # [N, T] pixels
     if floor:
         k = floor[0]
         top = float(pos[k, 0, 2]) + float((objects[k].get("render") or {})
@@ -50,9 +52,15 @@ def fallen(sample_dir, doc):
         phys = o.get("physics") or {}
         if phys.get("static") or phys.get("dormant") or k >= pos.shape[0]:
             continue
-        low = float(np.nanmin(pos[k, :, 2]))
-        if low < top - FELL_BELOW:
-            out.append((str(o.get("name")), low, top))
+        z = pos[k, :, 2]
+        if np.isnan(z).all():
+            continue                        # absent from every frame
+        below = np.nan_to_num(z, nan=np.inf) < top - FELL_BELOW
+        if below.any():
+            # SEEN falling: frames below the floor on which it still has pixels.
+            n_seen = (int((below & (seen[k] > 0)).sum()) if seen is not None
+                      and k < seen.shape[0] else -1)
+            out.append((str(o.get("name")), float(np.nanmin(z)), top, n_seen))
     return out
 
 
@@ -80,9 +88,12 @@ def main():
         if os.path.basename(d) == "valid":
             n_valid += 1
             try:
-                for name, low, top in fallen(d, doc):
-                    fell.append("%s  %s reaches z=%.2f (floor top %.2f)"
-                                % (os.path.dirname(rel), name, low, top))
+                for name, low, top, n_seen in fallen(d, doc):
+                    fell.append("%s  %s reaches z=%.2f (floor top %.2f), %s"
+                                % (os.path.dirname(rel), name, low, top,
+                                   "never seen below it" if n_seen == 0 else
+                                   "SEEN below it on %d frames" % n_seen
+                                   if n_seen > 0 else "visibility unknown"))
             except (OSError, KeyError) as exc:
                 fell.append("%s  unreadable: %s" % (rel, exc))
         else:

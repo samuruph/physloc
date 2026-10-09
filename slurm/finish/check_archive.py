@@ -3,7 +3,7 @@ missing and nothing extra. Run by archive.slurm right after it writes the tars;
 exits 1 on any difference, so a bad archive fails the job instead of being
 found on restore.
 
-    python slurm/check_archive.py <release folder> <tar> [<tar> ...]
+    python slurm/finish/check_archive.py <release folder> <tar> [<tar> ...]
 
 Compared, for every entry under the release folder: its path, its type (file,
 folder, link), a file's size and a link's target. Empty folders count too.

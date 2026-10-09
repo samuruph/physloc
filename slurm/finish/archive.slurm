@@ -4,7 +4,7 @@
 # everything else (index, manifest, stats, audit, videos, ledger, ...), then
 # checks the tars hold exactly the release. $STORE allows only 100k files per
 # project, hence tar.
-#   sbatch slurm/archive.slurm
+#   sbatch slurm/finish/archive.slurm
 #SBATCH --job-name=archive
 #SBATCH --partition=archive           # for copying data; not charged
 #SBATCH --ntasks=1
@@ -36,7 +36,7 @@ done
 
 # 3. check: the tars together must hold exactly the release -- every path,
 #    size, empty folder and link. A mismatch fails this job.
-python3 $REPO/slurm/check_archive.py $PHYSLOC_DATA/$REL \
+python3 $REPO/slurm/finish/check_archive.py $PHYSLOC_DATA/$REL \
     $PHYSLOC_STORE/${REL}_meta.tar $(for l in $LEVELS; do echo $PHYSLOC_STORE/${REL}_$l.tar; done)
 ls -lh $PHYSLOC_STORE
 

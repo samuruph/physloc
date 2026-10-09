@@ -12,8 +12,8 @@ contain, in three groups, which also says WHERE a difference comes from:
   rgb      decoded frames                                -> renderer, denoiser, encoder
 
     source slurm/env.sh
-    python slurm/compare_valid.py --family solidity
-    python slurm/compare_valid.py --family solidity --newer-than <file>   # only those
+    python slurm/check/compare_valid.py --family solidity
+    python slurm/check/compare_valid.py --family solidity --newer-than <file>   # only those
 """
 import argparse
 import glob

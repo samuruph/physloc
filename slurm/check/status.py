@@ -2,11 +2,11 @@
 exact sbatch line to re-send them. Submits nothing itself.
 
     source slurm/env.sh
-    python slurm/status.py            # summary + what to re-send
-    python slurm/status.py --details  # ...and one line per unfinished job, and
+    python slurm/check/status.py            # summary + what to re-send
+    python slurm/check/status.py --details  # ...and one line per unfinished job, and
                                       #    per job with missing samples
-    python slurm/status.py --running  # running tasks: time so far, peak memory
-    python slurm/status.py --finished # finished tasks, and a --time / cores advice per list
+    python slurm/check/status.py --running  # running tasks: time so far, peak memory
+    python slurm/check/status.py --finished # finished tasks, and a --time / cores advice per list
 
 Below the table, the SAMPLES of the done jobs: how many of those the taxonomy
 expects are present, and the missing ones counted by reason -- a done job can
@@ -33,8 +33,9 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SLURM = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_SLURM, "render"))       # make_job_lists
+sys.path.insert(0, os.path.dirname(_SLURM))                 # the repo: physloc
 from make_job_lists import (ANNOTATION_GB, JOBS_DIR, LISTS, env,  # noqa: E402
                             script_setting)
 
@@ -472,7 +473,7 @@ def main():
         print("Reproduce on the docker box with:  python -m physloc.cli generate "
               "--config $PHYSLOC_CONFIG --only <job> --workers 1\n")
     if done_total == total and total:
-        print("All done. Next:  sbatch slurm/finalize.slurm")
+        print("All done. Next:  sbatch slurm/finish/finalize.slurm")
     elif not resend and not investigate:
         print("Nothing to do yet: the rest is still queued or running.")
     return 0

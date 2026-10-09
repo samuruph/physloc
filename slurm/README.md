@@ -9,7 +9,7 @@ A release is a list of **jobs**. One job is one level × scenario × variant: it
 family at every severity, about 40 renders that share one scene. Each job becomes **one array task**:
 
 ```
-sbatch --array=0-179 slurm/render_4cores.slurm
+sbatch --array=0-179 slurm/render/render_4cores.slurm
           │
           ├─ task 0  ─ reads line 1 of slurm/jobs/4cores.txt  → L0_collision_20260824_v0
           ├─ task 1  ─ reads line 2                           → L0_rolling_ramp_20260824_v0
@@ -25,25 +25,44 @@ This is the IDRIS job-array example, with `./mon_exe < fichier${SLURM_ARRAY_TASK
 
 ## The files
 
+One folder per stage of a release, in the order you use them. Everything runs from the repo root.
+
+```
+slurm/
+  env.sh                  your account and paths: the ONLY file to edit
+  kubric_singularity.sh   how a render starts inside kubric.sif (generate calls it; you never do)
+  setup/    once:          conda env, container image, asset mirror
+  render/   the release:   job lists + one render script per resource size
+  check/    any time:      what is done, what is missing and why, is what is there sound
+  refill/   after a fix:   re-render one family on finished jobs, merge it in
+  finish/   at the end:    finalize, archive to $STORE, publish
+  jobs/  logs/             written by the scripts (gitignored)
+```
+
 | file | what it does | you run it |
 |---|---|---|
 | `env.sh` | your account and paths: **the only file to edit** | `source slurm/env.sh` in every new shell |
 | `setup/1_conda.slurm` | creates the Python env in `$WORK` | once |
 | `setup/2_image.slurm` | builds `kubric.sif` from the same docker image as local runs, then `idrcontmgr` | once |
 | `setup/3_assets.slurm` | downloads the Kubric assets (~12 GB): compute nodes have no internet | once |
-| `make_job_lists.py` | writes `slurm/jobs/*.txt` and **prints the sbatch commands to run** | once per release |
-| `render_4cores.slurm` | L0/L1 jobs (except `pour`): 4 cores, 20 h | `sbatch --array=...` |
-| `render_8cores.slurm` | L2/L3 jobs (except `pour` and `shadow_track`): 8 cores, 20 h | `sbatch --array=...` |
-| `render_8cores_long.slurm` | `shadow_track` L2/L3 (each clip rendered 2–3 times): 8 cores, long queue | `sbatch --array=...` |
-| `render_pour.slurm` | `pour` L0–L2: 10 cores, long queue | `sbatch --array=...` |
-| `render_pour_L3.slurm` | `pour` L3: 32 cores (it needs ~120 GB), long queue | `sbatch --array=...` |
-| `status.py` | what is done, why the rest is not, and the exact line to re-send it | any time |
-| `finalize.slurm` | stats, index, validate, audit, coverage video, showcase | once, at the end |
-| `archive.slurm` | tar the release into `$STORE` | once, at the end |
-| `kubric_singularity.sh` | how a render starts inside `kubric.sif` (used by `generate`; you never call it) | never |
+| `render/make_job_lists.py` | writes `slurm/jobs/*.txt` and **prints the sbatch commands to run** | once per release |
+| `render/render_4cores.slurm` | L0/L1 jobs (except `pour`): 4 cores, 20 h | `sbatch --array=...` |
+| `render/render_8cores.slurm` | L2/L3 jobs (except `pour` and `shadow_track`): 8 cores, 20 h | `sbatch --array=...` |
+| `render/render_8cores_long.slurm` | `shadow_track` L2/L3 (each clip rendered 2–3 times): 8 cores, long queue | `sbatch --array=...` |
+| `render/render_pour.slurm` | `pour` L0–L2: 10 cores, long queue | `sbatch --array=...` |
+| `render/render_pour_L3.slurm` | `pour` L3: 16 cores (~64 GB), long queue | `sbatch --array=...` |
+| `check/status.py` | jobs done or not (with the line to re-send), then samples missing, by reason | any time |
+| `check/check_release.py` | empty sample folders, unverified prefixes, bodies falling out of valid clips | before finalize |
+| `check/compare_valid.py` | after a refill: its valid clips equal the release's, frame by frame | after a refill |
+| `check/fetch_for_inspection.sh` | copies a release (minus `data.h5`) to your workstation | on your workstation |
+| `refill/render_refill.slurm` | re-renders ONE family on finished jobs, into its own folder | after a fix (6b) |
+| `refill/merge_refill.py` | swaps that family's samples into the release | after the refill |
+| `finish/finalize.slurm` | stats, index, split, validate, audit, coverage video, showcase | once, at the end |
+| `finish/archive.slurm` | tar the release into `$STORE`, verified by `finish/check_archive.py` | once, at the end |
+| `finish/publish.slurm` | export + upload to HuggingFace | by hand, when happy |
 
 The five render scripts are identical except for their `#SBATCH` header and the job list they read.
-Why four: on Jean Zay memory comes with cores (about 4 GB per core), and `pour` needs the most of both.
+Why five: on Jean Zay memory comes with cores (about 4 GB per core), and `pour` needs the most of both.
 
 ## Step by step
 
@@ -87,7 +106,7 @@ exit
 ### 3. Make the job lists
 
 ```bash
-python slurm/make_job_lists.py
+python slurm/render/make_job_lists.py
 ```
 
 It prints how many jobs each list has, then the exact commands for steps 4 and 5.
@@ -95,13 +114,13 @@ It prints how many jobs each list has, then the exact commands for steps 4 and 5
 ### 4. Pilot: one job per render script
 
 ```bash
-sbatch --array=0 slurm/render_pour_L3.slurm
-sbatch --array=0 slurm/render_pour.slurm
-sbatch --array=0 slurm/render_8cores.slurm
-sbatch --array=0 slurm/render_4cores.slurm
+sbatch --array=0 slurm/render/render_pour_L3.slurm
+sbatch --array=0 slurm/render/render_pour.slurm
+sbatch --array=0 slurm/render/render_8cores.slurm
+sbatch --array=0 slurm/render/render_4cores.slurm
 ```
 
-Line 1 of each list is its longest job. When all four have finished, `python slurm/status.py --finished` does the arithmetic below for you. By hand:
+Line 1 of each list is its longest job. When all four have finished, `python slurm/check/status.py --finished` does the arithmetic below for you. By hand:
 
 ```bash
 sacct -u $USER --starttime today --format=JobID,JobName%16,Elapsed,MaxRSS,State
@@ -118,19 +137,19 @@ sacct -u $USER --starttime today --format=JobID,JobName%16,Elapsed,MaxRSS,State
 Paste the "EVERYTHING" lines `make_job_lists.py` printed (one per render script), e.g.:
 
 ```bash
-sbatch --array=0-1   slurm/render_pour_L3.slurm
-sbatch --array=0-17  slurm/render_pour.slurm
-sbatch --array=0-59  slurm/render_8cores.slurm
-sbatch --array=0-179 slurm/render_4cores.slurm
+sbatch --array=0-1   slurm/render/render_pour_L3.slurm
+sbatch --array=0-17  slurm/render/render_pour.slurm
+sbatch --array=0-59  slurm/render/render_8cores.slurm
+sbatch --array=0-179 slurm/render/render_4cores.slurm
 ```
 
 The pilot's jobs are already done, so their tasks finish in seconds. To follow progress:
 
 ```bash
 squeue -u $USER          # what is running / waiting (and why, e.g. QOSMaxCpuPerUserLimit)
-python slurm/status.py   # what is done, and what to re-send
-python slurm/status.py --running   # each running task: time so far, peak memory vs its limit
-python slurm/status.py --finished  # finished tasks + a --time / cores advice per render script
+python slurm/check/status.py   # what is done, and what to re-send
+python slurm/check/status.py --running   # each running task: time so far, peak memory vs its limit
+python slurm/check/status.py --finished  # finished tasks + a --time / cores advice per render script
 ```
 
 ### 6. If a job fails
@@ -142,7 +161,7 @@ clips come out the same, because the seed comes from the job's name.
 When `squeue -u $USER` shows nothing left, run:
 
 ```bash
-python slurm/status.py --details
+python slurm/check/status.py --details
 ```
 
 For every job that isn't done, it asks SLURM how the last attempt ended and prints the line to re-send
@@ -156,7 +175,7 @@ it:
 | `FAILED` once | the program crashed | the same line again (often a one-off) |
 | `FAILED` twice | a bug, not bad luck | **no re-send**: the log to read |
 
-Run the lines it prints, for example `sbatch --array=17,42 slurm/render_4cores.slurm`. Options given on
+Run the lines it prints, for example `sbatch --array=17,42 slurm/render/render_4cores.slurm`. Options given on
 the `sbatch` line override the script's `#SBATCH` header. Re-sending is always safe: a job that
 finished in the meantime is skipped in seconds.
 
@@ -202,11 +221,11 @@ the jobs it touches, into its own folder, then swap its samples into the release
 python -m physloc.cli generate --config $PHYSLOC_CONFIG --scenario ramp_slide,rolling_ramp \
     --family solidity --list-jobs slurm/jobs/refill.tsv
 tail -n +2 slurm/jobs/refill.tsv | cut -f1 > slurm/jobs/refill.txt; wc -l slurm/jobs/refill.txt
-PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/render_refill.slurm
+PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/refill/render_refill.slurm
 # when they are done:
-python slurm/merge_refill.py --family solidity           # preview
-python slurm/merge_refill.py --family solidity --apply   # swap the family's samples in
-python slurm/status.py                                   # the refill now counts for that family
+python slurm/refill/merge_refill.py --family solidity           # preview
+python slurm/refill/merge_refill.py --family solidity --apply   # swap the family's samples in
+python slurm/check/status.py                                   # the refill now counts for that family
 ```
 
 The refill writes to `$PHYSLOC_DATA/refill_<family>/$PHYSLOC_RELEASE`, so the release is untouched until
@@ -217,7 +236,7 @@ failed has no ledger and is left as it was. Then run `finalize`.
 ### 7. Finish
 
 ```bash
-sbatch slurm/finalize.slurm       # when status.py says "All done"
+sbatch slurm/finish/finalize.slurm       # when status.py says "All done"
 ```
 
 Then:
@@ -231,7 +250,7 @@ Then:
 ### 8. Archive to $STORE
 
 ```bash
-sbatch slurm/archive.slurm
+sbatch slurm/finish/archive.slurm
 ```
 
 Do this soon after finalize: `$SCRATCH` deletes files nobody has read for 30 days. It writes 5 tar
@@ -264,7 +283,7 @@ hf auth login
 Then:
 
 ```bash
-sbatch slurm/publish.slurm
+sbatch slurm/finish/publish.slurm
 ```
 
 It runs on prepost (internet, not charged):

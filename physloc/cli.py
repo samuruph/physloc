@@ -1287,7 +1287,7 @@ def cmd_generate(a) -> int:
     # NOT WHEN THE RUN IS ONE OF MANY. Finishing rewrites every sample.json in
     # the release, so a SLURM array -- hundreds of `generate --only` tasks on
     # one outdir -- passes `--no-finalize` and runs `physloc finalize` once at
-    # the end (slurm/finalize.sbatch).
+    # the end (slurm/finish/finalize.slurm).
     if not getattr(a, "no_finalize", False):
         _finish_release(rel)
     return 0
@@ -1302,8 +1302,8 @@ def job_name(job) -> str:
 
 
 #: `generate --list-jobs` columns, in order. A scheduler that runs one job per
-#: task (slurm/submit.sh) reads these to size each task: `memory_gb` is the
-#: same charge `MemoryBudget` admits a job by.
+#: task (slurm/render/make_job_lists.py) reads these to size each task:
+#: `memory_gb` is the same charge `MemoryBudget` admits a job by.
 JOB_LIST_COLUMNS = ("name", "level", "scenario", "seed", "variant",
                     "families", "renders", "memory_gb")
 

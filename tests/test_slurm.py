@@ -10,10 +10,11 @@ array run is built from:
 * `PHYSLOC_LAUNCHER` swaps docker/kubric.sh for slurm/kubric_singularity.sh,
   which builds the right Singularity command; docker/kubric.sh is untouched;
 * the asset mirror rewrites a manifest and nothing else;
-* `slurm/make_job_lists.py` puts every job in a render script that fits it,
-  and `slurm/status.py` reads SLURM's verdicts and prescribes the re-send.
+* `slurm/render/make_job_lists.py` puts every job in a render script that fits it,
+  and `slurm/check/status.py` reads SLURM's verdicts and prescribes the re-send.
 """
 import csv
+import glob
 import json
 import importlib.util
 import os
@@ -222,7 +223,10 @@ def test_mirror_covers_every_id_the_code_samples():
 
 # ------------------------------------------------------------- job lists
 def _slurm_module(name):
-    path = os.path.join(REPO, "slurm", name + ".py")
+    """Load slurm/<stage>/<name>.py, whichever stage folder it lives in."""
+    found = glob.glob(os.path.join(REPO, "slurm", "*", name + ".py"))
+    assert len(found) == 1, "slurm/*/%s.py: %s" % (name, found)
+    path = found[0]
     sys.path.insert(0, os.path.dirname(path))
     try:
         spec = importlib.util.spec_from_file_location("slurm_" + name, path)
@@ -234,7 +238,7 @@ def _slurm_module(name):
 
 
 def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
-    """Run slurm/make_job_lists.py in a scratch copy of the repo layout, so a
+    """Run slurm/render/make_job_lists.py in a scratch copy of the repo layout, so a
     real slurm/jobs/ (on the cluster) is never overwritten by a test."""
     root = tmp_path / "repo"
     root.mkdir()
@@ -244,7 +248,7 @@ def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
                     ignore=shutil.ignore_patterns("jobs", "logs", "__pycache__"))
     env = dict(os.environ, PHYSLOC_CONFIG="v0_release",
                PHYSLOC_OUTDIR=str(tmp_path / "physloc_v0"))
-    proc = subprocess.run([sys.executable, str(root / "slurm" / "make_job_lists.py")],
+    proc = subprocess.run([sys.executable, str(root / "slurm" / "render" / "make_job_lists.py")],
                           env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     jobs = root / "slurm" / "jobs"
@@ -252,7 +256,7 @@ def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
             csv.DictReader(open(jobs / "all.tsv"), delimiter="\t")}
     seen = []
     for list_file in jobs.glob("*.txt"):
-        header = open(root / "slurm" / ("render_%s.slurm" % list_file.stem)).read()
+        header = open(root / "slurm" / "render" / ("render_%s.slurm" % list_file.stem)).read()
         cores = int(header.split("--cpus-per-task=")[1].split()[0])
         t4 = "--qos=qos_cpu-t4" in header
         for name in list_file.read_text().split():
@@ -265,12 +269,12 @@ def test_make_job_lists_sorts_every_job_into_a_render_script(tmp_path):
                                     or r["scenario"] == "pour")
             seen.append(name)
     assert sorted(seen) == sorted(rows)                        # every job, once
-    assert "sbatch --array=0 slurm/render_4cores.slurm" in proc.stdout
+    assert "sbatch --array=0 slurm/render/render_4cores.slurm" in proc.stdout
 
 
 def test_make_job_lists_needs_env_sh():
     env = {k: v for k, v in os.environ.items() if not k.startswith("PHYSLOC_")}
-    proc = subprocess.run([sys.executable, os.path.join(REPO, "slurm", "make_job_lists.py")],
+    proc = subprocess.run([sys.executable, os.path.join(REPO, "slurm", "render", "make_job_lists.py")],
                           env=env, capture_output=True, text=True)
     assert proc.returncode != 0 and "source slurm/env.sh" in proc.stderr
 
@@ -500,7 +504,7 @@ def test_merge_refill_swaps_one_family_per_slot(tmp_path):
     _scene(refill, "L0", "ramp_slide", 120, ["valid", "invalid_solidity_weak"])
     _jobs(refill, "L0_ramp_slide_100_v0", "L0", 0, "ramp_slide", 100, ["solidity"])
     _jobs(refill, "L0_ramp_slide_120_v0", "L0", 0, "ramp_slide", 120, ["solidity"])
-    script = os.path.join(REPO, "slurm", "merge_refill.py")
+    script = os.path.join(REPO, "slurm", "refill", "merge_refill.py")
     run = lambda *extra: subprocess.run(
         [sys.executable, script, "--family", "solidity", "--release", release,
          "--refill", refill] + list(extra), capture_output=True, text=True, check=True)

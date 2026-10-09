@@ -14,8 +14,8 @@ Neither looks at whether what IS there is sound:
 Read-only. Prints counts and the first few of each; --list prints them all.
 
     source slurm/env.sh
-    python slurm/check_release.py                 # $PHYSLOC_OUTDIR
-    python slurm/check_release.py --list > check_release.txt
+    python slurm/check/check_release.py                 # $PHYSLOC_OUTDIR
+    python slurm/check/check_release.py --list > check_release.txt
 """
 import argparse
 import glob

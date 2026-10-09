@@ -1,10 +1,10 @@
 #!/bin/bash
-# FINALIZE -- once every render job is done (python slurm/status.py says so).
+# FINALIZE -- once every render job is done (python slurm/check/status.py says so).
 # What a single local `generate` does at its end, done once for the whole
 # release: stats + dataset manifest, then validate and audit, then the videos,
 # all under $PHYSLOC_OUTDIR/viz/: coverage, compare (levels / variants /
 # conditions) and the slide-ready showcase.
-#   sbatch slurm/finalize.slurm
+#   sbatch slurm/finish/finalize.slurm
 # Uploading is NOT here: look at the clips first, then export by hand (README).
 #SBATCH --job-name=finalize
 #SBATCH --partition=prepost           # not charged to your hours

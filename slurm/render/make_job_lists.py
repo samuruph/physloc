@@ -2,7 +2,7 @@
 commands to submit them. Submits nothing itself.
 
     source slurm/env.sh
-    python slurm/make_job_lists.py
+    python slurm/render/make_job_lists.py
 
 A job list is one job name per line (e.g. `L0_drop_20260824_v3`); array task i
 of a render script runs line i+1 of its list. Every job goes to exactly one
@@ -23,7 +23,7 @@ most likely to hit a limit. Every job is also compared with the memory its
 script gives it (4 GB per core on cpu_p1, cores read from the script's own
 `#SBATCH --cpus-per-task`). That uses the CHARGE in `cli.JOB_MEMORY_GB`, a
 conservative estimate, so a mismatch is a WARNING: the pilot's measured peak
-(`python slurm/status.py --finished`) is what decides, and a job that really
+(`python slurm/check/status.py --finished`) is what decides, and a job that really
 runs out of memory shows as OUT_OF_MEMORY in status.py, with a re-send line.
 """
 import csv
@@ -32,9 +32,10 @@ import re
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
-JOBS_DIR = os.path.join(HERE, "jobs")
+HERE = os.path.dirname(os.path.abspath(__file__))          # slurm/render
+SLURM = os.path.dirname(HERE)                               # slurm
+REPO = os.path.dirname(SLURM)
+JOBS_DIR = os.path.join(SLURM, "jobs")
 
 #: The lists, in the order to submit them: the longest jobs first.
 LISTS = ("pour_L3", "pour", "8cores_long", "8cores", "4cores")
@@ -75,7 +76,7 @@ def env(name):
 def main():
     config, outdir = env("PHYSLOC_CONFIG"), env("PHYSLOC_OUTDIR")
     os.makedirs(JOBS_DIR, exist_ok=True)
-    os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(SLURM, "logs"), exist_ok=True)
     table = os.path.join(JOBS_DIR, "all.tsv")
 
     # The jobs, exactly as a local `generate` would build them.
@@ -117,11 +118,11 @@ def main():
             script_setting(n, "qos"), script_setting(n, "time")))
     print("\nPILOT -- the longest job of each list:")
     for n in used:
-        print("  sbatch --array=0 slurm/render_%s.slurm" % n)
+        print("  sbatch --array=0 slurm/render/render_%s.slurm" % n)
     print("\nEVERYTHING -- after the pilot looked right:")
     for n in used:
-        print("  sbatch --array=0-%d slurm/render_%s.slurm" % (len(lists[n]) - 1, n))
-    print("\nThen: python slurm/status.py")
+        print("  sbatch --array=0-%d slurm/render/render_%s.slurm" % (len(lists[n]) - 1, n))
+    print("\nThen: python slurm/check/status.py")
     return 0
 
 

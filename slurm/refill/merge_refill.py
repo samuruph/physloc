@@ -1,6 +1,6 @@
 """Swap one family's samples in a release for those of a refill run.
 
-A refill (`slurm/render_refill.slurm`) re-renders ONE family on jobs that
+A refill (`slurm/refill/render_refill.slurm`) re-renders ONE family on jobs that
 already ran, into its own folder, `$PHYSLOC_DATA/refill_<family>/<release>`.
 This moves the result into the release, per scene slot -- a job's (level,
 variant, scenario), which also covers the retry scenes it built on fresh seeds:
@@ -14,11 +14,11 @@ variant, scenario), which also covers the retry scenes it built on fresh seeds:
      `status.py` reads as overriding that family for their slot.
 
 A slot whose refill job did not finish has no ledger and is left untouched.
-Nothing is changed without --apply; then run `sbatch slurm/finalize.slurm`.
+Nothing is changed without --apply; then run `sbatch slurm/finish/finalize.slurm`.
 
     source slurm/env.sh
-    python slurm/merge_refill.py --family solidity            # what it would do
-    python slurm/merge_refill.py --family solidity --apply
+    python slurm/refill/merge_refill.py --family solidity            # what it would do
+    python slurm/refill/merge_refill.py --family solidity --apply
 """
 import argparse
 import glob
@@ -120,7 +120,7 @@ def main():
         shutil.copy2(os.path.join(refill, ".jobs", led + ".json"),
                      os.path.join(a.release, ".jobs",
                                   "%s__refill_%s.json" % (led, a.family)))
-    print("\nDone. Check with  python slurm/status.py, then  sbatch slurm/finalize.slurm")
+    print("\nDone. Check with  python slurm/check/status.py, then  sbatch slurm/finish/finalize.slurm")
     return 0
 
 

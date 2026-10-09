@@ -2,7 +2,7 @@
 # PUBLISH -- package the release for HuggingFace and upload it, after you have
 # looked at the clips and finalize.slurm passed. Never runs by itself.
 #   hf auth login                    # once, on a login node (stores your token in $HOME)
-#   sbatch slurm/publish.slurm
+#   sbatch slurm/finish/publish.slurm
 #
 # 1. export: copy the samples into a clean folder ($SCRATCH/hf/<release>) with the
 #    dataset card, index and splits. Skipped if a previous run finished it

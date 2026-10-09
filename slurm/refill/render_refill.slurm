@@ -5,10 +5,10 @@
 # severity. Written to its own release folder,
 #   $PHYSLOC_DATA/refill_<family>/$PHYSLOC_RELEASE
 # so the release's own ledger and samples are untouched until
-# `slurm/merge_refill.py` swaps the family's samples in (slurm/README.md, "Refill").
+# `slurm/refill/merge_refill.py` swaps the family's samples in (slurm/README.md, "Refill").
 #
 # Submit from the repo root:
-#   PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/render_refill.slurm
+#   PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/refill/render_refill.slurm
 #SBATCH --job-name=render-refill
 #SBATCH --partition=cpu_p1
 #SBATCH --qos=qos_cpu-t3              # up to 20 h
@@ -40,7 +40,7 @@ JOB=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" slurm/jobs/refill.txt)
 # rgb.mp4 BYTES differed. Compare content, never bytes.
 ORIG=$(grep -l -x "$JOB" slurm/jobs/{4cores,8cores,8cores_long,pour,pour_L3}.txt 2>/dev/null | head -1)
 ORIG=$(basename "${ORIG:?$JOB is in none of the release job lists}" .txt)
-THREADS=$(sed -n 's/^#SBATCH --cpus-per-task=\([0-9]*\).*/\1/p' slurm/render_$ORIG.slurm)
+THREADS=$(sed -n 's/^#SBATCH --cpus-per-task=\([0-9]*\).*/\1/p' slurm/render/render_$ORIG.slurm)
 if [ "${THREADS:-0}" -gt "$SLURM_CPUS_PER_TASK" ]; then
   echo "$JOB ran with $THREADS threads in the release; this task has $SLURM_CPUS_PER_TASK" >&2
   exit 1

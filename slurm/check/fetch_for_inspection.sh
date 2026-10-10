@@ -35,6 +35,15 @@ REMOTE="$JZ_RELEASE"
 DEST="$INSPECT_DEST"
 # ---------------------------------------------------------------------------------
 
+# ONE PROGRESS LINE for the whole copy where rsync can (3.1+): a release is ~30 000
+# files, and listing each one buries the progress. macOS ships an older rsync, which
+# falls back to per-file progress. --partial resumes a file the copy broke off in.
+if rsync --help 2>&1 | grep -q -- "--info"; then
+  PROGRESS=(--info=progress2 --no-inc-recursive --partial)
+else
+  PROGRESS=(-P)
+fi
+
 case "${1:-}" in
   --dry-run)
     echo "Would copy from $JZ_LOGIN:$REMOTE to $DEST (data.h5 excluded):"
@@ -44,16 +53,17 @@ case "${1:-}" in
   --with-h5)
     sample="${2:?usage: --with-h5 <sample folder, relative to the release>}"
     mkdir -p "$DEST/$sample"
-    rsync -avP "$JZ_LOGIN:$REMOTE/$sample/data.h5" "$DEST/$sample/"
+    rsync -a "${PROGRESS[@]}" "$JZ_LOGIN:$REMOTE/$sample/data.h5" "$DEST/$sample/"
     echo "Open it with:  python test_dataset_loader.py $DEST/$sample --gui"
     ;;
   "")
     mkdir -p "$DEST"
-    # -a keep the structure, -v list files, -P progress + resume a broken file;
-    # --exclude skips every data.h5, wherever it is.
-    rsync -avP --exclude='data.h5' "$JZ_LOGIN:$REMOTE/" "$DEST/"
+    # -a keeps the structure; --exclude skips every data.h5, wherever it is.
+    rsync -a "${PROGRESS[@]}" --exclude='data.h5' "$JZ_LOGIN:$REMOTE/" "$DEST/"
     echo
-    echo "Done -> $DEST   (start with audit.txt, validate.json, stats/ and viz/coverage_strong.mp4)"
+    echo "Done -> $DEST   ($(du -sh "$DEST" | cut -f1) on disk)"
+    echo "Start with: audit.txt, validate.json, stats/, viz/coverage_strong.mp4;"
+    echo "every sample's rgb.mp4, overlay.mp4 and sample.json are under samples/."
     ;;
   *)
     echo "unknown option: $1  (use --dry-run or --with-h5 <sample folder>)" >&2

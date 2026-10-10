@@ -116,11 +116,12 @@ It prints how many jobs each list has, then the exact commands for steps 4 and 5
 ```bash
 sbatch --array=0 slurm/render/render_pour_L3.slurm
 sbatch --array=0 slurm/render/render_pour.slurm
+sbatch --array=0 slurm/render/render_8cores_long.slurm
 sbatch --array=0 slurm/render/render_8cores.slurm
 sbatch --array=0 slurm/render/render_4cores.slurm
 ```
 
-Line 1 of each list is its longest job. When all four have finished, `python slurm/check/status.py --finished` does the arithmetic below for you. By hand:
+Line 1 of each list is its longest job. When all five have finished, `python slurm/check/status.py --finished` does the arithmetic below for you. By hand:
 
 ```bash
 sacct -u $USER --starttime today --format=JobID,JobName%16,Elapsed,MaxRSS,State
@@ -139,7 +140,8 @@ Paste the "EVERYTHING" lines `make_job_lists.py` printed (one per render script)
 ```bash
 sbatch --array=0-1   slurm/render/render_pour_L3.slurm
 sbatch --array=0-17  slurm/render/render_pour.slurm
-sbatch --array=0-59  slurm/render/render_8cores.slurm
+sbatch --array=0-4   slurm/render/render_8cores_long.slurm
+sbatch --array=0-54  slurm/render/render_8cores.slurm
 sbatch --array=0-179 slurm/render/render_4cores.slurm
 ```
 
@@ -195,21 +197,45 @@ done were made with the old code, and the release would mix the two.
 **Not a failure:** a log line saying a family "declined" a scene and was retried on another seed.
 That's normal, and handled inside the job.
 
-**A done job can still be missing samples.** Below the table, `status.py` counts the samples of the
-done jobs against what the taxonomy expects, and groups the missing ones by reason:
+**A done job can still be missing samples.** A job is done once it has run, but inside it a cell can
+decline (its violator would not be visible) or crash, while the rest of the job is written. Below the
+table, `status.py` counts the samples of the done jobs against what the taxonomy expects, and groups
+the missing ones by reason:
 
 ```
 Samples of the done jobs: 9295 of 9672 expected, 377 missing (3.9%)
-    221  violator leaves the frame          solidity 60, immutability 58, superelastic 36, ...
-     20  BUG ValueError: affected clock dis shadow_track ...
-         agrees with the violator records  in: <job> <job>
+    176  violator leaves the frame          immutability 55, superelastic 36, solidity 31, ...
+    141  multi: fewer than two violators    angular_momentum 28, non_parabolic 24, friction 16, ...
+      3  a body falls through the floor     solidity 3
+     20  BUG ValueError: affected clock dis continuity 6, phantom_impulse 6, ...
+         agrees with the violator records  in: L0_shadow_track_20260833_v9 L3_shadow_track_23260825_v1
 ```
 
-Cells a level or condition can never hold (`colour_shift` at L3, `fission` in a `multi` clip, ...)
-are not expected, so they are not counted. `physloc taxonomy -v` lists them with the reason for each.
-A decline (the violator leaves the shot) is a decision, and the cell stays missing. A `BUG` row is a
-crash: fix it, delete those jobs' `.jobs/<job>.json` and re-send them. With `--details`, there's one
-line per job with what it is missing.
+- **Cells a level or condition can never hold** (`colour_shift` at L3, `fission` in a `multi` clip, ...)
+  are not expected, so they are not counted. `python -m physloc.cli taxonomy -v` lists them, with the
+  reason for each.
+- **A decline** (leaves the frame, falls through the floor, fewer than two violators, never
+  observable) is a decision: the worker refuses a violation nobody could see. The cell stays missing.
+- **A `BUG` row** is a crash, and names its jobs. Fix the bug (it must not change how other clips
+  look), commit, `git pull` here, then re-run just those jobs. Their ledger has to go, or the re-send
+  is skipped as done:
+
+```bash
+JOBS="L0_shadow_track_20260833_v9 L3_shadow_track_23260825_v1"     # the jobs the BUG row names
+for JOB in $JOBS; do mv -v $PHYSLOC_OUTDIR/.jobs/$JOB.json $PHYSLOC_OUTDIR/.jobs/$JOB.json.bak; done
+for JOB in $JOBS; do                         # each job's list and array index, as an sbatch line
+  hit=$(grep -n -x "$JOB" slurm/jobs/*.txt); list=$(basename ${hit%%:*} .txt); n=${hit#*:}; n=${n%%:*}
+  echo "sbatch --array=$((n-1)) slurm/render/render_${list}.slurm"
+done
+# run the printed lines; once both jobs are done again and the BUG row is gone:
+rm $PHYSLOC_OUTDIR/.jobs/*.json.bak
+```
+
+The re-run renders the whole job again from the same seed: the clips that were fine come out
+identical, and the crashed ones get written. A crash can leave empty sample folders behind;
+`check/check_release.py` (step 7) lists them, and the re-run fills them.
+
+With `--details`, `status.py` adds one line per job with what it is missing.
 
 ### 6b. Refill: re-render one family after a fix
 
@@ -226,28 +252,73 @@ PHYSLOC_REFILL_FAMILY=solidity sbatch --array=0-<N-1> slurm/refill/render_refill
 python slurm/refill/merge_refill.py --family solidity           # preview
 python slurm/refill/merge_refill.py --family solidity --apply   # swap the family's samples in
 python slurm/check/status.py                                   # the refill now counts for that family
+# the new invalid clips sit next to the release's OLD valid clip: check they are still twins
+srun --partition=prepost --time=02:00:00 --cpus-per-task=2 --hint=nomultithread \
+    python slurm/check/compare_valid.py --family solidity > compare_valid.txt 2>&1
+tail -2 compare_valid.txt; grep -A3 "^DIFF" compare_valid.txt   # want: "<N> identical", no DIFF
 ```
 
-The refill writes to `$PHYSLOC_DATA/refill_<family>/$PHYSLOC_RELEASE`, so the release is untouched until
-the merge. The merge removes every old sample of the family on each refilled scene slot before copying
-the new ones in, so a bin the fixed code declines doesn't keep its old clip. A slot whose refill job
-failed has no ledger and is left as it was. Then run `finalize`.
+- The refill writes to `$PHYSLOC_DATA/refill_<family>/$PHYSLOC_RELEASE`, so the release is untouched
+  until the merge.
+- The merge removes every old sample of the family on each refilled scene slot before copying the new
+  ones in, so a bin the fixed code declines doesn't keep its old clip. A slot whose refill job failed
+  has no ledger and is left as it was. Re-running the merge is safe.
+- Each refill job renders with the thread count its job had in the release, read from its original
+  render script, so the render settings match exactly.
+- `compare_valid.py` re-renders nothing. It checks that the refill's own valid clip equals the
+  release's in physics, every render pass and every decoded frame. **Compare content, never bytes:**
+  `rgb.mp4` files of identical frames can differ byte for byte. It reads whole clips, so run it on
+  `prepost` as above, not on the login node.
 
-### 7. Finish
+### 7. Check the release
+
+When `status.py` says "All done", check what is there before finalizing:
 
 ```bash
-sbatch slurm/finish/finalize.slurm       # when status.py says "All done"
+python slurm/check/status.py                  # "All done", and the missing samples by reason
+python slurm/check/check_release.py           # light: fine on the login node
+python slurm/check/check_release.py --list > check_release.txt   # every finding
 ```
 
-Then:
-- Look at `$PHYSLOC_OUTDIR/audit.txt` and `validate.json`, then the videos, all in
-  `$PHYSLOC_OUTDIR/viz/`:
+`check_release.py` makes three checks that neither `status.py` nor `validate` makes:
+
+| line | want | if not |
+|---|---|---|
+| empty sample folders | 0 | a clip crashed while being written: see the `BUG` row in `status.py` (step 6) |
+| invalid samples with an UNVERIFIED prefix | 0 | that clip is not a twin of its valid clip (non-negotiable 1): do not publish it |
+| bodies falling out of the world in a VALID clip | a decision | see below |
+
+**Bodies falling out of the world.** An extra body (distractor or `multi` peer) placed past the edge of
+the floor slab falls out of the scene in the *lawful* clip, and every family on that scene inherits it.
+Each line says whether the fall is seen on screen. It's lawful physics and the labels stay correct, but
+it looks odd. In a `multi` clip, a falling peer can be chosen as a violator, and its severity is then
+dominated by the fall. v0 ships with it (11 L0 scenes, of `ramp_slide`, `rolling_ramp`, `toss`, `drop`);
+fixing it means re-rendering those scenes in full.
+
+### 8. Finish
+
+```bash
+sbatch slurm/finish/finalize.slurm
+```
+
+It writes the stats, the index, **the train/held-out split** (assigned here, once, on the final set of
+samples), `validate.json`, `audit.txt` and the videos. Then:
+
+```bash
+grep '"ok"' $PHYSLOC_OUTDIR/validate.json     # must be "ok": true -- otherwise read the rest of it
+head -30 $PHYSLOC_OUTDIR/audit.txt             # cells whose violation is not visible
+```
+
+- Look at the videos, all in `$PHYSLOC_OUTDIR/viz/`:
   - `coverage_strong.mp4`: every invalid clip in one video. Open this first.
   - `compare/`: one cell's levels, variants and conditions side by side.
   - `showcase/`: the presentation videos and `picks.json`. To curate, edit the file and re-run
     `python -m physloc.cli showcase $PHYSLOC_OUTDIR --picks $PHYSLOC_OUTDIR/viz/showcase/picks.json --only <video>`.
+- To watch clips on your workstation, copy the release there without the large `data.h5` files:
+  `bash fetch_for_inspection.sh`, run **on your workstation** (copy
+  `slurm/check/fetch_for_inspection.sh` there; its header says which three variables to set).
 
-### 8. Archive to $STORE
+### 9. Archive to $STORE
 
 ```bash
 sbatch slurm/finish/archive.slurm
@@ -271,7 +342,7 @@ cd $SCRATCH/physloc
 for t in $STORE/physloc/physloc_v0_*.tar; do tar -xf $t; done
 ```
 
-### 9. Publish to HuggingFace (by hand, when you are happy with the clips)
+### 10. Publish to HuggingFace (by hand, when you are happy with the clips)
 
 Once, on a login node, log in to HuggingFace, then check `PHYSLOC_HF_REPO` and `PHYSLOC_HF_PRIVATE` in
 `slurm/env.sh`:
@@ -302,7 +373,13 @@ it once. A 1.3 TB upload is not something to find problems in for the first time
 
 - **Re-running is always safe.** A job that already finished has a file in `$PHYSLOC_OUTDIR/.jobs/`
   and is skipped in seconds.
-- **Don't change the code during a release.** Run every task from the same commit.
+- **Don't change the code during a release**, except to fix a bug that doesn't change how other clips
+  look (step 6), or a fix whose clips you then refill (step 6b). Everything else must come from one
+  commit, or the release mixes two versions of a family.
+- **Running jobs re-read `slurm/env.sh` and `slurm/kubric_singularity.sh`** (the launcher, once per
+  render). Don't edit or move them while jobs run. Pulling other changes is safe.
+- **Heavy checks go on `prepost`, not the login node.** Login nodes cap memory per user, and a killed
+  process is silent under `| tail`. Use `srun --partition=prepost ...` (step 6b) and write to a file.
 - **Useful commands:**
   - `scancel <array id>` stops a whole array; `scancel <array id>_<task>` stops one task.
   - `sacct -j <id> --format=JobID,Elapsed,MaxRSS,State` shows what happened to a job.
